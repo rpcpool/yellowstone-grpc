@@ -67,6 +67,11 @@ impl<T> ReplayBuffer<T> {
 
 pub trait ReconnectCounter {
     fn reconnect_count(&self) -> u32;
+
+    /// Inclusive replay boundary requested for the active replacement connection.
+    fn replay_from_slot(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// Wrapper stream that filters out duplicate subscribe updates.
@@ -109,6 +114,7 @@ where
                 Poll::Ready(Some(Ok(msg))) => {
                     let count = this.inner.reconnect_count();
                     if count != this.last_reconnect_count {
+                        this.replay = ReplayBuffer::new();
                         this.state.prepare_for_replay();
                         this.last_reconnect_count = count;
                     }
@@ -136,6 +142,16 @@ where
                 other => return other,
             }
         }
+    }
+}
+
+impl<S: ReconnectCounter, T> ReconnectCounter for DedupStream<S, T> {
+    fn reconnect_count(&self) -> u32 {
+        self.inner.reconnect_count()
+    }
+
+    fn replay_from_slot(&self) -> Option<u64> {
+        self.inner.replay_from_slot()
     }
 }
 

@@ -40,7 +40,10 @@ use {
 pub use {
     crate::{
         dedup::{DedupState, DedupStream, DEFAULT_SLOT_RETENTION},
-        reconnect::{AutoReconnect, Backoff, GrpcConnector, TonicGrpcConnector},
+        reconnect::{
+            AutoReconnect, Backoff, DiscardReason, GrpcConnector, ReplacementReplay, SlotWinner,
+            TonicGrpcConnector,
+        },
     },
     tonic::{service::Interceptor, transport::ClientTlsConfig},
 };
@@ -90,8 +93,8 @@ pub enum ReconnectionPolicy {
     /// later. Only use this when your application acts on the current tip and has
     /// no use for history.
     SkipMissedData,
-    /// Re-requests data produced during the outage and filters the duplicates
-    /// this creates. Costs per-message bookkeeping over `slot_retention` slots.
+    /// Best-effort replay of retained frozen banks with slot-based dedup.
+    /// Does not guarantee complete processed history. See the client README.
     RecoverMissedData { slot_retention: usize },
 }
 
@@ -103,8 +106,8 @@ pub enum ReconnectionPolicy {
 /// # Choosing a policy
 ///
 /// [`ReconnectionPolicy::RecoverMissedData`] re-requests whatever the server
-/// produced while you were disconnected, so the stream has no gap. Costs
-/// per-message bookkeeping and holds state for `slot_retention` slots.
+/// retains in frozen banks. This can leave gaps in processed history.
+/// It holds dedup state for `slot_retention` slots. See the client README.
 ///
 /// [`ReconnectionPolicy::SkipMissedData`] reconnects and continues from the
 /// newest data. Anything produced during the outage is lost. Use this when
@@ -124,9 +127,9 @@ pub enum ReconnectionPolicy {
 /// ```no_run
 /// # use std::time::Duration;
 /// # use yellowstone_grpc_client::{Backoff, ReconnectConfig, ReconnectionPolicy};
-/// let default = ReconnectConfig::default(); // Recovers messages in the gap by default
+/// let default = ReconnectConfig::default(); // Best-effort replay
 ///
-/// let no_gap_reconnection = ReconnectConfig {
+/// let live_reconnection = ReconnectConfig {
 ///     backoff: Backoff::new(Duration::from_millis(50), 2.0, 5),
 ///     policy: ReconnectionPolicy::SkipMissedData,
 /// };
@@ -248,6 +251,252 @@ impl Sink<SubscribeDeshredRequest> for SubscribeDeshredRequestSink {
     }
 }
 
+/// Identifies a bank within this subscription's connection history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BankRef {
+    pub generation: u64,
+    pub slot: u64,
+    pub bank_id: u64,
+}
+
+#[derive(Debug)]
+pub enum ReconnectEvent {
+    Update {
+        generation: u64,
+        update: SubscribeUpdate,
+    },
+
+    /// Remove the listed bank state, then rebuild it from the specified replacement stream.
+    /// Winner identities come from finality evidence on the replacement connection.
+    DiscardBanks {
+        /// Exact connection-scoped banks to remove; do not discard other banks in their slots.
+        banks: Vec<BankRef>,
+        reason: DiscardReason,
+        /// Replacement updates must follow this event. Replay failure terminates with an error.
+        replacement: ReplacementReplay,
+        /// One outcome per distinct slot in `banks`; skipped slots have an unknown winner.
+        winners: Vec<SlotWinner>,
+    },
+}
+
+/// Immediate subscription updates with connection-scoped bank identities.
+///
+/// Reconnects invalidate retained banks in the requested replay range before replacement updates.
+/// Recovery waits for finalized block identities or proven skipped slots before emitting a discard.
+pub struct ReconnectStream<S> {
+    inner: S,
+    generation: u64,
+    delivered_banks: std::collections::HashSet<BankRef>,
+    bank_limit: usize,
+    pending: std::collections::VecDeque<SubscribeUpdate>,
+    recovery: Option<reconnect::RecoveryDecision>,
+    stopped: bool,
+}
+
+impl<S> ReconnectStream<S> {
+    fn track_update(&mut self, update: &SubscribeUpdate) -> Result<(), Status> {
+        use yellowstone_grpc_proto::prelude::subscribe_update::UpdateOneof;
+
+        let bank = match update.update_oneof.as_ref() {
+            Some(UpdateOneof::Account(m)) => Some((
+                m.slot,
+                m.bank_id.ok_or_else(|| {
+                    Status::failed_precondition("cannot track an account update without bank_id")
+                })?,
+            )),
+            Some(UpdateOneof::Slot(m)) => m.bank_id.map(|id| (m.slot, id)),
+            Some(UpdateOneof::Transaction(m)) => Some((m.slot, m.bank_id)),
+            Some(UpdateOneof::TransactionStatus(m)) => Some((m.slot, m.bank_id)),
+            Some(UpdateOneof::Entry(m)) => Some((m.slot, m.bank_id)),
+            Some(UpdateOneof::Block(m)) => Some((m.slot, m.bank_id)),
+            Some(UpdateOneof::BlockMeta(m)) => Some((m.slot, m.bank_id)),
+            Some(UpdateOneof::BlockFooter(m)) => Some((m.slot, m.bank_id)),
+            _ => None,
+        };
+
+        if let Some((slot, bank_id)) = bank {
+            let bank = BankRef {
+                generation: self.generation,
+                slot,
+                bank_id,
+            };
+            if !self.delivered_banks.contains(&bank)
+                && self.delivered_banks.len() >= self.bank_limit
+            {
+                return Err(Status::resource_exhausted(
+                    "bank tracking limit reached; cannot forget retained banks before recovery",
+                ));
+            }
+            self.delivered_banks.insert(bank);
+        }
+        Ok(())
+    }
+}
+
+impl<S: crate::dedup::ReconnectCounter> ReconnectStream<S> {
+    pub fn new(inner: S) -> Self {
+        Self::with_bank_limit(inner, 65_536)
+    }
+
+    /// Stop before delivering an untrackable bank rather than evict recovery state.
+    pub fn with_bank_limit(inner: S, bank_limit: usize) -> Self {
+        let generation = u64::from(inner.reconnect_count());
+        Self {
+            inner,
+            generation,
+            delivered_banks: std::collections::HashSet::new(),
+            bank_limit,
+            pending: Default::default(),
+            recovery: None,
+            stopped: false,
+        }
+    }
+}
+
+impl<S> Stream for ReconnectStream<S>
+where
+    S: Stream<Item = Result<SubscribeUpdate, tonic::Status>>
+        + crate::dedup::ReconnectCounter
+        + Unpin,
+{
+    type Item = Result<ReconnectEvent, tonic::Status>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.stopped {
+            return std::task::Poll::Ready(None);
+        }
+        for _ in 0..64 {
+            let polled = match this.pending.pop_front() {
+                Some(update) => std::task::Poll::Ready(Some(Ok(update))),
+                None => std::pin::Pin::new(&mut this.inner).poll_next(cx),
+            };
+            let generation = u64::from(this.inner.reconnect_count());
+            if generation != this.generation
+                && !matches!(polled, std::task::Poll::Ready(Some(Err(_))))
+            {
+                let from_slot = this.inner.replay_from_slot();
+                if !this.delivered_banks.is_empty() && from_slot.is_none() {
+                    this.stopped = true;
+                    this.recovery = None;
+                    return std::task::Poll::Ready(Some(Err(Status::failed_precondition(
+                        "reconnected without a replay boundary for delivered banks",
+                    ))));
+                }
+                this.generation = generation;
+                this.recovery = None;
+                this.pending.clear();
+                if let Some(from_slot) = from_slot {
+                    let mut banks: Vec<_> = this
+                        .delivered_banks
+                        .iter()
+                        .copied()
+                        .filter(|bank| bank.slot >= from_slot)
+                        .collect();
+                    banks.sort_unstable_by_key(|bank| (bank.slot, bank.generation, bank.bank_id));
+                    if !banks.is_empty() {
+                        this.recovery = Some(reconnect::RecoveryDecision::new(
+                            banks,
+                            ReplacementReplay {
+                                from_slot,
+                                generation,
+                            },
+                            this.bank_limit,
+                        ));
+                    }
+                }
+            }
+            match polled {
+                std::task::Poll::Ready(Some(Ok(mut update))) => {
+                    if let Some(recovery) = &mut this.recovery {
+                        let result = recovery.observe(&update).and_then(|()| {
+                            if reconnect::visible_update(&mut update) {
+                                recovery.buffer(update)?;
+                            }
+                            Ok(())
+                        });
+                        if let Err(error) = result {
+                            this.stopped = true;
+                            this.recovery = None;
+                            return std::task::Poll::Ready(Some(Err(error)));
+                        }
+                        if let Some(winners) = recovery.winners() {
+                            let recovery = this.recovery.take().unwrap();
+                            for bank in &recovery.banks {
+                                this.delivered_banks.remove(bank);
+                            }
+                            this.pending = recovery.buffered;
+                            return std::task::Poll::Ready(Some(Ok(
+                                ReconnectEvent::DiscardBanks {
+                                    banks: recovery.banks,
+                                    reason: DiscardReason::IncompleteDelivery,
+                                    replacement: recovery.replacement,
+                                    winners,
+                                },
+                            )));
+                        }
+                        continue;
+                    }
+                    if !reconnect::visible_update(&mut update) {
+                        continue;
+                    }
+                    if let Err(error) = this.track_update(&update) {
+                        this.stopped = true;
+                        this.pending.clear();
+                        return std::task::Poll::Ready(Some(Err(error)));
+                    }
+                    return std::task::Poll::Ready(Some(Ok(ReconnectEvent::Update {
+                        generation,
+                        update,
+                    })));
+                }
+                std::task::Poll::Ready(Some(Err(error))) => {
+                    this.stopped = true;
+                    this.recovery = None;
+                    return std::task::Poll::Ready(Some(Err(error)));
+                }
+                std::task::Poll::Ready(None) => {
+                    this.stopped = true;
+                    this.recovery = None;
+                    return std::task::Poll::Ready(Some(Err(Status::failed_precondition(
+                        "subscription ended before reconnect recovery completed",
+                    ))));
+                }
+                std::task::Poll::Pending => return std::task::Poll::Pending,
+            }
+        }
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+    }
+}
+
+impl crate::dedup::ReconnectCounter for GeyserStream {
+    fn replay_from_slot(&self) -> Option<u64> {
+        match &self.inner {
+            InnerStream::Replay(stream) => crate::dedup::ReconnectCounter::replay_from_slot(stream),
+            InnerStream::NoReplay(stream) => {
+                crate::dedup::ReconnectCounter::replay_from_slot(stream)
+            }
+            _ => None,
+        }
+    }
+
+    fn reconnect_count(&self) -> u32 {
+        match &self.inner {
+            InnerStream::NoReconnect(_) => 0,
+            InnerStream::Replay(stream) => crate::dedup::ReconnectCounter::reconnect_count(stream),
+            InnerStream::NoReplay(stream) => {
+                crate::dedup::ReconnectCounter::reconnect_count(stream)
+            }
+            #[cfg(feature = "test-tools")]
+            InnerStream::MockSource(_) => 0,
+        }
+    }
+}
+
 ///
 /// Streams returned by the [`GeyserGrpcClient::subscribe`].
 ///
@@ -358,12 +607,24 @@ impl Stream for GeyserStream {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        match &mut self.inner {
-            InnerStream::NoReconnect(stream) => std::pin::Pin::new(stream).poll_next(cx),
-            InnerStream::Replay(stream) => std::pin::Pin::new(stream).poll_next(cx),
-            InnerStream::NoReplay(stream) => std::pin::Pin::new(stream).poll_next(cx),
-            #[cfg(feature = "test-tools")]
-            InnerStream::MockSource(rx) => rx.poll_recv(cx),
+        let bank_replay =
+            matches!(&self.inner, InnerStream::NoReplay(stream) if stream.bank_replay_enabled());
+        loop {
+            let polled = match &mut self.inner {
+                InnerStream::NoReconnect(stream) => std::pin::Pin::new(stream).poll_next(cx),
+                InnerStream::Replay(stream) => std::pin::Pin::new(stream).poll_next(cx),
+                InnerStream::NoReplay(stream) => std::pin::Pin::new(stream).poll_next(cx),
+                #[cfg(feature = "test-tools")]
+                InnerStream::MockSource(rx) => rx.poll_recv(cx),
+            };
+            match polled {
+                std::task::Poll::Ready(Some(Ok(mut update))) => {
+                    if bank_replay || reconnect::visible_update(&mut update) {
+                        return std::task::Poll::Ready(Some(Ok(update)));
+                    }
+                }
+                other => return other,
+            }
         }
     }
 }
@@ -375,6 +636,7 @@ impl Stream for GeyserStream {
 ///
 #[derive(Clone)]
 pub struct SubscribeRequestSink {
+    verified_recovery: bool,
     inner: Arc<Mutex<mpsc::Sender<SubscribeRequest>>>,
     shared: Arc<ArcSwap<SubscribeRequest>>,
 }
@@ -386,6 +648,7 @@ impl SubscribeRequestSink {
     /// `SubscribeRequestSink` value.
     pub fn mock(sender: mpsc::Sender<SubscribeRequest>) -> Self {
         Self {
+            verified_recovery: false,
             inner: Arc::new(Mutex::new(sender)),
             shared: Arc::new(ArcSwap::new(Arc::new(SubscribeRequest::default()))),
         }
@@ -395,12 +658,24 @@ impl SubscribeRequestSink {
 #[derive(Debug, thiserror::Error)]
 #[error("{inner}")]
 pub struct SubscribeRequestSinkError {
-    inner: mpsc::SendError,
+    inner: SubscribeRequestSinkErrorKind,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SubscribeRequestSinkErrorKind {
+    #[error(transparent)]
+    Send(mpsc::SendError),
+    #[error(
+        "bank replay requires fixed filters; only ping requests may be sent after subscribing"
+    )]
+    UnverifiedReplay,
 }
 
 impl From<mpsc::SendError> for SubscribeRequestSinkError {
     fn from(err: mpsc::SendError) -> Self {
-        Self { inner: err }
+        Self {
+            inner: SubscribeRequestSinkErrorKind::Send(err),
+        }
     }
 }
 
@@ -424,6 +699,11 @@ impl Sink<SubscribeRequest> for SubscribeRequestSink {
         self: std::pin::Pin<&mut Self>,
         mut item: SubscribeRequest,
     ) -> Result<(), Self::Error> {
+        if self.verified_recovery && item.ping.is_none() {
+            return Err(SubscribeRequestSinkError {
+                inner: SubscribeRequestSinkErrorKind::UnverifiedReplay,
+            });
+        }
         let mut inner = self
             .inner
             .lock()
@@ -441,7 +721,9 @@ impl Sink<SubscribeRequest> for SubscribeRequestSink {
         inner
             .start_send_unpin(item.clone())
             .map_err(SubscribeRequestSinkError::from)?;
-        self.shared.store(Arc::new(item));
+        if !self.verified_recovery {
+            self.shared.store(Arc::new(item));
+        }
         Ok(())
     }
 
@@ -539,6 +821,7 @@ impl GeyserGrpcClient {
             self.geyser.subscribe(subscribe_rx).await?;
 
         let sink = SubscribeRequestSink {
+            verified_recovery: false,
             inner: Arc::new(Mutex::new(subscribe_tx)),
             shared: Arc::new(ArcSwap::new(Arc::new(request))),
         };
@@ -549,7 +832,53 @@ impl GeyserGrpcClient {
         &mut self,
         request: Option<SubscribeRequest>,
     ) -> GeyserGrpcClientResult<(SubscribeRequestSink, GeyserStream)> {
-        let reconnect_config = self.reconnect_config.clone();
+        self.subscribe_impl(request, false).await
+    }
+
+    /// Subscribe with immediate bank-aware updates and explicit recovery failures.
+    ///
+    /// Processed updates are immediate during normal delivery; recovery waits for finalized winners.
+    /// Skipped slots report Unknown. Discards precede buffered replacement updates.
+    /// Recovery buffers at most 64 MiB of encoded updates or 65,536 messages, then errors.
+    pub async fn subscribe_with_reconnect(
+        &mut self,
+        request: Option<SubscribeRequest>,
+    ) -> GeyserGrpcClientResult<(SubscribeRequestSink, ReconnectStream<GeyserStream>)> {
+        let mut request = request.unwrap_or_default();
+        if request.commitment.unwrap_or_default() != 0 || self.geyser_client_opts.x_request_snapshot
+        {
+            return Err(Status::failed_precondition(
+                "bank replay requires processed commitment without startup snapshots",
+            )
+            .into());
+        }
+        if request.from_slot.is_some() {
+            return Err(reconnect::unverified_replay().into());
+        }
+        request
+            .blocks_meta
+            .insert(AUTORECONNECT_FILTER_KEY.into(), Default::default());
+        request.slots.insert(
+            AUTORECONNECT_FILTER_KEY.into(),
+            yellowstone_grpc_proto::prelude::SubscribeRequestFilterSlots {
+                filter_by_commitment: Some(false),
+                ..Default::default()
+            },
+        );
+        let (sink, stream) = self.subscribe_impl(Some(request), true).await?;
+        Ok((sink, ReconnectStream::new(stream)))
+    }
+
+    async fn subscribe_impl(
+        &mut self,
+        request: Option<SubscribeRequest>,
+        verified_recovery: bool,
+    ) -> GeyserGrpcClientResult<(SubscribeRequestSink, GeyserStream)> {
+        let reconnect_config = if verified_recovery {
+            Some(self.reconnect_config.clone().unwrap_or_default())
+        } else {
+            self.reconnect_config.clone()
+        };
         let endpoint = self
             .reconnect_endpoint
             .clone()
@@ -559,7 +888,8 @@ impl GeyserGrpcClient {
 
         self.subscribe_raw(request.clone())
             .await
-            .map(|(sink, stream)| {
+            .map(|(mut sink, stream)| {
+                sink.verified_recovery = verified_recovery;
                 let inner = match reconnect_config {
                     None => InnerStream::NoReconnect(stream),
                     Some(config) => {
@@ -576,6 +906,16 @@ impl GeyserGrpcClient {
                             Arc::clone(&sink.shared),
                             config.backoff.clone(),
                         );
+                        if verified_recovery {
+                            return (
+                                sink,
+                                GeyserStream {
+                                    inner: InnerStream::NoReplay(
+                                        reconnect_stream.with_bank_replay(),
+                                    ),
+                                },
+                            );
+                        }
                         match config.policy {
                             ReconnectionPolicy::SkipMissedData => {
                                 InnerStream::NoReplay(reconnect_stream.without_checkpoint())
@@ -1099,6 +1439,7 @@ mod tests {
 
         let shared = Arc::new(ArcSwap::new(Arc::new(SubscribeRequest::default())));
         let mut sink = SubscribeRequestSink {
+            verified_recovery: false,
             inner: Arc::new(Mutex::new(tx1)),
             shared: Arc::clone(&shared),
         };
@@ -1149,6 +1490,7 @@ mod tests {
 
         let shared = Arc::new(ArcSwap::new(Arc::new(initial)));
         let mut sink = SubscribeRequestSink {
+            verified_recovery: false,
             inner: Arc::new(Mutex::new(tx)),
             shared: Arc::clone(&shared),
         };
