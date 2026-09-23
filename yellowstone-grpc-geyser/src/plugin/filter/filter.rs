@@ -3112,8 +3112,8 @@ mod tests {
             ));
             assert_eq!(entry.update_parent.parent_block_id, vec![7; 32]);
             assert_eq!(deshred.update_parent.parent_block_id, vec![7; 32]);
-            let entry_msg = Message::EntryUpdateParent(entry.clone());
-            let deshred_msg = Message::DeshredUpdateParent(deshred.clone());
+            let entry_msg = Message::EntryUpdateParent(Arc::clone(&entry));
+            let deshred_msg = Message::DeshredUpdateParent(Arc::clone(&deshred));
             for subscribed in [false, true] {
                 let mut request = SubscribeRequest::default();
                 let mut deshred_request = SubscribeDeshredRequest::default();

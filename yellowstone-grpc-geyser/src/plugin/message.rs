@@ -1,12 +1,10 @@
 use {
     super::convert_to,
-    agave_geyser_plugin_interface::geyser_plugin_interface::ReplicaDeshredUpdateParentInfo,
-    agave_geyser_plugin_interface::geyser_plugin_interface::ReplicaEntryUpdateParentInfo,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockFooterInfo, ReplicaBlockInfoV4, ReplicaContactInfoV0_0_1,
         ReplicaDeshredTransactionInfo, ReplicaDeshredTransactionInfoV2,
-        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
-        SlotStatus as GeyserSlotStatus,
+        ReplicaDeshredTransactionInfoVersions, ReplicaDeshredUpdateParentInfo, ReplicaEntryInfoV2,
+        ReplicaEntryUpdateParentInfo, ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
     },
     bytes::Bytes,
     foldhash::{HashSet as FoldHashSet, HashSetExt},

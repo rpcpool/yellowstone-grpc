@@ -273,17 +273,17 @@ pub type FilteredUpdateFilters = SmallVec<[FilterName; 4]>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilteredUpdateOneof {
-    Account(FilteredUpdateAccount),                   // 2
-    Slot(FilteredUpdateSlot),                         // 3
-    Transaction(FilteredUpdateTransaction),           // 4
+    Account(FilteredUpdateAccount),                     // 2
+    Slot(FilteredUpdateSlot),                           // 3
+    Transaction(FilteredUpdateTransaction),             // 4
     TransactionStatus(FilteredUpdateTransactionStatus), // 10
-    Block(Box<FilteredUpdateBlock>),                  // 5
-    Ping,                                             // 6
-    Pong(SubscribeUpdatePong),                        // 9
-    BlockMeta(Arc<MessageBlockMeta>),                 // 7
-    Entry(FilteredUpdateEntry),                       // 8
-    EntryUpdateParent(Arc<MessageEntryUpdateParent>), // 13
-    BlockFooter(Arc<MessageBlockFooter>),             // 12
+    Block(Box<FilteredUpdateBlock>),                    // 5
+    Ping,                                               // 6
+    Pong(SubscribeUpdatePong),                          // 9
+    BlockMeta(Arc<MessageBlockMeta>),                   // 7
+    Entry(FilteredUpdateEntry),                         // 8
+    EntryUpdateParent(Arc<MessageEntryUpdateParent>),   // 13
+    BlockFooter(Arc<MessageBlockFooter>),               // 12
 }
 
 impl FilteredUpdateOneof {
