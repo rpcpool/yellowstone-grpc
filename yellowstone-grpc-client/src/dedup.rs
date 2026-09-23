@@ -15,6 +15,145 @@ use {
     },
 };
 
+#[derive(Default)]
+pub(crate) struct CompleteBankDedup {
+    complete: HashMap<crate::BankRef, String>,
+    replay_hashes: HashMap<u64, HashSet<String>>,
+    candidates: HashMap<crate::BankRef, VecDeque<SubscribeUpdate>>,
+    matched: HashMap<crate::BankRef, String>,
+    changed: HashSet<crate::BankRef>,
+    statuses: HashMap<(u64, String), HashSet<i32>>,
+}
+
+pub(crate) fn bank_ref(generation: u64, update: &SubscribeUpdate) -> Option<crate::BankRef> {
+    let (slot, bank_id) = match update.update_oneof.as_ref()? {
+        UpdateOneof::Account(m) => (m.slot, m.bank_id?),
+        UpdateOneof::Slot(m) => (m.slot, m.bank_id?),
+        UpdateOneof::Transaction(m) => (m.slot, m.bank_id),
+        UpdateOneof::TransactionStatus(m) => (m.slot, m.bank_id),
+        UpdateOneof::Entry(m) => (m.slot, m.bank_id),
+        UpdateOneof::Block(m) => (m.slot, m.bank_id),
+        UpdateOneof::BlockMeta(m) => (m.slot, m.bank_id),
+        UpdateOneof::BlockFooter(m) => (m.slot, m.bank_id),
+        _ => return None,
+    };
+    Some(crate::BankRef {
+        generation,
+        slot,
+        bank_id,
+    })
+}
+
+impl CompleteBankDedup {
+    pub(crate) fn is_complete(&self, bank: &crate::BankRef) -> bool {
+        self.complete.contains_key(bank)
+    }
+
+    pub(crate) fn begin_replay(&mut self, partial: &[crate::BankRef]) {
+        self.replay_hashes.clear();
+        let partial_slots: HashSet<_> = partial.iter().map(|bank| bank.slot).collect();
+        for (bank, hash) in &self.complete {
+            if !partial_slots.contains(&bank.slot) {
+                self.replay_hashes
+                    .entry(bank.slot)
+                    .or_default()
+                    .insert(hash.clone());
+            }
+        }
+        self.candidates.clear();
+        self.matched.clear();
+        self.changed.clear();
+    }
+
+    pub(crate) fn delivered(&mut self, bank: crate::BankRef, update: &SubscribeUpdate) {
+        match update.update_oneof.as_ref() {
+            Some(UpdateOneof::BlockMeta(meta)) if !meta.blockhash.is_empty() => {
+                self.complete.insert(bank, meta.blockhash.clone());
+            }
+            Some(UpdateOneof::Slot(status)) => {
+                if let Some(hash) = self.complete.get(&bank) {
+                    self.statuses
+                        .entry((bank.slot, hash.clone()))
+                        .or_default()
+                        .insert(status.status);
+                }
+            }
+            Some(
+                UpdateOneof::Account(_)
+                | UpdateOneof::Transaction(_)
+                | UpdateOneof::Entry(_)
+                | UpdateOneof::TransactionStatus(_)
+                | UpdateOneof::Block(_)
+                | UpdateOneof::BlockFooter(_),
+            ) => {
+                // Payloads after BlockMeta invalidate that bank's completion marker.
+                self.complete.remove(&bank);
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn filter(
+        &mut self,
+        generation: u64,
+        update: SubscribeUpdate,
+        ready: &mut VecDeque<SubscribeUpdate>,
+    ) {
+        let Some(bank) = bank_ref(generation, &update) else {
+            ready.push_back(update);
+            return;
+        };
+        if !self.replay_hashes.contains_key(&bank.slot) || self.changed.contains(&bank) {
+            ready.push_back(update);
+            return;
+        }
+        if let Some(hash) = self.matched.get(&bank).cloned() {
+            self.new_statuses(bank.slot, &hash, std::iter::once(update), ready);
+            return;
+        }
+        let hash = match update.update_oneof.as_ref() {
+            Some(UpdateOneof::BlockMeta(meta)) => Some(meta.blockhash.clone()),
+            _ => None,
+        };
+        self.candidates.entry(bank).or_default().push_back(update);
+        let Some(hash) = hash else {
+            return;
+        };
+        let mut buffered = self.candidates.remove(&bank).unwrap();
+        if self.replay_hashes[&bank.slot].contains(&hash) {
+            self.matched.insert(bank, hash.clone());
+            self.complete.insert(bank, hash.clone());
+            self.new_statuses(bank.slot, &hash, buffered, ready);
+        } else {
+            self.changed.insert(bank);
+            ready.append(&mut buffered);
+        }
+    }
+
+    fn new_statuses(
+        &mut self,
+        slot: u64,
+        hash: &str,
+        buffered: impl IntoIterator<Item = SubscribeUpdate>,
+        ready: &mut VecDeque<SubscribeUpdate>,
+    ) {
+        let seen = self.statuses.entry((slot, hash.to_owned())).or_default();
+        ready.extend(
+            buffered
+                .into_iter()
+                .filter(|update| match update.update_oneof.as_ref() {
+                    Some(UpdateOneof::Slot(status)) => {
+                        matches!(
+                            status.status(),
+                            SlotStatus::SlotConfirmed | SlotStatus::SlotFinalized
+                        ) && seen.insert(status.status)
+                    }
+                    _ => false,
+                }),
+        );
+    }
+}
+
 pub const DEFAULT_SLOT_RETENTION: usize = 250;
 
 const CREATED_BANK_STATUS: i32 = SlotStatus::SlotCreatedBank as i32;

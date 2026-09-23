@@ -288,6 +288,7 @@ pub struct ReconnectStream<S> {
     generation: u64,
     delivered_banks: std::collections::HashSet<BankRef>,
     bank_limit: usize,
+    dedup: crate::dedup::CompleteBankDedup,
     pending: std::collections::VecDeque<SubscribeUpdate>,
     recovery: Option<reconnect::RecoveryDecision>,
     stopped: bool,
@@ -346,6 +347,7 @@ impl<S: crate::dedup::ReconnectCounter> ReconnectStream<S> {
             generation,
             delivered_banks: std::collections::HashSet::new(),
             bank_limit,
+            dedup: Default::default(),
             pending: Default::default(),
             recovery: None,
             stopped: false,
@@ -370,10 +372,27 @@ where
             return std::task::Poll::Ready(None);
         }
         for _ in 0..64 {
-            let polled = match this.pending.pop_front() {
-                Some(update) => std::task::Poll::Ready(Some(Ok(update))),
-                None => std::pin::Pin::new(&mut this.inner).poll_next(cx),
-            };
+            if let Some(mut update) = this.pending.pop_front() {
+                let bank = crate::dedup::bank_ref(this.generation, &update);
+                let visible = reconnect::visible_update(&mut update);
+                if visible {
+                    if let Err(error) = this.track_update(&update) {
+                        this.stopped = true;
+                        this.pending.clear();
+                        return std::task::Poll::Ready(Some(Err(error)));
+                    }
+                }
+                if let Some(bank) = bank.filter(|bank| this.delivered_banks.contains(bank)) {
+                    this.dedup.delivered(bank, &update);
+                }
+                if visible {
+                    return std::task::Poll::Ready(Some(Ok(ReconnectEvent::Update {
+                        generation: this.generation, update,
+                    })));
+                }
+                continue;
+            }
+            let polled = std::pin::Pin::new(&mut this.inner).poll_next(cx);
             let generation = u64::from(this.inner.reconnect_count());
             if generation != this.generation
                 && !matches!(polled, std::task::Poll::Ready(Some(Err(_))))
@@ -394,9 +413,10 @@ where
                         .delivered_banks
                         .iter()
                         .copied()
-                        .filter(|bank| bank.slot >= from_slot)
+                        .filter(|bank| bank.slot >= from_slot && !this.dedup.is_complete(bank))
                         .collect();
                     banks.sort_unstable_by_key(|bank| (bank.slot, bank.generation, bank.bank_id));
+                    this.dedup.begin_replay(&banks);
                     if !banks.is_empty() {
                         this.recovery = Some(reconnect::RecoveryDecision::new(
                             banks,
@@ -410,18 +430,18 @@ where
                 }
             }
             match polled {
-                std::task::Poll::Ready(Some(Ok(mut update))) => {
+                std::task::Poll::Ready(Some(Ok(update))) => {
                     if let Some(recovery) = &mut this.recovery {
-                        let result = recovery.observe(&update).and_then(|()| {
-                            if reconnect::visible_update(&mut update) {
-                                recovery.buffer(update)?;
-                            }
-                            Ok(())
-                        });
-                        if let Err(error) = result {
+                        if let Err(error) = recovery.observe(&update) {
                             this.stopped = true;
                             this.recovery = None;
                             return std::task::Poll::Ready(Some(Err(error)));
+                        }
+                    }
+                    this.dedup.filter(this.generation, update, &mut this.pending);
+                    if let Some(recovery) = &mut this.recovery {
+                        while let Some(update) = this.pending.pop_front() {
+                            recovery.buffer(update);
                         }
                         if let Some(winners) = recovery.winners() {
                             let recovery = this.recovery.take().unwrap();
@@ -429,29 +449,14 @@ where
                                 this.delivered_banks.remove(bank);
                             }
                             this.pending = recovery.buffered;
-                            return std::task::Poll::Ready(Some(Ok(
-                                ReconnectEvent::DiscardBanks {
-                                    banks: recovery.banks,
-                                    reason: DiscardReason::IncompleteDelivery,
-                                    replacement: recovery.replacement,
-                                    winners,
-                                },
-                            )));
+                            return std::task::Poll::Ready(Some(Ok(ReconnectEvent::DiscardBanks {
+                                banks: recovery.banks,
+                                reason: DiscardReason::IncompleteDelivery,
+                                replacement: recovery.replacement,
+                                winners,
+                            })));
                         }
-                        continue;
                     }
-                    if !reconnect::visible_update(&mut update) {
-                        continue;
-                    }
-                    if let Err(error) = this.track_update(&update) {
-                        this.stopped = true;
-                        this.pending.clear();
-                        return std::task::Poll::Ready(Some(Err(error)));
-                    }
-                    return std::task::Poll::Ready(Some(Ok(ReconnectEvent::Update {
-                        generation,
-                        update,
-                    })));
                 }
                 std::task::Poll::Ready(Some(Err(error))) => {
                     this.stopped = true;
@@ -839,7 +844,7 @@ impl GeyserGrpcClient {
     ///
     /// Processed updates are immediate during normal delivery; recovery waits for finalized winners.
     /// Skipped slots report Unknown. Discards precede buffered replacement updates.
-    /// Recovery buffers at most 64 MiB of encoded updates or 65,536 messages, then errors.
+    /// Recovery buffers updates without a size cap until finalized winners are known.
     pub async fn subscribe_with_reconnect(
         &mut self,
         request: Option<SubscribeRequest>,
@@ -1512,5 +1517,231 @@ mod tests {
                 .contains_key(AUTORECONNECT_FILTER_KEY),
             "internal filter must survive in stored state, reconnect reads this"
         );
+    }
+}
+
+#[cfg(test)]
+mod bank_recovery_flow_test {
+    use super::*;
+    use futures::{channel::mpsc, StreamExt};
+    use yellowstone_grpc_proto::prelude::{
+        subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdateAccount,
+        SubscribeUpdateAccountInfo, SubscribeUpdateBlockMeta, SubscribeUpdateSlot,
+    };
+
+    type TestStream =
+        mpsc::UnboundedReceiver<Result<SubscribeUpdate, tonic::Status>>;
+
+    #[derive(Clone)]
+    struct TestConnector {
+        replacement: Arc<Mutex<Option<TestStream>>>,
+        requests: Arc<Mutex<Vec<Option<u64>>>>,
+    }
+
+    impl GrpcConnector for TestConnector {
+        type Stream = TestStream;
+        type ConnectError = GeyserGrpcClientError;
+        type ConnectFuture = std::future::Ready<
+            Result<Self::Stream, Self::ConnectError>,
+        >;
+
+        fn connect(
+            &self,
+            _request: Arc<SubscribeRequest>,
+            from_slot: Option<u64>,
+        ) -> Self::ConnectFuture {
+            self.requests.lock().unwrap().push(from_slot);
+
+            std::future::ready(
+                self.replacement.lock().unwrap().take().ok_or_else(|| {
+                    GeyserGrpcClientError::TonicStatus(
+                        Status::unavailable("unexpected extra reconnect"),
+                    )
+                }),
+            )
+        }
+    }
+
+    fn account(lamports: u64, write_version: u64) -> SubscribeUpdate {
+        SubscribeUpdate {
+            filters: vec!["accounts".into()],
+            update_oneof: Some(UpdateOneof::Account(SubscribeUpdateAccount {
+                slot: 100,
+                bank_id: Some(7),
+                account: Some(SubscribeUpdateAccountInfo {
+                    pubkey: vec![1; 32],
+                    lamports,
+                    write_version,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn block_meta() -> SubscribeUpdate {
+        SubscribeUpdate {
+            // Control-only metadata must still reach recovery machinery.
+            filters: vec![AUTORECONNECT_FILTER_KEY.into()],
+            update_oneof: Some(UpdateOneof::BlockMeta(
+                SubscribeUpdateBlockMeta {
+                    slot: 100,
+                    bank_id: 7,
+                    blockhash: "11111111111111111111111111111111".into(),
+                    parent_slot: 99,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn finalized() -> SubscribeUpdate {
+        SubscribeUpdate {
+            filters: vec![AUTORECONNECT_FILTER_KEY.into()],
+            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
+                slot: 100,
+                bank_id: Some(7),
+                status: SlotStatus::SlotFinalized as i32,
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    async fn next_event<S>(stream: &mut S) -> ReconnectEvent
+    where
+        S: futures::Stream<Item = Result<ReconnectEvent, Status>> + Unpin,
+    {
+        tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("stream stalled")
+            .expect("stream ended")
+            .expect("stream returned an error")
+    }
+
+    fn assert_account(
+        event: ReconnectEvent,
+        expected_generation: u64,
+        expected_slot: u64,
+        expected_lamports: u64,
+        expected_write_version: u64,
+    ) {
+        let ReconnectEvent::Update { generation, update } = event else {
+            panic!("expected an account update, got {event:?}");
+        };
+        assert_eq!(generation, expected_generation);
+        assert_eq!(update.filters, vec!["accounts".to_owned()]);
+
+        let Some(UpdateOneof::Account(account)) = update.update_oneof else {
+            panic!("expected account payload");
+        };
+        assert_eq!(account.slot, expected_slot);
+        assert_eq!(account.bank_id, Some(7));
+
+        let info = account.account.unwrap();
+        assert_eq!(info.lamports, expected_lamports);
+        assert_eq!(info.write_version, expected_write_version);
+    }
+
+    #[tokio::test]
+    async fn partial_bank_reconnect_waits_for_finality() {
+        let (a_tx, a_rx) = mpsc::unbounded();
+        let (b_tx, b_rx) = mpsc::unbounded();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+
+        let connector = TestConnector {
+            replacement: Arc::new(Mutex::new(Some(b_rx))),
+            requests: Arc::clone(&requests),
+        };
+
+        let inner = AutoReconnect::new(
+            a_rx,
+            connector,
+            Arc::new(ArcSwap::new(Arc::new(SubscribeRequest::default()))),
+            Backoff::default(),
+        )
+        .with_bank_replay();
+
+        let mut stream = ReconnectStream::new(inner);
+
+        // A: processed data arrives immediately, before BlockMeta.
+        a_tx.unbounded_send(Ok(account(10, 1))).unwrap();
+        assert_account(next_event(&mut stream).await, 0, 100, 10, 1);
+
+        // A disconnects while bank 7 is partial.
+        a_tx.unbounded_send(Err(Status::unavailable("disconnect A")))
+            .unwrap();
+
+        // Poll through reconnect. B is open but has sent nothing.
+        assert!(futures::poll!(stream.next()).is_pending());
+        assert_eq!(*requests.lock().unwrap(), vec![Some(100)]);
+
+        // B reuses bank ID 7 and sends repeated writes to one account.
+        b_tx.unbounded_send(Ok(account(20, 2))).unwrap();
+        b_tx.unbounded_send(Ok(account(30, 3))).unwrap();
+
+        // Replacement data must remain buffered.
+        assert!(futures::poll!(stream.next()).is_pending());
+
+        // BlockMeta completes the bank, but finality is still missing.
+        b_tx.unbounded_send(Ok(block_meta())).unwrap();
+        assert!(futures::poll!(stream.next()).is_pending());
+
+        // Finality permits the discard decision.
+        b_tx.unbounded_send(Ok(finalized())).unwrap();
+
+        let event = next_event(&mut stream).await;
+        let ReconnectEvent::DiscardBanks {
+            banks,
+            reason,
+            replacement,
+            winners,
+        } = event else {
+            panic!("expected discard before replacement, got {event:?}");
+        };
+
+        assert_eq!(
+            banks,
+            vec![BankRef {
+                generation: 0,
+                slot: 100,
+                bank_id: 7,
+            }]
+        );
+        assert_eq!(reason, DiscardReason::IncompleteDelivery);
+        assert_eq!(
+            replacement,
+            ReplacementReplay {
+                from_slot: 100,
+                generation: 1,
+            }
+        );
+        assert_eq!(
+            winners,
+            vec![SlotWinner::Finalized {
+                slot: 100,
+                blockhash: "11111111111111111111111111111111".into(),
+            }]
+        );
+
+        // Both replacement writes follow the discard, in order.
+        assert_account(next_event(&mut stream).await, 1, 100, 20, 2);
+        assert_account(next_event(&mut stream).await, 1, 100, 30, 3);
+
+        // Internal metadata/status messages and duplicates do not leak.
+        assert!(futures::poll!(stream.next()).is_pending());
+
+        // Normal processed delivery resumes without waiting for finality.
+        let mut live = account(40, 4);
+        if let Some(UpdateOneof::Account(account)) = &mut live.update_oneof {
+            account.slot = 101;
+        }
+        b_tx.unbounded_send(Ok(live)).unwrap();
+
+        assert_account(next_event(&mut stream).await, 1, 101, 40, 4);
+        assert!(futures::poll!(stream.next()).is_pending());
+        assert_eq!(requests.lock().unwrap().len(), 1);
     }
 }

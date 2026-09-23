@@ -54,9 +54,6 @@ pub enum SlotWinner {
     Finalized { slot: u64, blockhash: String },
 }
 
-const RECOVERY_BUFFER_BYTES: usize = 64 * 1024 * 1024;
-const RECOVERY_BUFFER_MESSAGES: usize = 65_536;
-
 pub(crate) struct RecoveryDecision {
     pub(crate) banks: Vec<crate::BankRef>,
     pub(crate) replacement: ReplacementReplay,
@@ -64,7 +61,6 @@ pub(crate) struct RecoveryDecision {
     metadata: std::collections::HashMap<(u64, u64), (String, u64)>,
     finalized: std::collections::HashSet<(u64, u64)>,
     pub(crate) buffered: std::collections::VecDeque<SubscribeUpdate>,
-    buffered_bytes: usize,
     evidence_limit: usize,
 }
 
@@ -81,7 +77,6 @@ impl RecoveryDecision {
             metadata: Default::default(),
             finalized: Default::default(),
             buffered: Default::default(),
-            buffered_bytes: 0,
             evidence_limit,
         }
     }
@@ -169,18 +164,8 @@ impl RecoveryDecision {
         Ok(())
     }
 
-    pub(crate) fn buffer(&mut self, update: SubscribeUpdate) -> Result<(), Status> {
-        let bytes = yellowstone_grpc_proto::prost::Message::encoded_len(&update);
-        if self.buffered.len() >= RECOVERY_BUFFER_MESSAGES
-            || bytes > RECOVERY_BUFFER_BYTES.saturating_sub(self.buffered_bytes)
-        {
-            return Err(Status::resource_exhausted(
-                "replacement buffer full while waiting for finalized winners",
-            ));
-        }
-        self.buffered_bytes += bytes;
+    pub(crate) fn buffer(&mut self, update: SubscribeUpdate) {
         self.buffered.push_back(update);
-        Ok(())
     }
 
     pub(crate) fn winners(&self) -> Option<Vec<SlotWinner>> {
@@ -584,6 +569,13 @@ impl<S, Connector> AutoReconnect<S, Connector> {
     pub const fn without_checkpoint(mut self) -> Self {
         self.resume_from_checkpoint = false;
         self
+    }
+}
+
+#[cfg(feature = "test-tools")]
+impl<S, Connector> AutoReconnect<S, Connector> {
+    pub fn with_bank_replay_for_test(self) -> Self {
+        self.with_bank_replay()
     }
 }
 
@@ -1895,6 +1887,7 @@ mod reconnect_stream_tests {
                 (1, account(42, replacement_id)),
                 (1, metadata(42, replacement_id, "winner", 41)),
                 (1, finalized(42, replacement_id)),
+                (1, account(42, replacement_id)),
                 (2, account(42, 7)),
                 (2, finalized(42, 7)),
                 (2, metadata(42, 7, "winner", 41)),
@@ -1903,6 +1896,12 @@ mod reconnect_stream_tests {
                 assert!(stream.next().await.unwrap().is_ok());
             }
             for generation in 1..=2 {
+                if generation == 2 {
+                    assert!(matches!(
+                        stream.next().await.unwrap().unwrap(),
+                        ReconnectEvent::Update { generation: 1, .. }
+                    ));
+                }
                 let ReconnectEvent::DiscardBanks {
                     banks,
                     reason,
@@ -1952,6 +1951,142 @@ mod reconnect_stream_tests {
                 bank_id: 6
             }));
         }
+    }
+
+    #[tokio::test]
+    async fn complete_banks_are_deduplicated_while_partial_banks_are_replaced() {
+        let mut stream = ReconnectStream::new(source(vec![
+            (0, account(42, 7)),
+            (0, metadata(42, 7, "complete", 41)),
+            (0, account(43, 8)),
+            (1, account(42, 99)),
+            (1, metadata(42, 99, "complete", 41)),
+            (1, account(43, 100)),
+            (1, account(43, 100)),
+            (1, metadata(43, 100, "replacement", 42)),
+            (1, finalized(43, 100)),
+            (1, account(44, 101)),
+        ]));
+        for _ in 0..2 {
+            assert!(matches!(
+                stream.next().await.unwrap().unwrap(),
+                ReconnectEvent::Update { generation: 0, .. }
+            ));
+        }
+        let ReconnectEvent::DiscardBanks { banks, winners, .. } =
+            stream.next().await.unwrap().unwrap()
+        else {
+            panic!("expected partial discard")
+        };
+        assert_eq!(
+            banks,
+            vec![BankRef {
+                generation: 0,
+                slot: 43,
+                bank_id: 8
+            }]
+        );
+        assert_eq!(
+            winners,
+            vec![SlotWinner::Finalized {
+                slot: 43,
+                blockhash: "replacement".into()
+            }]
+        );
+        for expected in [account(43, 100), account(43, 100), account(44, 101)] {
+            assert!(
+                matches!(stream.next().await.unwrap().unwrap(), ReconnectEvent::Update { generation: 1, update } if update == expected)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_only_reconnect_needs_no_discard_or_finality_wait() {
+        let mut stream = ReconnectStream::new(source(vec![
+            (0, account(42, 7)),
+            (0, metadata(42, 7, "complete", 41)),
+            (1, account(42, 99)),
+            (1, metadata(42, 99, "complete", 41)),
+            (1, account(43, 100)),
+        ]));
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            ReconnectEvent::Update { generation: 0, .. }
+        ));
+        assert!(
+            matches!(stream.next().await.unwrap().unwrap(), ReconnectEvent::Update { generation: 1, update } if update == account(43, 100))
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_bank_dedup_keeps_new_finality_and_drops_interrupted_candidates() {
+        let mut status = finalized(42, 99);
+        status.filters = vec!["user".into()];
+        let mut stream = ReconnectStream::new(source(vec![
+            (0, account(42, 7)),
+            (0, metadata(42, 7, "complete", 41)),
+            (1, account(42, 8)),
+            (2, account(42, 99)),
+            (2, metadata(42, 99, "complete", 41)),
+            (2, status.clone()),
+            (2, status.clone()),
+            (2, account(43, 100)),
+        ]));
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            ReconnectEvent::Update { generation: 0, .. }
+        ));
+        assert!(
+            matches!(stream.next().await.unwrap().unwrap(), ReconnectEvent::Update { generation: 2, update } if update == status)
+        );
+        assert!(
+            matches!(stream.next().await.unwrap().unwrap(), ReconnectEvent::Update { generation: 2, update } if update == account(43, 100))
+        );
+    }
+
+    #[tokio::test]
+    async fn different_hash_is_not_a_duplicate_even_when_bank_id_is_reused() {
+        let mut stream = ReconnectStream::new(source(vec![
+            (0, account(42, 7)),
+            (0, metadata(42, 7, "first", 41)),
+            (1, account(42, 7)),
+            (1, metadata(42, 7, "different", 41)),
+        ]));
+        for generation in [0, 1] {
+            assert!(
+                matches!(stream.next().await.unwrap().unwrap(), ReconnectEvent::Update { generation: actual, update } if actual == generation && update == account(42, 7))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn completed_bank_in_same_slot_cannot_hide_partial_replacement() {
+        let mut stream = ReconnectStream::new(source(vec![
+            (0, account(42, 7)),
+            (0, metadata(42, 7, "winner", 41)),
+            (0, account(42, 8)),
+            (1, account(42, 99)),
+            (1, metadata(42, 99, "winner", 41)),
+            (1, finalized(42, 99)),
+        ]));
+        for _ in 0..2 {
+            assert!(stream.next().await.unwrap().is_ok());
+        }
+        let ReconnectEvent::DiscardBanks { banks, .. } = stream.next().await.unwrap().unwrap()
+        else {
+            panic!("expected discard")
+        };
+        assert_eq!(
+            banks,
+            vec![BankRef {
+                generation: 0,
+                slot: 42,
+                bank_id: 8
+            }]
+        );
+        assert!(
+            matches!(stream.next().await.unwrap().unwrap(), ReconnectEvent::Update { generation: 1, update } if update == account(42, 99))
+        );
     }
 
     #[tokio::test]
@@ -2124,7 +2259,10 @@ mod reconnect_stream_tests {
             stream.next().await.unwrap().unwrap(),
             ReconnectEvent::Update { generation: 2, .. }
         ));
-        assert!(stream.pending.is_empty());
+        assert!(stream.pending.iter().all(|update| {
+            let mut update = update.clone();
+            !super::visible_update(&mut update)
+        }));
     }
 
     #[tokio::test]
@@ -2212,7 +2350,7 @@ mod reconnect_stream_tests {
     }
 
     #[test]
-    fn recovery_buffer_limits_messages_and_bytes() {
+    fn recovery_buffer_retains_large_backlogs_in_order() {
         let mut recovery = crate::reconnect::RecoveryDecision::new(
             vec![BankRef {
                 generation: 0,
@@ -2225,22 +2363,33 @@ mod reconnect_stream_tests {
             },
             10,
         );
-        for _ in 0..super::RECOVERY_BUFFER_MESSAGES {
-            recovery.buffer(SubscribeUpdate::default()).unwrap();
+        for index in 0..65_537 {
+            recovery.buffer(SubscribeUpdate {
+                filters: vec![index.to_string()],
+                ..Default::default()
+            });
         }
+        assert!(recovery.winners().is_none());
+        assert_eq!(recovery.buffered.len(), 65_537);
+        for index in 0..65_537 {
+            assert_eq!(
+                recovery.buffered.pop_front().unwrap().filters,
+                vec![index.to_string()]
+            );
+        }
+        let payload_len = 64 * 1024 * 1024 + 1;
+        recovery.buffer(SubscribeUpdate {
+            filters: vec!["x".repeat(payload_len)],
+            ..Default::default()
+        });
+        recovery.observe(&metadata(42, 8, "winner", 41)).unwrap();
+        recovery.observe(&finalized(42, 8)).unwrap();
+        assert!(recovery.winners().is_some());
         assert_eq!(
-            recovery
-                .buffer(SubscribeUpdate::default())
-                .unwrap_err()
-                .code(),
-            tonic::Code::ResourceExhausted
+            recovery.buffered.pop_front().unwrap().filters[0].len(),
+            payload_len
         );
-        recovery.buffered.clear();
-        recovery.buffered_bytes = super::RECOVERY_BUFFER_BYTES;
-        assert_eq!(
-            recovery.buffer(account(42, 7)).unwrap_err().code(),
-            tonic::Code::ResourceExhausted
-        );
+        assert!(recovery.buffered.is_empty());
     }
 
     #[tokio::test]
@@ -2472,7 +2621,7 @@ mod reconnect_stream_tests {
     }
 
     #[tokio::test]
-    async fn public_api_bypasses_dedup_for_every_builder_policy() {
+    async fn public_api_preserves_live_writes_for_every_builder_policy() {
         for config in [
             None,
             Some(ReconnectConfig::default()),
