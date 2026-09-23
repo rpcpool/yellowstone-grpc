@@ -19,29 +19,14 @@ use {
 pub(crate) struct CompleteBankDedup {
     complete: HashMap<crate::BankRef, String>,
     replay_hashes: HashMap<u64, HashSet<String>>,
-    candidates: HashMap<crate::BankRef, VecDeque<SubscribeUpdate>>,
-    matched: HashMap<crate::BankRef, String>,
-    changed: HashSet<crate::BankRef>,
+    replay: HashMap<crate::BankRef, BankReplay>,
     statuses: HashMap<(u64, String), HashSet<i32>>,
 }
 
-pub(crate) fn bank_ref(generation: u64, update: &SubscribeUpdate) -> Option<crate::BankRef> {
-    let (slot, bank_id) = match update.update_oneof.as_ref()? {
-        UpdateOneof::Account(m) => (m.slot, m.bank_id?),
-        UpdateOneof::Slot(m) => (m.slot, m.bank_id?),
-        UpdateOneof::Transaction(m) => (m.slot, m.bank_id),
-        UpdateOneof::TransactionStatus(m) => (m.slot, m.bank_id),
-        UpdateOneof::Entry(m) => (m.slot, m.bank_id),
-        UpdateOneof::Block(m) => (m.slot, m.bank_id),
-        UpdateOneof::BlockMeta(m) => (m.slot, m.bank_id),
-        UpdateOneof::BlockFooter(m) => (m.slot, m.bank_id),
-        _ => return None,
-    };
-    Some(crate::BankRef {
-        generation,
-        slot,
-        bank_id,
-    })
+enum BankReplay {
+    Pending(VecDeque<SubscribeUpdate>),
+    Duplicate(String),
+    Changed,
 }
 
 impl CompleteBankDedup {
@@ -60,9 +45,7 @@ impl CompleteBankDedup {
                     .insert(hash.clone());
             }
         }
-        self.candidates.clear();
-        self.matched.clear();
-        self.changed.clear();
+        self.replay.clear();
     }
 
     pub(crate) fn delivered(&mut self, bank: crate::BankRef, update: &SubscribeUpdate) {
@@ -99,34 +82,42 @@ impl CompleteBankDedup {
         update: SubscribeUpdate,
         ready: &mut VecDeque<SubscribeUpdate>,
     ) {
-        let Some(bank) = bank_ref(generation, &update) else {
+        let Some(bank) = crate::BankRef::from_update(generation, &update) else {
             ready.push_back(update);
             return;
         };
-        if !self.replay_hashes.contains_key(&bank.slot) || self.changed.contains(&bank) {
+        let Some(hashes) = self.replay_hashes.get(&bank.slot) else {
             ready.push_back(update);
             return;
-        }
-        if let Some(hash) = self.matched.get(&bank).cloned() {
-            self.new_statuses(bank.slot, &hash, std::iter::once(update), ready);
-            return;
-        }
-        let hash = match update.update_oneof.as_ref() {
-            Some(UpdateOneof::BlockMeta(meta)) => Some(meta.blockhash.clone()),
-            _ => None,
         };
-        self.candidates.entry(bank).or_default().push_back(update);
-        let Some(hash) = hash else {
-            return;
-        };
-        let mut buffered = self.candidates.remove(&bank).unwrap();
-        if self.replay_hashes[&bank.slot].contains(&hash) {
-            self.matched.insert(bank, hash.clone());
-            self.complete.insert(bank, hash.clone());
-            self.new_statuses(bank.slot, &hash, buffered, ready);
-        } else {
-            self.changed.insert(bank);
-            ready.append(&mut buffered);
+        let replay = self
+            .replay
+            .entry(bank)
+            .or_insert_with(|| BankReplay::Pending(VecDeque::new()));
+        match replay {
+            BankReplay::Changed => ready.push_back(update),
+            BankReplay::Duplicate(hash) => {
+                let hash = hash.clone();
+                self.new_statuses(bank.slot, &hash, std::iter::once(update), ready);
+            }
+            BankReplay::Pending(buffered) => {
+                let hash = match update.update_oneof.as_ref() {
+                    Some(UpdateOneof::BlockMeta(meta)) => Some(meta.blockhash.clone()),
+                    _ => None,
+                };
+                buffered.push_back(update);
+                if let Some(hash) = hash {
+                    let mut buffered = std::mem::take(buffered);
+                    if hashes.contains(&hash) {
+                        *replay = BankReplay::Duplicate(hash.clone());
+                        self.complete.insert(bank, hash.clone());
+                        self.new_statuses(bank.slot, &hash, buffered, ready);
+                    } else {
+                        *replay = BankReplay::Changed;
+                        ready.append(&mut buffered);
+                    }
+                }
+            }
         }
     }
 

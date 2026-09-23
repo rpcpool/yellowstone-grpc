@@ -60,7 +60,6 @@ pub(crate) struct RecoveryDecision {
     outcomes: std::collections::BTreeMap<u64, Option<SlotWinner>>,
     metadata: std::collections::HashMap<(u64, u64), (String, u64)>,
     finalized: std::collections::HashSet<(u64, u64)>,
-    pub(crate) buffered: std::collections::VecDeque<SubscribeUpdate>,
     evidence_limit: usize,
 }
 
@@ -76,7 +75,6 @@ impl RecoveryDecision {
             replacement,
             metadata: Default::default(),
             finalized: Default::default(),
-            buffered: Default::default(),
             evidence_limit,
         }
     }
@@ -98,7 +96,7 @@ impl RecoveryDecision {
             }
             let key = (slot, bank_id);
             if let Some(previous) = self.metadata.get(&key) {
-                if previous != &(blockhash.clone(), parent_slot) {
+                if previous.0 != *blockhash || previous.1 != parent_slot {
                     return Err(Status::failed_precondition(
                         "conflicting block identity for one connection-local bank",
                     ));
@@ -111,7 +109,7 @@ impl RecoveryDecision {
                 }
                 self.metadata.insert(key, (blockhash.clone(), parent_slot));
             }
-            Some(key)
+            key
         } else if let Some(UpdateOneof::Slot(m)) = update.update_oneof.as_ref() {
             if m.status != SlotStatus::SlotFinalized as i32 {
                 return Ok(());
@@ -128,44 +126,40 @@ impl RecoveryDecision {
                 ));
             }
             self.finalized.insert(key);
-            Some(key)
+            key
         } else {
-            None
+            return Ok(());
         };
 
-        if let Some(key) = key.filter(|key| self.finalized.contains(key)) {
-            if let Some((blockhash, parent_slot)) = self.metadata.get(&key) {
-                for (&slot, outcome) in &mut self.outcomes {
-                    let decision = if slot == key.0 {
-                        Some(SlotWinner::Finalized {
-                            slot,
-                            blockhash: blockhash.clone(),
-                        })
-                    } else if *parent_slot < slot && slot < key.0 {
-                        // A finalized block's direct parent link excludes every intervening slot.
-                        Some(SlotWinner::Unknown { slot })
-                    } else {
-                        None
-                    };
-                    if let Some(decision) = decision {
-                        if outcome
-                            .as_ref()
-                            .is_some_and(|previous| previous != &decision)
-                        {
-                            return Err(Status::failed_precondition(
-                                "conflicting finalized outcomes during reconnect",
-                            ));
-                        }
-                        *outcome = Some(decision);
-                    }
+        if !self.finalized.contains(&key) {
+            return Ok(());
+        }
+        let Some((blockhash, parent_slot)) = self.metadata.get(&key) else {
+            return Ok(());
+        };
+        for (&slot, outcome) in &mut self.outcomes {
+            let decision = if slot == key.0 {
+                SlotWinner::Finalized {
+                    slot,
+                    blockhash: blockhash.clone(),
                 }
+            } else if *parent_slot < slot && slot < key.0 {
+                // A finalized block's direct parent link excludes every intervening slot.
+                SlotWinner::Unknown { slot }
+            } else {
+                continue;
+            };
+            if outcome
+                .as_ref()
+                .is_some_and(|previous| previous != &decision)
+            {
+                return Err(Status::failed_precondition(
+                    "conflicting finalized outcomes during reconnect",
+                ));
             }
+            *outcome = Some(decision);
         }
         Ok(())
-    }
-
-    pub(crate) fn buffer(&mut self, update: SubscribeUpdate) {
-        self.buffered.push_back(update);
     }
 
     pub(crate) fn winners(&self) -> Option<Vec<SlotWinner>> {
@@ -338,11 +332,7 @@ pub struct TonicGrpcConnector {
     request_sink: Arc<Mutex<mpsc::Sender<SubscribeRequest>>>,
     endpoint: Endpoint,
     x_token: Option<AsciiMetadataValue>,
-    x_request_snapshot: bool,
-    send_compressed: Option<CompressionEncoding>,
-    accept_compressed: Option<CompressionEncoding>,
-    max_decoding_message_size: Option<usize>,
-    max_encoding_message_size: Option<usize>,
+    options: TonicGeyserClientOptions,
 }
 
 #[derive(Debug, Clone)]
@@ -379,11 +369,7 @@ impl TonicGrpcConnector {
             request_sink,
             endpoint,
             x_token,
-            x_request_snapshot: options.x_request_snapshot,
-            send_compressed: options.send_compressed,
-            accept_compressed: options.accept_compressed,
-            max_decoding_message_size: options.max_decoding_message_size,
-            max_encoding_message_size: options.max_encoding_message_size,
+            options,
         }
     }
 }
@@ -403,11 +389,7 @@ impl GrpcConnector for TonicGrpcConnector {
         let endpoint = self.endpoint.clone();
         let request_sink = Arc::clone(&self.request_sink);
         let x_token = self.x_token.clone();
-        let x_request_snapshot = self.x_request_snapshot;
-        let send_compressed = self.send_compressed;
-        let accept_compressed = self.accept_compressed;
-        let max_decoding_message_size = self.max_decoding_message_size;
-        let max_encoding_message_size = self.max_encoding_message_size;
+        let options = self.options.clone();
         let base_request = (*request).clone();
 
         let fut = backoff.retry(move || {
@@ -415,6 +397,7 @@ impl GrpcConnector for TonicGrpcConnector {
             let request_sink = Arc::clone(&request_sink);
             let x_token = x_token.clone();
             let mut request = base_request.clone();
+            let options = options.clone();
             async move {
                 request.from_slot = from_slot;
 
@@ -426,21 +409,21 @@ impl GrpcConnector for TonicGrpcConnector {
 
                 let interceptor = InterceptorXToken {
                     x_token,
-                    x_request_snapshot,
+                    x_request_snapshot: options.x_request_snapshot,
                 };
 
                 let mut geyser =
                     GeyserClient::with_interceptor(channel.clone(), interceptor.clone());
-                if let Some(encoding) = send_compressed {
+                if let Some(encoding) = options.send_compressed {
                     geyser = geyser.send_compressed(encoding);
                 }
-                if let Some(encoding) = accept_compressed {
+                if let Some(encoding) = options.accept_compressed {
                     geyser = geyser.accept_compressed(encoding);
                 }
-                if let Some(limit) = max_decoding_message_size {
+                if let Some(limit) = options.max_decoding_message_size {
                     geyser = geyser.max_decoding_message_size(limit);
                 }
-                if let Some(limit) = max_encoding_message_size {
+                if let Some(limit) = options.max_encoding_message_size {
                     geyser = geyser.max_encoding_message_size(limit);
                 }
 
@@ -534,13 +517,8 @@ where
     fn make_connection_future(&self) -> ConnectFuture<S> {
         let connector = self.connector.clone();
         let request = self.request.load_full();
-        let from_slot = if self.resume_from_checkpoint {
-            self.last_checkpoint
-        } else {
-            None
-        };
-        let fut = async move { connector.connect(request, from_slot).await };
-        Box::pin(fut)
+        let from_slot = self.checkpoint();
+        Box::pin(async move { connector.connect(request, from_slot).await })
     }
 }
 
@@ -555,14 +533,14 @@ impl<S, Connector> ReconnectCounter for AutoReconnect<S, Connector> {
 }
 
 impl<S, Connector> AutoReconnect<S, Connector> {
+    fn checkpoint(&self) -> Option<u64> {
+        self.last_checkpoint.filter(|_| self.resume_from_checkpoint)
+    }
+
     /// Retain a replay checkpoint without assuming BlockMeta proves complete delivery.
     pub(crate) const fn with_bank_replay(mut self) -> Self {
         self.bank_replay = true;
         self
-    }
-
-    pub(crate) const fn bank_replay_enabled(&self) -> bool {
-        self.bank_replay
     }
 
     /// Never resume from a checkpoint. Reconnects start from the live head.
@@ -626,11 +604,7 @@ where
 
                         log::warn!(
                             "stream error: {status}. reconnecting from slot {:?}",
-                            if me.resume_from_checkpoint {
-                                me.last_checkpoint
-                            } else {
-                                None
-                            }
+                            me.checkpoint()
                         );
 
                         if me.bank_replay {
@@ -670,11 +644,7 @@ where
                     Poll::Ready(result) => match result {
                         Ok(stream) => {
                             me.reconnect_count += 1;
-                            me.replay_from_slot = if me.resume_from_checkpoint {
-                                me.last_checkpoint
-                            } else {
-                                None
-                            };
+                            me.replay_from_slot = me.checkpoint();
                             me.inner_stream = Some(stream);
                         }
                         Err(error) => {
@@ -768,14 +738,6 @@ pub(crate) fn visible_update(update: &mut SubscribeUpdate) -> bool {
     !internal_only
 }
 
-pub(crate) fn inject_autoreconnect_filter(req: &mut SubscribeRequest) {
-    if req.blocks_meta.is_empty() {
-        req.blocks_meta
-            .insert(AUTORECONNECT_FILTER_KEY.to_string(), Default::default());
-        req.slots
-            .insert(AUTORECONNECT_FILTER_KEY.to_string(), Default::default());
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -2349,47 +2311,52 @@ mod reconnect_stream_tests {
         }
     }
 
-    #[test]
-    fn recovery_buffer_retains_large_backlogs_in_order() {
-        let mut recovery = crate::reconnect::RecoveryDecision::new(
-            vec![BankRef {
-                generation: 0,
-                slot: 42,
-                bank_id: 7,
-            }],
-            ReplacementReplay {
-                from_slot: 42,
-                generation: 1,
-            },
-            10,
-        );
-        for index in 0..65_537 {
-            recovery.buffer(SubscribeUpdate {
-                filters: vec![index.to_string()],
-                ..Default::default()
-            });
-        }
-        assert!(recovery.winners().is_none());
-        assert_eq!(recovery.buffered.len(), 65_537);
-        for index in 0..65_537 {
-            assert_eq!(
-                recovery.buffered.pop_front().unwrap().filters,
-                vec![index.to_string()]
-            );
-        }
+    #[tokio::test]
+    async fn recovery_buffer_retains_large_backlogs_in_order() {
         let payload_len = 64 * 1024 * 1024 + 1;
-        recovery.buffer(SubscribeUpdate {
-            filters: vec!["x".repeat(payload_len)],
-            ..Default::default()
-        });
-        recovery.observe(&metadata(42, 8, "winner", 41)).unwrap();
-        recovery.observe(&finalized(42, 8)).unwrap();
-        assert!(recovery.winners().is_some());
-        assert_eq!(
-            recovery.buffered.pop_front().unwrap().filters[0].len(),
-            payload_len
-        );
-        assert!(recovery.buffered.is_empty());
+        let mut updates = vec![(0, account(42, 7))];
+        updates.extend((0..65_537).map(|index| {
+            (
+                1,
+                SubscribeUpdate {
+                    filters: vec![index.to_string()],
+                    ..account(42, 8)
+                },
+            )
+        }));
+        updates.extend([
+            (
+                1,
+                SubscribeUpdate {
+                    filters: vec!["x".repeat(payload_len)],
+                    ..account(42, 8)
+                },
+            ),
+            (1, metadata(42, 8, "winner", 41)),
+            (1, finalized(42, 8)),
+        ]);
+        let mut stream = ReconnectStream::new(source(updates));
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            ReconnectEvent::Update { generation: 0, .. }
+        ));
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            ReconnectEvent::DiscardBanks { .. }
+        ));
+        for index in 0..65_537 {
+            let ReconnectEvent::Update { generation, update } =
+                stream.next().await.unwrap().unwrap()
+            else {
+                panic!("expected buffered replacement update")
+            };
+            assert_eq!(generation, 1);
+            assert_eq!(update.filters, vec![index.to_string()]);
+        }
+        let ReconnectEvent::Update { update, .. } = stream.next().await.unwrap().unwrap() else {
+            panic!("expected large buffered update")
+        };
+        assert_eq!(update.filters[0].len(), payload_len);
     }
 
     #[tokio::test]
@@ -2520,6 +2487,7 @@ mod reconnect_stream_tests {
         updates: Mutex<Option<mpsc::UnboundedReceiver<Result<SubscribeUpdate, Status>>>>,
         replay_requests: Arc<Mutex<Vec<u64>>>,
         accept_replay: bool,
+        expected_request: Option<SubscribeRequest>,
     }
 
     #[tonic::async_trait]
@@ -2531,15 +2499,19 @@ mod reconnect_stream_tests {
             mut request: Request<tonic::Streaming<SubscribeRequest>>,
         ) -> Result<Response<Self::SubscribeStream>, Status> {
             let request = request.get_mut().message().await?.unwrap();
-            assert!(request.blocks_meta.contains_key(AUTORECONNECT_FILTER_KEY));
-            assert_eq!(
-                request
-                    .slots
-                    .get(AUTORECONNECT_FILTER_KEY)
-                    .unwrap()
-                    .filter_by_commitment,
-                Some(false)
-            );
+            if let Some(expected) = &self.expected_request {
+                assert_eq!(&request, expected);
+            } else {
+                assert!(request.blocks_meta.contains_key(AUTORECONNECT_FILTER_KEY));
+                assert_eq!(
+                    request
+                        .slots
+                        .get(AUTORECONNECT_FILTER_KEY)
+                        .unwrap()
+                        .filter_by_commitment,
+                    Some(false)
+                );
+            }
             if let Some(slot) = request.from_slot {
                 self.replay_requests.lock().unwrap().push(slot);
                 if !self.accept_replay {
@@ -2621,6 +2593,106 @@ mod reconnect_stream_tests {
     }
 
     #[tokio::test]
+    async fn ordinary_subscriptions_never_reconnect_or_rewrite_updates() {
+        for config in [
+            None,
+            Some(ReconnectConfig::default()),
+            Some(ReconnectConfig {
+                policy: ReconnectionPolicy::SkipMissedData,
+                ..Default::default()
+            }),
+        ] {
+            for method in 0..3 {
+                for disconnect_error in [false, true] {
+                    let request = if method == 0 {
+                        SubscribeRequest::default()
+                    } else {
+                        SubscribeRequest {
+                            accounts: [("accounts".into(), Default::default())].into(),
+                            commitment: Some(1),
+                            ..Default::default()
+                        }
+                    };
+                    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+                    let incoming = futures::stream::unfold(listener, |listener| async move {
+                        Some((listener.accept().await.map(|(stream, _)| stream), listener))
+                    });
+                    let (tx, rx) = mpsc::unbounded();
+                    let replay_requests = Arc::new(Mutex::new(Vec::new()));
+                    let server = tokio::spawn(
+                        tonic::transport::Server::builder()
+                            .add_service(
+                                yellowstone_grpc_proto::geyser::geyser_server::GeyserServer::new(
+                                    SubscribeService {
+                                        updates: Mutex::new(Some(rx)),
+                                        replay_requests: Arc::clone(&replay_requests),
+                                        accept_replay: false,
+                                        expected_request: Some(request.clone()),
+                                    },
+                                ),
+                            )
+                            .serve_with_incoming(incoming),
+                    );
+                    let mut builder = GeyserGrpcClient::build_from_shared(endpoint).unwrap();
+                    if let Some(config) = config.clone() {
+                        builder = builder.set_reconnect_config(config);
+                    }
+                    let mut client = builder.connect().await.unwrap();
+                    let (_sink, mut stream) = match method {
+                        0 => {
+                            let (sink, stream) = client.subscribe().await.unwrap();
+                            (Some(sink), stream)
+                        }
+                        1 => {
+                            let (sink, stream) =
+                                client.subscribe_with_request(Some(request)).await.unwrap();
+                            (Some(sink), stream)
+                        }
+                        _ => (None, client.subscribe_once(request).await.unwrap()),
+                    };
+                    for update in [
+                        metadata(42, 7, "unchanged", 41),
+                        account(42, 7),
+                        account(42, 7),
+                    ] {
+                        tx.unbounded_send(Ok(update.clone())).unwrap();
+                        let delivered =
+                            tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                                .await
+                                .unwrap()
+                                .unwrap()
+                                .unwrap();
+                        assert_eq!(delivered, update);
+                    }
+                    if disconnect_error {
+                        tx.unbounded_send(Err(Status::unavailable("ordinary disconnect")))
+                            .unwrap();
+                        let error =
+                            tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                                .await
+                                .unwrap()
+                                .unwrap()
+                                .unwrap_err();
+                        assert_eq!(error.code(), tonic::Code::Unavailable);
+                        assert_eq!(error.message(), "ordinary disconnect");
+                    }
+                    drop(tx);
+                    assert!(
+                        tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                            .await
+                            .unwrap()
+                            .is_none()
+                    );
+                    assert!(replay_requests.lock().unwrap().is_empty());
+                    server.abort();
+                    let _ = server.await;
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn public_api_preserves_live_writes_for_every_builder_policy() {
         for config in [
             None,
@@ -2645,6 +2717,7 @@ mod reconnect_stream_tests {
                                 updates: Mutex::new(Some(rx)),
                                 replay_requests: Arc::clone(&replay_requests),
                                 accept_replay: false,
+                                expected_request: None,
                             },
                         ),
                     )
@@ -2656,7 +2729,7 @@ mod reconnect_stream_tests {
             }
             let mut client = builder.connect().await.unwrap();
             let (_sink, mut stream) = client.subscribe_with_reconnect(None).await.unwrap();
-            assert!(matches!(stream.inner.inner, InnerStream::NoReplay(_)));
+            assert!(stream.inner.bank_replay);
             let metadata = SubscribeUpdate {
                 filters: vec!["user".into()],
                 update_oneof: Some(UpdateOneof::BlockMeta(Default::default())),
@@ -2721,6 +2794,7 @@ mod reconnect_stream_tests {
                                     updates: Mutex::new(Some(rx)),
                                     replay_requests: Arc::clone(&requests),
                                     accept_replay: true,
+                                    expected_request: None,
                                 },
                             ),
                         )
@@ -2905,7 +2979,7 @@ mod reconnect_stream_tests {
                 ..Default::default()
             };
             let (_sink, public_stream) = client.subscribe_with_reconnect(Some(request)).await.unwrap();
-            let InnerStream::NoReplay(auto) = public_stream.inner.inner else { panic!("expected bank reconnect source") };
+            let auto = public_stream.inner;
             let interrupt = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let requests = Arc::new(Mutex::new(Vec::new()));
             let mut stream = ReconnectStream::new(AutoReconnect::new(
