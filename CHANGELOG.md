@@ -10,11 +10,18 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-09-17
+
 ### Features
 
 - proto/plugin/client: added standalone Alpenglow block footer updates via the `block_footer` filter.
 
 - proto/plugin: added `bank_id` to `SubscribeUpdateBlock`, matching `SubscribeUpdateBlockMeta` and `SubscribeUpdateEntry`.
+- yellowstone-grpc-client 13.5.1
+
+### Fixes
+
+- client: fix duplicate events when replaying partial slots after reconnect.
 
 ## 2026-08-31
 
