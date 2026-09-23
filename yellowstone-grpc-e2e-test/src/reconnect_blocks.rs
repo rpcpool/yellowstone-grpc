@@ -73,7 +73,7 @@ fn machine() -> (mpsc::Sender<Result<SubscribeUpdate, Status>>, Machine) {
     )
 }
 
-fn update_bank(update: &SubscribeUpdate) -> Option<(u64, Option<u64>)> {
+const fn update_bank(update: &SubscribeUpdate) -> Option<(u64, Option<u64>)> {
     Some(match update.update_oneof.as_ref() {
         Some(UpdateOneof::Account(m)) => (m.slot, m.bank_id),
         Some(UpdateOneof::Slot(m)) => (m.slot, m.bank_id),

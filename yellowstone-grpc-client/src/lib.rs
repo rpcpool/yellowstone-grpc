@@ -251,6 +251,10 @@ impl BankRef {
 }
 
 #[derive(Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Keep subscription updates inline to avoid an allocation per message"
+)]
 pub enum ReconnectEvent {
     Update {
         generation: u64,
@@ -451,6 +455,10 @@ pub struct GeyserStream {
     inner: InnerStream,
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Keep the live transport inline; the smaller variant is only used by test tools"
+)]
 enum InnerStream {
     Live(Streaming<SubscribeUpdate>),
     #[cfg(feature = "test-tools")]
@@ -1385,8 +1393,7 @@ mod bank_recovery_flow_test {
         SubscribeUpdateAccountInfo, SubscribeUpdateBlockMeta, SubscribeUpdateSlot,
     };
 
-    type TestStream =
-        mpsc::UnboundedReceiver<Result<SubscribeUpdate, tonic::Status>>;
+    type TestStream = mpsc::UnboundedReceiver<Result<SubscribeUpdate, tonic::Status>>;
 
     #[derive(Clone)]
     struct TestConnector {
@@ -1397,9 +1404,7 @@ mod bank_recovery_flow_test {
     impl GrpcConnector for TestConnector {
         type Stream = TestStream;
         type ConnectError = GeyserGrpcClientError;
-        type ConnectFuture = std::future::Ready<
-            Result<Self::Stream, Self::ConnectError>,
-        >;
+        type ConnectFuture = std::future::Ready<Result<Self::Stream, Self::ConnectError>>;
 
         fn connect(
             &self,
@@ -1408,13 +1413,11 @@ mod bank_recovery_flow_test {
         ) -> Self::ConnectFuture {
             self.requests.lock().unwrap().push(from_slot);
 
-            std::future::ready(
-                self.replacement.lock().unwrap().take().ok_or_else(|| {
-                    GeyserGrpcClientError::TonicStatus(
-                        Status::unavailable("unexpected extra reconnect"),
-                    )
-                }),
-            )
+            std::future::ready(self.replacement.lock().unwrap().take().ok_or_else(|| {
+                GeyserGrpcClientError::TonicStatus(Status::unavailable(
+                    "unexpected extra reconnect",
+                ))
+            }))
         }
     }
 
@@ -1440,15 +1443,13 @@ mod bank_recovery_flow_test {
         SubscribeUpdate {
             // Control-only metadata must still reach recovery machinery.
             filters: vec![AUTORECONNECT_FILTER_KEY.into()],
-            update_oneof: Some(UpdateOneof::BlockMeta(
-                SubscribeUpdateBlockMeta {
-                    slot: 100,
-                    bank_id: 7,
-                    blockhash: "11111111111111111111111111111111".into(),
-                    parent_slot: 99,
-                    ..Default::default()
-                },
-            )),
+            update_oneof: Some(UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
+                slot: 100,
+                bank_id: 7,
+                blockhash: "11111111111111111111111111111111".into(),
+                parent_slot: 99,
+                ..Default::default()
+            })),
             ..Default::default()
         }
     }
@@ -1554,7 +1555,8 @@ mod bank_recovery_flow_test {
             reason,
             replacement,
             winners,
-        } = event else {
+        } = event
+        else {
             panic!("expected discard before replacement, got {event:?}");
         };
 

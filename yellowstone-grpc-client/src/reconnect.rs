@@ -552,7 +552,7 @@ impl<S, Connector> AutoReconnect<S, Connector> {
 
 #[cfg(feature = "test-tools")]
 impl<S, Connector> AutoReconnect<S, Connector> {
-    pub fn with_bank_replay_for_test(self) -> Self {
+    pub const fn with_bank_replay_for_test(self) -> Self {
         self.with_bank_replay()
     }
 }
@@ -737,7 +737,6 @@ pub(crate) fn visible_update(update: &mut SubscribeUpdate) -> bool {
         .retain(|filter| filter != AUTORECONNECT_FILTER_KEY);
     !internal_only
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1749,13 +1748,12 @@ mod reconnect_stream_tests {
         yellowstone_grpc_proto::prelude::{subscribe_update::UpdateOneof, SubscribeUpdateAccount},
     };
 
+    type StreamPoll = std::task::Poll<Option<Result<SubscribeUpdate, Status>>>;
+
     struct Source {
         generation: u32,
         replay_from_slot: Option<u64>,
-        steps: VecDeque<(
-            u32,
-            std::task::Poll<Option<Result<SubscribeUpdate, Status>>>,
-        )>,
+        steps: VecDeque<(u32, StreamPoll)>,
     }
 
     impl ReconnectCounter for Source {
