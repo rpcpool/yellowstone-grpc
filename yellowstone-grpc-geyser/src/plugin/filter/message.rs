@@ -1293,6 +1293,7 @@ pub mod tests {
                 MessageEntry, MessageTransaction, MessageTransactionInfo,
             },
         },
+        agave_geyser_plugin_interface::transaction_status_meta as mirror,
         bytes::Bytes,
         foldhash::{HashSet as FoldHashSet, HashSetExt},
         prost::Message,
@@ -1301,7 +1302,10 @@ pub mod tests {
         solana_pubkey::Pubkey,
         solana_signature::Signature,
         solana_storage_proto::convert::generated,
-        solana_transaction_status::{ConfirmedBlock, TransactionWithStatusMeta},
+        solana_transaction_status::{
+            ConfirmedBlock, Reward, TransactionStatusMeta, TransactionTokenBalance,
+            TransactionWithStatusMeta,
+        },
         std::{
             collections::HashMap,
             fs,
@@ -1310,7 +1314,10 @@ pub mod tests {
             sync::{Arc, OnceLock},
             time::SystemTime,
         },
-        yellowstone_grpc_proto::geyser::{SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta},
+        yellowstone_grpc_proto::{
+            geyser::{SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta},
+            prelude as proto,
+        },
     };
 
     pub fn create_message_filters(names: &[&str]) -> FilteredUpdateFilters {
@@ -1475,7 +1482,7 @@ pub mod tests {
                                 signature: tx.transaction.signatures[0],
                                 is_vote: true,
                                 transaction: convert_to::create_transaction(&tx.transaction),
-                                meta: convert_to::create_transaction_meta(&tx.meta),
+                                meta: create_transaction_meta(&tx.meta),
                                 index,
                                 account_keys: FoldHashSet::new(),
                                 pre_encoded: OnceLock::new(),
@@ -1499,10 +1506,7 @@ pub mod tests {
                         slot,
                         parent_blockhash: block.previous_blockhash,
                         blockhash: block.blockhash,
-                        rewards: Some(convert_to::create_rewards_obj(
-                            &block.rewards,
-                            block.num_partitions,
-                        )),
+                        rewards: Some(create_rewards_obj(&block.rewards, block.num_partitions)),
                         block_time: block.block_time.map(convert_to::create_timestamp),
                         block_height: block.block_height.map(convert_to::create_block_height),
                         executed_transaction_count: transactions.len() as u64,
@@ -1512,8 +1516,7 @@ pub mod tests {
                     created_at: Timestamp::from(SystemTime::now()),
                 };
                 let mut block_meta2 = block_meta1.clone();
-                block_meta2.rewards =
-                    Some(convert_to::create_rewards_obj(&block.rewards, Some(42)));
+                block_meta2.rewards = Some(create_rewards_obj(&block.rewards, Some(42)));
 
                 let block_meta1 = Arc::new(block_meta1);
                 let block_meta2 = Arc::new(block_meta2);
@@ -1554,6 +1557,109 @@ pub mod tests {
                     })
             })
             .collect()
+    }
+
+    // Fixtures decode to owned `solana_transaction_status` types. These borrow them as the geyser
+    // interface mirror, as `solana-geyser-plugin-manager` does, then run the plugin conversion.
+    fn create_transaction_meta(meta: &TransactionStatusMeta) -> proto::TransactionStatusMeta {
+        let inner_instruction_rows = meta.inner_instructions.as_ref().map(|groups| {
+            groups
+                .iter()
+                .map(|group| {
+                    let instructions = group
+                        .instructions
+                        .iter()
+                        .map(|ix| mirror::InnerInstruction {
+                            instruction: &ix.instruction,
+                            stack_height: ix.stack_height,
+                        })
+                        .collect::<Vec<_>>();
+                    (group.index, instructions)
+                })
+                .collect::<Vec<_>>()
+        });
+        let inner_instructions = inner_instruction_rows.as_ref().map(|rows| {
+            rows.iter()
+                .map(|(index, instructions)| mirror::InnerInstructions {
+                    index: *index,
+                    instructions,
+                })
+                .collect::<Vec<_>>()
+        });
+        let log_messages = meta
+            .log_messages
+            .as_ref()
+            .map(|logs| logs.iter().map(String::as_str).collect::<Vec<_>>());
+        let pre_token_balances = meta.pre_token_balances.as_ref().map(|balances| {
+            balances
+                .iter()
+                .map(mirror_token_balance)
+                .collect::<Vec<_>>()
+        });
+        let post_token_balances = meta.post_token_balances.as_ref().map(|balances| {
+            balances
+                .iter()
+                .map(mirror_token_balance)
+                .collect::<Vec<_>>()
+        });
+        let rewards = meta
+            .rewards
+            .as_ref()
+            .map(|rewards| rewards.iter().map(mirror_reward).collect::<Vec<_>>());
+
+        convert_to::create_transaction_meta(&mirror::TransactionStatusMeta {
+            status: meta.status.as_ref().copied(),
+            fee: meta.fee,
+            pre_balances: &meta.pre_balances,
+            post_balances: &meta.post_balances,
+            inner_instructions: inner_instructions.as_deref(),
+            log_messages: log_messages.as_deref(),
+            pre_token_balances: pre_token_balances.as_deref(),
+            post_token_balances: post_token_balances.as_deref(),
+            rewards: rewards.as_deref(),
+            loaded_addresses: &meta.loaded_addresses,
+            return_data: meta.return_data.as_ref().map(|return_data| {
+                mirror::TransactionReturnData {
+                    program_id: return_data.program_id,
+                    data: &return_data.data,
+                }
+            }),
+            compute_units_consumed: meta.compute_units_consumed,
+            cost_units: meta.cost_units,
+        })
+    }
+
+    fn create_rewards_obj(rewards: &[Reward], num_partitions: Option<u64>) -> proto::Rewards {
+        let rewards = rewards.iter().map(mirror_reward).collect::<Vec<_>>();
+        convert_to::create_rewards_obj(&rewards, num_partitions)
+    }
+
+    fn mirror_token_balance(
+        balance: &TransactionTokenBalance,
+    ) -> mirror::TransactionTokenBalance<'_> {
+        mirror::TransactionTokenBalance {
+            account_index: balance.account_index,
+            mint: &balance.mint,
+            ui_token_amount: mirror::UiTokenAmount {
+                ui_amount: balance.ui_token_amount.ui_amount,
+                decimals: balance.ui_token_amount.decimals,
+                amount: &balance.ui_token_amount.amount,
+                ui_amount_string: &balance.ui_token_amount.ui_amount_string,
+            },
+            owner: &balance.owner,
+            program_id: &balance.program_id,
+        }
+    }
+
+    fn mirror_reward(reward: &Reward) -> mirror::Reward<'_> {
+        mirror::Reward {
+            pubkey: &reward.pubkey,
+            lamports: reward.lamports,
+            post_balance: reward.post_balance,
+            reward_type: reward.reward_type,
+            commission: reward.commission,
+            commission_bps: reward.commission_bps,
+        }
     }
 
     #[cfg(test)]

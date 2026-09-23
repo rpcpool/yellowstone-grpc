@@ -1,5 +1,9 @@
 use {
     crate::plugin::message::{ContactInfoMessage, MessageContactInfo},
+    agave_geyser_plugin_interface::transaction_status_meta::{
+        InnerInstruction, InnerInstructions, Reward, TransactionReturnData, TransactionStatusMeta,
+        TransactionTokenBalance,
+    },
     prost_types::Timestamp,
     solana_clock::UnixTimestamp,
     solana_message::{
@@ -9,12 +13,8 @@ use {
     solana_pubkey::Pubkey,
     solana_signature::Signature,
     solana_transaction::versioned::VersionedTransaction,
-    solana_transaction_context::transaction::TransactionReturnData,
     solana_transaction_error::TransactionError,
-    solana_transaction_status::{
-        InnerInstruction, InnerInstructions, Reward, RewardType, TransactionStatusMeta,
-        TransactionTokenBalance,
-    },
+    solana_transaction_status::RewardType,
     std::time::SystemTime,
     yellowstone_grpc_proto::prelude as proto,
 };
@@ -131,7 +131,11 @@ pub fn create_transaction_meta(meta: &TransactionStatusMeta) -> proto::Transacti
         .map(create_inner_instructions_vec)
         .unwrap_or_default();
     let log_messages_none = log_messages.is_none();
-    let log_messages = log_messages.clone().unwrap_or_default();
+    let log_messages = log_messages
+        .unwrap_or_default()
+        .iter()
+        .map(|msg| msg.to_string())
+        .collect::<Vec<_>>();
     let pre_token_balances = pre_token_balances
         .as_deref()
         .map(create_token_balances)
@@ -147,8 +151,8 @@ pub fn create_transaction_meta(meta: &TransactionStatusMeta) -> proto::Transacti
     proto::TransactionStatusMeta {
         err,
         fee: *fee,
-        pre_balances: pre_balances.clone(),
-        post_balances: post_balances.clone(),
+        pre_balances: pre_balances.to_vec(),
+        post_balances: post_balances.to_vec(),
         inner_instructions,
         inner_instructions_none,
         log_messages,
@@ -166,7 +170,7 @@ pub fn create_transaction_meta(meta: &TransactionStatusMeta) -> proto::Transacti
 }
 
 pub fn create_transaction_error(
-    status: &Result<(), TransactionError>,
+    status: &Result<(), &TransactionError>,
 ) -> Option<proto::TransactionError> {
     match status {
         Ok(()) => None,
@@ -183,7 +187,7 @@ pub fn create_inner_instructions_vec(ixs: &[InnerInstructions]) -> Vec<proto::In
 pub fn create_inner_instructions(instructions: &InnerInstructions) -> proto::InnerInstructions {
     proto::InnerInstructions {
         index: instructions.index as u32,
-        instructions: create_inner_instruction_vec(&instructions.instructions),
+        instructions: create_inner_instruction_vec(instructions.instructions),
     }
 }
 
@@ -207,15 +211,15 @@ pub fn create_token_balances(balances: &[TransactionTokenBalance]) -> Vec<proto:
 pub fn create_token_balance(balance: &TransactionTokenBalance) -> proto::TokenBalance {
     proto::TokenBalance {
         account_index: balance.account_index as u32,
-        mint: balance.mint.clone(),
+        mint: balance.mint.to_string(),
         ui_token_amount: Some(proto::UiTokenAmount {
             ui_amount: balance.ui_token_amount.ui_amount.unwrap_or_default(),
             decimals: balance.ui_token_amount.decimals as u32,
-            amount: balance.ui_token_amount.amount.clone(),
-            ui_amount_string: balance.ui_token_amount.ui_amount_string.clone(),
+            amount: balance.ui_token_amount.amount.to_string(),
+            ui_amount_string: balance.ui_token_amount.ui_amount_string.to_string(),
         }),
-        owner: balance.owner.clone(),
-        program_id: balance.program_id.clone(),
+        owner: balance.owner.to_string(),
+        program_id: balance.program_id.to_string(),
     }
 }
 
@@ -232,7 +236,7 @@ pub fn create_rewards(rewards: &[Reward]) -> Vec<proto::Reward> {
 
 pub fn create_reward(reward: &Reward) -> proto::Reward {
     proto::Reward {
-        pubkey: reward.pubkey.clone(),
+        pubkey: reward.pubkey.to_string(),
         lamports: reward.lamports,
         post_balance: reward.post_balance,
         reward_type: create_reward_type(reward.reward_type) as i32,
@@ -263,7 +267,7 @@ pub const fn create_num_partitions(num_partitions: u64) -> proto::NumPartitions 
 pub fn create_return_data(return_data: &TransactionReturnData) -> proto::ReturnData {
     proto::ReturnData {
         program_id: return_data.program_id.to_bytes().into(),
-        data: return_data.data.clone(),
+        data: return_data.data.to_vec(),
     }
 }
 

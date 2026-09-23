@@ -34,7 +34,7 @@ cargo-lock = "11.0.0"
 chrono = "0.4.45"
 clap = "4.5.42"
 criterion = "0.8.0"
-crossbeam-channel = "0.5.8"
+crossbeam-channel = "0.5.17"
 dotenvy = "0.15.0"
 dashmap = "6.1.0"
 env_logger = "0.11.3"
@@ -103,29 +103,29 @@ wincode = "0.6.1"
 notify = "8.2.0"
 
 # Agave Monorepo
-agave-geyser-plugin-interface = "4.3.0"
-solana-account-decoder = "4.3.0"
-solana-entry = "4.3.0"
+agave-geyser-plugin-interface = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-alpha.5" }
+solana-account-decoder = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-alpha.5" }
+solana-entry = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-alpha.5" }
 solana-logger = "3.0.0"
-solana-storage-proto = "4.3.0"
-solana-transaction-context = "4.3.0"
-solana-transaction-status = "4.3.0"
+solana-storage-proto = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-alpha.5" }
+solana-transaction-context = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-alpha.5" }
+solana-transaction-status = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-alpha.5" }
 
 # Solana SDK
-solana-message = "4.4.1"
+solana-message = "5.1.0"
 
 solana-account = "4.0.0"
 solana-clock = "3.0.0"
 solana-commitment-config = "3.0.0"
 solana-hash = "4.3.0"
-solana-keypair = "3.0.0"
+solana-keypair = "4.0.0"
 
 solana-pubkey = "4.0.0"
 solana-signature = "3.0.0"
-solana-signer = "3.0.0"
-solana-transaction = "4.0.0"
+solana-signer = "4.0.0"
+solana-transaction = "5.1.0"
 # We need to pin this to 3.2.0 because introduce a breaking changing in 3.3.0 which prevents compilation of solana-storage-proto.
-solana-transaction-error = "3.3.1"
+solana-transaction-error = { version = "4.1.0", features = ["serde"] }
 
 # Solana Misc
 spl-token-2022-interface = "2.1.0"
@@ -133,7 +133,7 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.9.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "13.5.1" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "16.0.0-rc10+solana.4.3.0" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "17.0.0-rc1+solana.4.3.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "13.0.0-rc4", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }

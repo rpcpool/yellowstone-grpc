@@ -1,16 +1,18 @@
 use {
     super::convert_to,
-    agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockFooterInfo, ReplicaBlockInfoV4, ReplicaContactInfoV0_0_1,
-        ReplicaDeshredTransactionInfo, ReplicaDeshredTransactionInfoV2,
-        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
-        SlotStatus as GeyserSlotStatus,
+    agave_geyser_plugin_interface::{
+        block_footer::VersionedBlockFooter,
+        geyser_plugin_interface::{
+            ReplicaAccountInfoV3, ReplicaBlockFooterInfo, ReplicaBlockInfoV5,
+            ReplicaContactInfoV0_0_1, ReplicaDeshredTransactionInfo,
+            ReplicaDeshredTransactionInfoV2, ReplicaDeshredTransactionInfoVersions,
+            ReplicaEntryInfoV2, ReplicaTransactionInfoV4, SlotStatus as GeyserSlotStatus,
+        },
     },
     bytes::Bytes,
     foldhash::{HashSet as FoldHashSet, HashSetExt},
     prost_types::Timestamp,
     solana_clock::{BankId, Slot},
-    solana_entry::block_component::VersionedBlockFooter,
     solana_hash::{Hash, HASH_BYTES},
     solana_pubkey::Pubkey,
     solana_signature::Signature,
@@ -266,7 +268,7 @@ pub struct MessageTransactionInfo {
 }
 
 impl MessageTransactionInfo {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>) -> Self {
+    pub fn from_geyser(info: &ReplicaTransactionInfoV4<'_>) -> Self {
         let account_keys = info
             .transaction
             .message
@@ -346,7 +348,7 @@ pub struct MessageTransaction {
 }
 
 impl MessageTransaction {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>, slot: Slot, bank_id: BankId) -> Self {
+    pub fn from_geyser(info: &ReplicaTransactionInfoV4<'_>, slot: Slot, bank_id: BankId) -> Self {
         Self {
             transaction: MessageTransactionInfo::from_geyser(info),
             slot,
@@ -513,7 +515,7 @@ impl MessageBlockFooter {
                 bank_id,
                 bank_hash: footer.bank_hash.to_bytes().to_vec(),
                 block_producer_time_nanos: footer.block_producer_time_nanos,
-                block_user_agent: footer.block_user_agent.clone(),
+                block_user_agent: footer.block_user_agent.to_vec(),
             },
             created_at: Timestamp::from(SystemTime::now()),
         }
@@ -541,7 +543,7 @@ impl DerefMut for MessageBlockMeta {
 }
 
 impl MessageBlockMeta {
-    pub fn from_geyser(info: &ReplicaBlockInfoV4<'_>, bank_id: BankId) -> Self {
+    pub fn from_geyser(info: &ReplicaBlockInfoV5<'_>, bank_id: BankId) -> Self {
         Self {
             block_meta: SubscribeUpdateBlockMeta {
                 parent_slot: info.parent_slot,
@@ -549,7 +551,7 @@ impl MessageBlockMeta {
                 parent_blockhash: info.parent_blockhash.to_string(),
                 blockhash: info.blockhash.to_string(),
                 rewards: Some(convert_to::create_rewards_obj(
-                    &info.rewards.rewards,
+                    info.rewards.rewards,
                     info.rewards.num_partitions,
                 )),
                 block_time: info.block_time.map(convert_to::create_timestamp),

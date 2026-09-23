@@ -444,14 +444,9 @@ impl GeyserPlugin for Plugin {
         bank_id: BankId,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
+            #[allow(clippy::infallible_destructuring_match)]
             let transaction = match transaction {
-                ReplicaTransactionInfoVersions::V0_0_1(_info) => {
-                    unreachable!("ReplicaAccountInfoVersions::V0_0_1 is not supported")
-                }
-                ReplicaTransactionInfoVersions::V0_0_2(_info) => {
-                    unreachable!("ReplicaAccountInfoVersions::V0_0_2 is not supported")
-                }
-                ReplicaTransactionInfoVersions::V0_0_3(info) => info,
+                ReplicaTransactionInfoVersions::V0_0_4(info) => info,
             };
 
             let message = Message::Transaction(Arc::new(MessageTransaction::from_geyser(
@@ -492,17 +487,9 @@ impl GeyserPlugin for Plugin {
         bank_id: BankId,
     ) -> PluginResult<()> {
         self.with_inner(|inner| {
+            #[allow(clippy::infallible_destructuring_match)]
             let blockinfo = match blockinfo {
-                ReplicaBlockInfoVersions::V0_0_1(_info) => {
-                    unreachable!("ReplicaBlockInfoVersions::V0_0_1 is not supported")
-                }
-                ReplicaBlockInfoVersions::V0_0_2(_info) => {
-                    unreachable!("ReplicaBlockInfoVersions::V0_0_2 is not supported")
-                }
-                ReplicaBlockInfoVersions::V0_0_3(_info) => {
-                    unreachable!("ReplicaBlockInfoVersions::V0_0_3 is not supported")
-                }
-                ReplicaBlockInfoVersions::V0_0_4(info) => info,
+                ReplicaBlockInfoVersions::V0_0_5(info) => info,
             };
 
             let message =
@@ -543,7 +530,7 @@ impl GeyserPlugin for Plugin {
         self.with_inner(|inner| {
             #[allow(clippy::infallible_destructuring_match)]
             let info = match block_footer {
-                ReplicaBlockFooterInfoVersions::V0_0_1(info) => info,
+                ReplicaBlockFooterInfoVersions::V0_0_2(info) => info,
             };
 
             let message =

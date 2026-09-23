@@ -669,6 +669,7 @@ mod tests {
                 update_oneof: Some(UpdateOneof::Transaction(SubscribeUpdateTransaction {
                     slot: 11,
                     transaction: Some(SubscribeUpdateTransactionInfo::default()),
+                    bank_id: 0,
                 })),
                 ..Default::default()
             },
@@ -812,6 +813,7 @@ mod tests {
                 update_oneof: Some(UpdateOneof::Transaction(SubscribeUpdateTransaction {
                     slot: 1,
                     transaction: Some(SubscribeUpdateTransactionInfo::default()),
+                    bank_id: 0,
                 })),
                 ..Default::default()
             };
