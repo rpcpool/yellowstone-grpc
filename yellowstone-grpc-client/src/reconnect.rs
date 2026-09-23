@@ -1741,8 +1741,7 @@ mod tests {
 #[cfg(test)]
 mod reconnect_stream_tests {
     use {
-        crate::dedup::ReconnectCounter,
-        crate::*,
+        crate::{dedup::ReconnectCounter, *},
         futures::{FutureExt, StreamExt},
         std::collections::VecDeque,
         yellowstone_grpc_proto::prelude::{subscribe_update::UpdateOneof, SubscribeUpdateAccount},

@@ -1386,11 +1386,13 @@ mod tests {
 
 #[cfg(test)]
 mod bank_recovery_flow_test {
-    use super::*;
-    use futures::{channel::mpsc, StreamExt};
-    use yellowstone_grpc_proto::prelude::{
-        subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdateAccount,
-        SubscribeUpdateAccountInfo, SubscribeUpdateBlockMeta, SubscribeUpdateSlot,
+    use {
+        super::*,
+        futures::{channel::mpsc, StreamExt},
+        yellowstone_grpc_proto::prelude::{
+            subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdateAccount,
+            SubscribeUpdateAccountInfo, SubscribeUpdateBlockMeta, SubscribeUpdateSlot,
+        },
     };
 
     type TestStream = mpsc::UnboundedReceiver<Result<SubscribeUpdate, tonic::Status>>;
