@@ -18,6 +18,11 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - proto/plugin: added `bank_id` to `SubscribeUpdateBlock`, matching `SubscribeUpdateBlockMeta` and `SubscribeUpdateEntry`.
 
+### Fixes
+
+- plugin: `convert_from::create_tx_meta` respects `inner_instructions_none` and `log_messages_none` instead of always returning empty collections.
+- plugin: `convert_from::create_reward` decodes unknown `reward_type` values as `None` instead of failing the whole conversion.
+
 ## 2026-08-31
 
 - yellowstone-grpc-geyser 15.2.1
