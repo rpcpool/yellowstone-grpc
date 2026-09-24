@@ -7337,7 +7337,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "14.0.0-rc.0"
+version = "14.0.0-rc.1"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -7392,7 +7392,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "16.0.0-rc11+solana.4.3.0"
+version = "16.0.0-rc12+solana.4.3.0"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
@@ -7545,7 +7545,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "14.0.0-rc.0"
+version = "14.0.0-rc.1"
 dependencies = [
  "anyhow",
  "bytes",
