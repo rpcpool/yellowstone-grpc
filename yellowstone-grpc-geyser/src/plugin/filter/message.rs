@@ -1840,12 +1840,18 @@ pub mod tests {
 
     #[test]
     fn test_message_block_footer() {
-        // An empty user agent and a maximal timestamp are the interesting edges
-        // for the hand-rolled encoder.
-        for (bank_hash, nanos, user_agent) in [
-            (vec![0u8; 32], 0u64, Vec::new()),
-            (vec![7u8; 32], u64::MAX, b"agave/3.0.0".to_vec()),
+        // An empty user agent, a maximal timestamp, absent certificates and an
+        // empty certificate are the interesting edges for the hand-rolled encoder.
+        for (bank_hash, nanos, user_agent, certs) in [
+            (vec![0u8; 32], 0u64, Vec::new(), [None, None, None]),
+            (
+                vec![7u8; 32],
+                u64::MAX,
+                b"agave/3.0.0".to_vec(),
+                [Some(vec![1u8; 96]), Some(Vec::new()), Some(vec![2u8; 48])],
+            ),
         ] {
+            let [block_final_cert, skip_reward_cert, notar_reward_cert] = certs;
             let message = Arc::new(MessageBlockFooter {
                 block_footer: SubscribeUpdateBlockFooter {
                     slot: 42,
@@ -1853,6 +1859,9 @@ pub mod tests {
                     bank_hash,
                     block_producer_time_nanos: nanos,
                     block_user_agent: user_agent,
+                    block_final_cert,
+                    skip_reward_cert,
+                    notar_reward_cert,
                 },
                 created_at: Timestamp::default(),
             });

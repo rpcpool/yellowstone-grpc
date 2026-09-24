@@ -14,6 +14,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - proto/plugin/client: added standalone Alpenglow block footer updates via the `block_footer` filter.
 
+- proto/plugin: added the Alpenglow `block_final_cert`, `skip_reward_cert` and `notar_reward_cert` fields to `SubscribeUpdateBlockFooter`, carried as opaque wincode bytes.
+
 - proto/plugin: added `bank_id` to `SubscribeUpdateBlock`, matching `SubscribeUpdateBlockMeta` and `SubscribeUpdateEntry`.
 
 ## 2026-08-31

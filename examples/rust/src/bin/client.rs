@@ -976,6 +976,9 @@ async fn geyser_subscribe(
                                 "bankHash": bs58::encode(msg.bank_hash).into_string(),
                                 "blockProducerTimeNanos": msg.block_producer_time_nanos,
                                 "blockUserAgent": String::from_utf8_lossy(&msg.block_user_agent),
+                                "blockFinalCert": msg.block_final_cert.map(|cert| bs58::encode(cert).into_string()),
+                                "skipRewardCert": msg.skip_reward_cert.map(|cert| bs58::encode(cert).into_string()),
+                                "notarRewardCert": msg.notar_reward_cert.map(|cert| bs58::encode(cert).into_string()),
                             }),
                         );
                     }
