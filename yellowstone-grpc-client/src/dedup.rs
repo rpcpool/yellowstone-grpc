@@ -15,6 +15,136 @@ use {
     },
 };
 
+#[derive(Default)]
+pub(crate) struct CompleteBankDedup {
+    complete: HashMap<crate::BankRef, String>,
+    replay_hashes: HashMap<u64, HashSet<String>>,
+    replay: HashMap<crate::BankRef, BankReplay>,
+    statuses: HashMap<(u64, String), HashSet<i32>>,
+}
+
+enum BankReplay {
+    Pending(VecDeque<SubscribeUpdate>),
+    Duplicate(String),
+    Changed,
+}
+
+impl CompleteBankDedup {
+    pub(crate) fn is_complete(&self, bank: &crate::BankRef) -> bool {
+        self.complete.contains_key(bank)
+    }
+
+    pub(crate) fn begin_replay(&mut self, partial: &[crate::BankRef]) {
+        self.replay_hashes.clear();
+        let partial_slots: HashSet<_> = partial.iter().map(|bank| bank.slot).collect();
+        for (bank, hash) in &self.complete {
+            if !partial_slots.contains(&bank.slot) {
+                self.replay_hashes
+                    .entry(bank.slot)
+                    .or_default()
+                    .insert(hash.clone());
+            }
+        }
+        self.replay.clear();
+    }
+
+    pub(crate) fn delivered(&mut self, bank: crate::BankRef, update: &SubscribeUpdate) {
+        match update.update_oneof.as_ref() {
+            Some(UpdateOneof::BlockMeta(meta)) if !meta.blockhash.is_empty() => {
+                self.complete.insert(bank, meta.blockhash.clone());
+            }
+            Some(UpdateOneof::Slot(status)) => {
+                if let Some(hash) = self.complete.get(&bank) {
+                    self.statuses
+                        .entry((bank.slot, hash.clone()))
+                        .or_default()
+                        .insert(status.status);
+                }
+            }
+            Some(
+                UpdateOneof::Account(_)
+                | UpdateOneof::Transaction(_)
+                | UpdateOneof::Entry(_)
+                | UpdateOneof::TransactionStatus(_)
+                | UpdateOneof::Block(_)
+                | UpdateOneof::BlockFooter(_),
+            ) => {
+                // Payloads after BlockMeta invalidate that bank's completion marker.
+                self.complete.remove(&bank);
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn filter(
+        &mut self,
+        generation: u64,
+        update: SubscribeUpdate,
+        ready: &mut VecDeque<SubscribeUpdate>,
+    ) {
+        let Some(bank) = crate::BankRef::from_update(generation, &update) else {
+            ready.push_back(update);
+            return;
+        };
+        let Some(hashes) = self.replay_hashes.get(&bank.slot) else {
+            ready.push_back(update);
+            return;
+        };
+        let replay = self
+            .replay
+            .entry(bank)
+            .or_insert_with(|| BankReplay::Pending(VecDeque::new()));
+        match replay {
+            BankReplay::Changed => ready.push_back(update),
+            BankReplay::Duplicate(hash) => {
+                let hash = hash.clone();
+                self.new_statuses(bank.slot, &hash, std::iter::once(update), ready);
+            }
+            BankReplay::Pending(buffered) => {
+                let hash = match update.update_oneof.as_ref() {
+                    Some(UpdateOneof::BlockMeta(meta)) => Some(meta.blockhash.clone()),
+                    _ => None,
+                };
+                buffered.push_back(update);
+                if let Some(hash) = hash {
+                    let mut buffered = std::mem::take(buffered);
+                    if hashes.contains(&hash) {
+                        *replay = BankReplay::Duplicate(hash.clone());
+                        self.complete.insert(bank, hash.clone());
+                        self.new_statuses(bank.slot, &hash, buffered, ready);
+                    } else {
+                        *replay = BankReplay::Changed;
+                        ready.append(&mut buffered);
+                    }
+                }
+            }
+        }
+    }
+
+    fn new_statuses(
+        &mut self,
+        slot: u64,
+        hash: &str,
+        buffered: impl IntoIterator<Item = SubscribeUpdate>,
+        ready: &mut VecDeque<SubscribeUpdate>,
+    ) {
+        let seen = self.statuses.entry((slot, hash.to_owned())).or_default();
+        ready.extend(
+            buffered
+                .into_iter()
+                .filter(|update| match update.update_oneof.as_ref() {
+                    Some(UpdateOneof::Slot(status)) => {
+                        matches!(
+                            status.status(),
+                            SlotStatus::SlotConfirmed | SlotStatus::SlotFinalized
+                        ) && seen.insert(status.status)
+                    }
+                    _ => false,
+                }),
+        );
+    }
+}
+
 pub const DEFAULT_SLOT_RETENTION: usize = 250;
 
 const CREATED_BANK_STATUS: i32 = SlotStatus::SlotCreatedBank as i32;
@@ -67,6 +197,11 @@ impl<T> ReplayBuffer<T> {
 
 pub trait ReconnectCounter {
     fn reconnect_count(&self) -> u32;
+
+    /// Inclusive replay boundary requested for the active replacement connection.
+    fn replay_from_slot(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// Wrapper stream that filters out duplicate subscribe updates.
@@ -109,6 +244,7 @@ where
                 Poll::Ready(Some(Ok(msg))) => {
                     let count = this.inner.reconnect_count();
                     if count != this.last_reconnect_count {
+                        this.replay = ReplayBuffer::new();
                         this.state.prepare_for_replay();
                         this.last_reconnect_count = count;
                     }
@@ -136,6 +272,16 @@ where
                 other => return other,
             }
         }
+    }
+}
+
+impl<S: ReconnectCounter, T> ReconnectCounter for DedupStream<S, T> {
+    fn reconnect_count(&self) -> u32 {
+        self.inner.reconnect_count()
+    }
+
+    fn replay_from_slot(&self) -> Option<u64> {
+        self.inner.replay_from_slot()
     }
 }
 
