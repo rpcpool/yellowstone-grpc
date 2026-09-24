@@ -1,5 +1,9 @@
 use {
-    crate::{grpc::E2EGeyserEventAdapter, scenarios::RunConfig},
+    crate::{
+        grpc::E2EGeyserEventAdapter,
+        reconnect_blocks::{ReconnectBlockEvent, ReconnectBlockStream},
+        scenarios::RunConfig,
+    },
     anyhow::{ensure, Context, Result},
     arc_swap::ArcSwap,
     futures::{channel::mpsc, StreamExt as FuturesStreamExt},
@@ -10,7 +14,6 @@ use {
         pin::Pin,
         str::FromStr,
         sync::{Arc, Mutex},
-        task::{Context as TaskContext, Poll},
         time::Duration,
     },
     yellowstone_block_machine::stream::{
@@ -18,8 +21,10 @@ use {
         SimpleBlockStore,
     },
     yellowstone_grpc_client::{
-        AutoReconnect, Backoff, ClientTlsConfig, DedupState, DedupStream, GrpcConnector,
-        ReconnectConfig, ReconnectionPolicy, TonicGrpcConnector, DEFAULT_SLOT_RETENTION,
+        test_tools::Unstable, AutoReconnect, Backoff, BankRef, ClientTlsConfig, DedupState,
+        DedupStream, DiscardReason, GrpcConnector, ReconnectConfig, ReconnectEvent,
+        ReconnectStream, ReconnectionPolicy, SlotWinner, TonicGrpcConnector,
+        DEFAULT_SLOT_RETENTION,
     },
     yellowstone_grpc_e2e_macros::test_helper,
     yellowstone_grpc_proto::{
@@ -33,6 +38,7 @@ use {
 };
 
 const SLOTS_AFTER_RECONNECT: usize = 20;
+const DISCONNECT_AFTER: Duration = Duration::from_secs(4);
 const OUTAGE: Duration = Duration::from_secs(4);
 const TIMEOUT: Duration = Duration::from_secs(240);
 
@@ -71,103 +77,46 @@ impl ReconnectProgress {
     }
 }
 
-#[derive(Default)]
-struct PartialSlot {
-    transaction: bool,
-    account: bool,
-    entry: bool,
-    created_bank: bool,
-}
-
-#[derive(Default)]
-struct DisconnectReadiness {
-    checkpoint: Option<u64>,
-    saw_slot: bool,
-    partial: HashMap<u64, PartialSlot>,
-    require_entries: bool,
-}
-
-impl DisconnectReadiness {
-    fn observe(&mut self, update: &SubscribeUpdate) -> Option<u64> {
-        match update.update_oneof.as_ref()? {
-            UpdateOneof::BlockMeta(meta) => {
-                self.checkpoint = Some(
-                    self.checkpoint
-                        .map_or(meta.slot, |slot| slot.max(meta.slot)),
-                );
-                self.partial
-                    .retain(|slot, _| *slot > self.checkpoint.unwrap());
+fn observe_disconnect<S>(
+    stream: S,
+    progress: Arc<Mutex<ReconnectProgress>>,
+) -> impl futures::Stream<Item = Result<SubscribeUpdate, Status>>
+where
+    S: futures::Stream<Item = Result<SubscribeUpdate, Status>>,
+{
+    let mut accounts = HashSet::new();
+    let mut complete = HashSet::new();
+    let mut recorded = false;
+    stream.inspect(move |item| match item {
+        Ok(update) => match update.update_oneof.as_ref() {
+            Some(UpdateOneof::Account(account)) if account.account.is_some() => {
+                accounts.insert((account.slot, account.bank_id));
             }
-            UpdateOneof::Slot(slot) => {
-                self.saw_slot = true;
-                if slot.status == yellowstone_grpc_proto::geyser::SlotStatus::SlotCreatedBank as i32
-                {
-                    self.partial.entry(slot.slot).or_default().created_bank = true;
-                }
-            }
-            UpdateOneof::Transaction(tx) if tx.transaction.is_some() => {
-                self.partial.entry(tx.slot).or_default().transaction = true;
-            }
-            UpdateOneof::Account(account) if account.account.is_some() => {
-                self.partial.entry(account.slot).or_default().account = true;
-            }
-            UpdateOneof::Entry(entry) => {
-                self.partial.entry(entry.slot).or_default().entry = true;
+            Some(UpdateOneof::BlockMeta(meta)) => {
+                complete.insert((meta.slot, Some(meta.bank_id)));
             }
             _ => {}
-        }
-        let checkpoint = self.checkpoint?;
-        if !self.saw_slot {
-            return None;
-        }
-        self.partial.iter().find_map(|(&slot, data)| {
-            (slot > checkpoint
-                && data.transaction
-                && data.account
-                && (!self.require_entries || (data.entry && data.created_bank)))
-                .then_some(slot)
-        })
-    }
-}
-
-struct DisconnectWhenReady<S> {
-    inner: Option<S>,
-    readiness: DisconnectReadiness,
-    progress: Arc<Mutex<ReconnectProgress>>,
-    pending_disconnect: Option<u64>,
-    inject: bool,
-}
-
-impl<S> futures::Stream for DisconnectWhenReady<S>
-where
-    S: futures::Stream<Item = Result<SubscribeUpdate, Status>> + Unpin,
-{
-    type Item = Result<SubscribeUpdate, Status>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        if let Some(slot) = this.pending_disconnect.take() {
-            this.inner.take();
-            let mut progress = this.progress.lock().unwrap();
-            progress.disconnects += 1;
-            progress.interrupted_slot = Some(slot);
+        },
+        Err(error)
+            if !recorded
+                && error.code() == yellowstone_grpc_proto::tonic::Code::Aborted
+                && error.message() == "unstable: simulated disconnect" =>
+        {
+            recorded = true;
+            let mut state = progress.lock().unwrap();
+            state.disconnects += 1;
+            state.interrupted_slot = accounts
+                .iter()
+                .filter(|bank| !complete.contains(bank))
+                .map(|(slot, _)| *slot)
+                .max();
             log::info!(
-                "injecting disconnect during partial slot {slot}, checkpoint {:?}",
-                this.readiness.checkpoint
+                "timed disconnect: interrupted_partial_slot={:?}",
+                state.interrupted_slot
             );
-            return Poll::Ready(Some(Err(Status::aborted("e2e: simulated disconnect"))));
         }
-        let Some(inner) = this.inner.as_mut() else {
-            return Poll::Ready(None);
-        };
-        let item = Pin::new(inner).poll_next(cx);
-        if this.inject {
-            if let Poll::Ready(Some(Ok(update))) = &item {
-                this.pending_disconnect = this.readiness.observe(update);
-            }
-        }
-        item
-    }
+        _ => {}
+    })
 }
 
 #[derive(Clone)]
@@ -194,7 +143,6 @@ impl GrpcConnector for ScenarioConnector {
             if reconnect {
                 tokio::time::sleep(OUTAGE).await;
             }
-            let require_entries = !request.entry.is_empty();
             let stream = inner.connect(request, from_slot).await?;
             {
                 let mut state = progress.lock().unwrap();
@@ -205,17 +153,14 @@ impl GrpcConnector for ScenarioConnector {
                 state.connected = true;
             }
 
-            let inject = progress.lock().unwrap().disconnects == 0;
-            Ok(Box::pin(DisconnectWhenReady {
-                inner: Some(stream),
-                readiness: DisconnectReadiness {
-                    require_entries,
-                    ..Default::default()
-                },
-                progress,
-                pending_disconnect: None,
-                inject,
-            }) as Self::Stream)
+            if !reconnect {
+                Ok(Box::pin(observe_disconnect(
+                    Unstable::new(stream, DISCONNECT_AFTER),
+                    progress,
+                )) as Self::Stream)
+            } else {
+                Ok(Box::pin(stream) as Self::Stream)
+            }
         })
     }
 }
@@ -655,118 +600,58 @@ mod tests {
         })
     }
 
-    fn readiness_updates() -> Vec<SubscribeUpdate> {
-        vec![
-            SubscribeUpdate {
-                update_oneof: Some(UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
-                    slot: 10,
-                    ..Default::default()
-                })),
-                ..Default::default()
-            },
-            slot(10).unwrap(),
-            SubscribeUpdate {
-                update_oneof: Some(UpdateOneof::Transaction(SubscribeUpdateTransaction {
-                    slot: 11,
-                    transaction: Some(SubscribeUpdateTransactionInfo::default()),
-                    bank_id: 0,
-                })),
-                ..Default::default()
-            },
-            SubscribeUpdate {
-                update_oneof: Some(UpdateOneof::Account(SubscribeUpdateAccount {
-                    slot: 11,
-                    account: Some(SubscribeUpdateAccountInfo::default()),
-                    ..Default::default()
-                })),
-                ..Default::default()
-            },
-            SubscribeUpdate {
-                update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
-                    slot: 11,
-                    parent: Some(10),
-                    status: yellowstone_grpc_proto::geyser::SlotStatus::SlotCreatedBank as i32,
-                    ..Default::default()
-                })),
-                ..Default::default()
-            },
-            SubscribeUpdate {
-                update_oneof: Some(UpdateOneof::Entry(
-                    yellowstone_grpc_proto::geyser::SubscribeUpdateEntry {
-                        slot: 11,
-                        ..Default::default()
-                    },
-                )),
-                ..Default::default()
-            },
-        ]
-    }
-
-    #[test]
-    fn disconnect_requires_checkpoint_and_partial_payloads() {
-        let updates = readiness_updates();
-        let mut readiness = DisconnectReadiness::default();
-        for update in &updates[..3] {
-            assert_eq!(readiness.observe(update), None);
-        }
-        assert_eq!(readiness.observe(&updates[3]), Some(11));
-
-        let mut readiness = DisconnectReadiness {
-            require_entries: true,
-            ..Default::default()
-        };
-        for update in &updates[..5] {
-            assert_eq!(readiness.observe(update), None);
-        }
-        assert_eq!(readiness.observe(&updates[5]), Some(11));
-        let sealed = SubscribeUpdate {
-            update_oneof: Some(UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
-                slot: 11,
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
-        assert_eq!(readiness.observe(&sealed), None);
-        assert_eq!(readiness.observe(&updates[5]), None);
-    }
-
     #[tokio::test]
-    async fn disconnect_delivers_partial_payload_then_drops_once() {
-        let updates = readiness_updates();
+    async fn unstable_disconnect_does_not_wait_for_partial_payloads() {
         let progress = Arc::new(Mutex::new(ReconnectProgress::default()));
-        let mut stream = DisconnectWhenReady {
-            inner: Some(futures::stream::iter(updates.clone().into_iter().map(Ok))),
-            readiness: DisconnectReadiness {
-                require_entries: true,
-                ..Default::default()
-            },
-            progress: Arc::clone(&progress),
-            pending_disconnect: None,
-            inject: true,
-        };
-        for expected in &updates {
-            assert_eq!(&stream.next().await.unwrap().unwrap(), expected);
-            assert_eq!(progress.lock().unwrap().disconnects, 0);
-        }
+        let source = futures::stream::iter(vec![slot(10)]);
+        let mut stream =
+            observe_disconnect(Unstable::new(source, Duration::ZERO), Arc::clone(&progress));
         assert_eq!(
             stream.next().await.unwrap().unwrap_err().code(),
             yellowstone_grpc_proto::tonic::Code::Aborted
         );
-        assert_eq!(progress.lock().unwrap().interrupted_slot, Some(11));
-        assert!(stream.next().await.is_none());
-        assert_eq!(progress.lock().unwrap().disconnects, 1);
+        let state = progress.lock().unwrap();
+        assert_eq!(state.disconnects, 1);
+        assert_eq!(state.interrupted_slot, None);
+    }
 
-        let mut resumed = DisconnectWhenReady {
-            inner: Some(futures::stream::iter(updates.into_iter().map(Ok))),
-            readiness: DisconnectReadiness::default(),
-            progress: Arc::clone(&progress),
-            pending_disconnect: None,
-            inject: false,
+    #[tokio::test]
+    async fn timed_disconnect_records_only_unfinished_account_banks() {
+        let account = |bank_id| {
+            Ok(SubscribeUpdate {
+                update_oneof: Some(UpdateOneof::Account(SubscribeUpdateAccount {
+                    slot: 11,
+                    bank_id: Some(bank_id),
+                    account: Some(SubscribeUpdateAccountInfo::default()),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })
         };
-        while let Some(update) = resumed.next().await {
-            assert!(update.is_ok());
+        for partial in [false, true] {
+            let progress = Arc::new(Mutex::new(ReconnectProgress::default()));
+            let mut updates = vec![
+                account(7),
+                Ok(SubscribeUpdate {
+                    update_oneof: Some(UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
+                        slot: 11,
+                        bank_id: 7,
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }),
+            ];
+            if partial {
+                updates.push(account(8));
+            }
+            updates.push(Err(Status::aborted("unstable: simulated disconnect")));
+            let mut stream =
+                observe_disconnect(futures::stream::iter(updates), Arc::clone(&progress));
+            while stream.next().await.is_some() {}
+            let state = progress.lock().unwrap();
+            assert_eq!(state.disconnects, 1);
+            assert_eq!(state.interrupted_slot, partial.then_some(11));
         }
-        assert_eq!(progress.lock().unwrap().disconnects, 1);
     }
 
     #[test]
@@ -841,5 +726,453 @@ mod tests {
                 assert_eq!(result.unwrap().post_reconnect.len(), SLOTS_AFTER_RECONNECT);
             }
         }
+    }
+}
+
+/// Partial-bank disconnect, finalized replacement, and continued delivery.
+#[test_helper(name = "reconnect-bank-recovery", tags = ["client", "reconnect"])]
+pub async fn reconnect_should_replace_partial_bank(config: &RunConfig) -> Result<()> {
+    let (connector, request) = connector(
+        config,
+        ReconnectionPolicy::RecoverMissedData {
+            slot_retention: DEFAULT_SLOT_RETENTION,
+        },
+        CommitmentLevel::Processed,
+    )?;
+
+    // Recovery needs finalized statuses even though payloads are processed.
+    let mut subscription = subscribe_request(CommitmentLevel::Processed);
+    for filter in subscription.slots.values_mut() {
+        filter.filter_by_commitment = Some(false);
+    }
+    request.store(Arc::new(subscription));
+
+    let progress = Arc::clone(&connector.progress);
+    let first = tokio::time::timeout(TIMEOUT, connector.connect(request.load_full(), None))
+        .await
+        .context("initial connection timed out")??;
+
+    // Bank recovery buffers replacement data until it can identify the winning bank.
+    let mut stream = ReconnectStream::new(
+        AutoReconnect::new(first, connector, request, Backoff::default())
+            .with_bank_replay_for_test(),
+    );
+
+    tokio::time::timeout(TIMEOUT, async {
+        let mut original_accounts = HashSet::<BankRef>::new();
+        let mut original_complete = HashSet::<BankRef>::new();
+        let mut replacement_generation = None;
+        let mut interrupted_slot = None;
+        let mut winner_hash = None::<String>;
+        let mut replacement_accounts = HashMap::<u64, usize>::new();
+        let mut replacement_complete = false;
+        let mut later_slots = HashSet::new();
+
+        while let Some(event) = stream.next().await {
+            match event.context("bank recovery failed")? {
+                ReconnectEvent::DiscardBanks { banks, reason, replacement, winners } => {
+                    ensure!(replacement_generation.is_none(), "unexpected additional recovery");
+                    ensure!(reason == DiscardReason::IncompleteDelivery, "unexpected discard reason");
+                    let slot = progress.lock().unwrap().interrupted_slot
+                        .context("timed disconnect did not interrupt a delivered partial account bank")?;
+
+                    // A slot can contain several banks; check each delivered partial bank.
+                    let partial_banks: Vec<_> = original_accounts.iter()
+                        .filter(|bank| bank.slot == slot && !original_complete.contains(*bank))
+                        .copied().collect();
+                    ensure!(!partial_banks.is_empty(), "disconnect did not interrupt a delivered partial bank");
+                    ensure!(partial_banks.iter().all(|bank| banks.contains(bank)),
+                        "discard omitted an interrupted partial bank");
+                    ensure!(banks.iter().all(|bank| bank.generation == 0 && bank.slot >= replacement.from_slot),
+                        "discard contains banks outside the old generation/replay range");
+                    ensure!(replacement.generation > 0 && replacement.from_slot <= slot,
+                        "invalid replacement generation or boundary");
+
+                    let hash = winners.iter().find_map(|winner| match winner {
+                        SlotWinner::Finalized { slot: winner_slot, blockhash } if *winner_slot == slot => Some(blockhash.clone()),
+                        _ => None,
+                    });
+                    let hash = hash.context(
+                        "interrupted slot has no finalized winner; \
+                         this replacement-payload test cannot pass on a skipped slot",
+                    )?;
+                    log::info!(
+                        "DISCARD: banks={banks:?}, replacement={replacement:?}, \
+                         interrupted_slot={slot}, winner={hash}"
+                    );
+                    interrupted_slot = Some(slot);
+                    winner_hash = Some(hash);
+                    replacement_generation = Some(replacement.generation);
+                }
+                ReconnectEvent::Update { generation, update } => {
+                    let Some(payload) = update.update_oneof else { continue };
+                    if generation == 0 {
+                        ensure!(replacement_generation.is_none(), "old-generation update leaked after discard");
+                        match payload {
+                            UpdateOneof::Account(account) => {
+                                let bank_id = account.bank_id.context("endpoint does not supply account bank IDs")?;
+                                original_accounts.insert(BankRef { generation, slot: account.slot, bank_id });
+                            }
+                            UpdateOneof::BlockMeta(meta) => {
+                                original_complete.insert(BankRef { generation, slot: meta.slot, bank_id: meta.bank_id });
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    ensure!(replacement_generation == Some(generation),
+                        "replacement update arrived before its discard event");
+                    let slot = interrupted_slot.unwrap();
+                    match payload {
+                        UpdateOneof::Account(account) if account.slot == slot => {
+                            let bank_id = account.bank_id.context("replacement account has no bank ID")?;
+                            ensure!(account.account.is_some(), "replacement account has no payload");
+                            *replacement_accounts.entry(bank_id).or_default() += 1;
+                        }
+                        UpdateOneof::BlockMeta(meta) if meta.slot == slot
+                            && Some(meta.blockhash.as_str()) == winner_hash.as_deref() => {
+                            let count = replacement_accounts.get(&meta.bank_id).copied().unwrap_or_default();
+                            ensure!(count > 0,
+                                "winning bank's BlockMeta arrived without preceding replacement account data");
+                            replacement_complete = true;
+                            log::info!(
+                                "REPLACEMENT: generation={generation}, slot={slot}, \
+                                 bank={}, account_updates={count}, BlockMeta received", meta.bank_id
+                            );
+                        }
+                        UpdateOneof::Slot(status) if replacement_complete && status.slot > slot => {
+                            later_slots.insert(status.slot);
+                        }
+                        _ => {}
+                    }
+                    if later_slots.len() >= SLOTS_AFTER_RECONNECT {
+                        progress.lock().unwrap().validate(true)?;
+                        log::info!(
+                            "PASS: partial bank discarded, winning replacement \
+                             delivered, then {} later slots observed", later_slots.len()
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        anyhow::bail!("stream ended before recovery verification completed")
+    })
+    .await
+    .context("bank recovery scenario timed out")?
+}
+
+fn verify_block_integrity(
+    rebuilt: &Block<SimpleBlockStore<SubscribeUpdate>>,
+    reference: &yellowstone_grpc_proto::geyser::SubscribeUpdateBlock,
+) -> Result<()> {
+    ensure!(rebuilt.slot == reference.slot, "block slot mismatch");
+    ensure!(
+        rebuilt.blockhash == solana_hash::Hash::from_str(&reference.blockhash)?.to_bytes(),
+        "rebuilt blockhash differs from finalized reference"
+    );
+    let mut transactions = HashMap::new();
+    let mut accounts = HashMap::new();
+    let mut entries = HashMap::new();
+    for event in rebuilt.events.iter() {
+        match event.update_oneof.as_ref() {
+            Some(UpdateOneof::Transaction(tx)) => {
+                ensure!(
+                    tx.slot == reference.slot && tx.bank_id == reference.bank_id,
+                    "transaction from wrong bank"
+                );
+                let info = tx
+                    .transaction
+                    .as_ref()
+                    .context("transaction payload missing")?;
+                ensure!(
+                    transactions.insert(info.index, info).is_none(),
+                    "duplicate transaction index"
+                );
+            }
+            Some(UpdateOneof::Account(account)) => {
+                ensure!(
+                    account.slot == reference.slot && account.bank_id == Some(reference.bank_id),
+                    "account from wrong bank"
+                );
+                let info = account
+                    .account
+                    .as_ref()
+                    .context("account payload missing")?;
+                let previous = accounts.entry(info.pubkey.clone()).or_insert(info);
+                if info.write_version > previous.write_version {
+                    *previous = info;
+                }
+            }
+            Some(UpdateOneof::Entry(entry)) => {
+                ensure!(
+                    entry.slot == reference.slot && entry.bank_id == reference.bank_id,
+                    "entry from wrong bank"
+                );
+                ensure!(
+                    entries.insert(entry.index, entry).is_none(),
+                    "duplicate entry index"
+                );
+            }
+            _ => {}
+        }
+    }
+    ensure!(
+        transactions.len() as u64 == reference.executed_transaction_count
+            && transactions.len() == reference.transactions.len(),
+        "transaction count mismatch"
+    );
+    ensure!(
+        entries.len() as u64 == reference.entries_count && entries.len() == reference.entries.len(),
+        "entry count mismatch"
+    );
+    ensure!(
+        accounts.len() as u64 == reference.updated_account_count
+            && accounts.len() == reference.accounts.len(),
+        "account count mismatch"
+    );
+    for tx in &reference.transactions {
+        ensure!(
+            transactions.remove(&tx.index) == Some(tx),
+            "transaction {} payload or metadata mismatch",
+            tx.index
+        );
+    }
+    for entry in &reference.entries {
+        ensure!(
+            entries.remove(&entry.index) == Some(entry),
+            "entry {} hash or transaction range mismatch",
+            entry.index
+        );
+    }
+    for account in &reference.accounts {
+        ensure!(
+            accounts.remove(&account.pubkey) == Some(account),
+            "final account payload mismatch"
+        );
+    }
+    log::info!(
+        "INTEGRITY: slot={}, transactions={}, entries={}, accounts={} match finalized full block",
+        reference.slot,
+        reference.transactions.len(),
+        reference.entries.len(),
+        reference.accounts.len()
+    );
+    Ok(())
+}
+
+/// Rebuilds the interrupted bank and compares its payloads with a finalized full block.
+#[test_helper(name = "reconnect-bank-integrity", tags = ["client", "reconnect", "blockmachine"])]
+pub async fn reconnect_should_preserve_block_integrity(config: &RunConfig) -> Result<()> {
+    tokio::time::timeout(TIMEOUT, async {
+        let mut client = crate::grpc::new_client(config).await?;
+        let mut reference_stream = client.subscribe_once(SubscribeRequest {
+            blocks: HashMap::from([("integrity".to_owned(), yellowstone_grpc_proto::geyser::SubscribeRequestFilterBlocks {
+                include_transactions: Some(true),
+                include_accounts: Some(true),
+                include_entries: Some(true),
+                ..Default::default()
+            })]),
+            commitment: Some(CommitmentLevel::Finalized as i32),
+            ..Default::default()
+        }).await?;
+        let (connector, request) = connector(config,
+            ReconnectionPolicy::RecoverMissedData { slot_retention: DEFAULT_SLOT_RETENTION },
+            CommitmentLevel::Processed)?;
+        let mut subscription = block_machine_request();
+        for filter in subscription.slots.values_mut() {
+            filter.filter_by_commitment = Some(false);
+        }
+        request.store(Arc::new(subscription));
+        let progress = Arc::clone(&connector.progress);
+        let first = connector.connect(request.load_full(), None).await?;
+        let stream = ReconnectStream::new(
+            AutoReconnect::new(first, connector, request, Backoff::default()).with_bank_replay_for_test());
+        let mut blocks = ReconnectBlockStream::new(stream);
+        let mut winning_hash = None;
+        let mut rebuilt: Option<(u64, Block<SimpleBlockStore<SubscribeUpdate>>)> = None;
+        let mut references = HashMap::new();
+        loop {
+            tokio::select! {
+                event = blocks.next() => {
+                    match event.context("block recovery stream ended")?? {
+                        ReconnectBlockEvent::DiscardBanks { banks, reason, replacement, winners } => {
+                            log::info!("INTEGRITY: discard reason={reason:?}, replacement={replacement:?}, banks={banks:?}");
+                            let slot = progress.lock().unwrap().interrupted_slot.context("timed disconnect did not interrupt a delivered partial account bank")?;
+                            if let Some(hash) = winners.iter().find_map(|winner| match winner {
+                                SlotWinner::Finalized { slot: s, blockhash } if *s == slot => Some(blockhash.clone()),
+                                _ => None,
+                            }) {
+                                winning_hash = Some(hash);
+                            }
+                            if rebuilt.as_ref().is_some_and(|(generation, block)| {
+                                banks.iter().any(|bank| bank.generation == *generation && bank.slot == block.slot)
+                            }) {
+                                rebuilt = None;
+                            }
+                        }
+                        ReconnectBlockEvent::Output { generation, output } => match output {
+                            BlockMachineOutput::FrozenBlock(block) => {
+                                log::info!("INTEGRITY OUTPUT: FrozenBlock generation={generation}, slot={}, blockhash={}",
+                                    block.slot, solana_hash::Hash::new_from_array(block.blockhash));
+                                if generation > 0 && Some(block.slot) == progress.lock().unwrap().interrupted_slot {
+                                    log::info!("INTEGRITY: rebuilt interrupted slot {}", block.slot);
+                                    rebuilt = Some((generation, block));
+                                }
+                            }
+                            BlockMachineOutput::DeadBlockDetected(dead) => log::warn!(
+                                "INTEGRITY OUTPUT: DeadBlockDetected generation={generation}, slot={}", dead.slot),
+                            BlockMachineOutput::ForkDetected(fork) => log::warn!(
+                                "INTEGRITY OUTPUT: ForkDetected generation={generation}, slot={}", fork.slot),
+                            BlockMachineOutput::SlotCommitmentUpdate(status) => log::info!(
+                                "INTEGRITY OUTPUT: SlotCommitmentUpdate generation={generation}, status={status:?}"),
+                        }
+                    }
+                }
+                update = reference_stream.next() => {
+                    let update = update.context("reference stream ended")??;
+                    if let Some(UpdateOneof::Block(block)) = update.update_oneof {
+                        let target = progress.lock().unwrap().interrupted_slot;
+                        // The reference can arrive before the timed disconnect identifies the target slot.
+                        if target.is_none() || target == Some(block.slot) {
+                            log::info!("INTEGRITY: received finalized reference for slot {}", block.slot);
+                            references.insert(block.slot, block);
+                        }
+                    }
+                }
+            }
+            let target = progress.lock().unwrap().interrupted_slot;
+            if let Some(slot) = target {
+                references.retain(|reference_slot, _| *reference_slot == slot);
+            }
+            let reference = target.and_then(|slot| references.get(&slot));
+            if let (Some((_, rebuilt)), Some(reference), Some(hash)) = (&rebuilt, reference, &winning_hash) {
+                ensure!(&reference.blockhash == hash, "reference differs from recovery winner");
+                // Processed forks can freeze before the finalized bank arrives.
+                if rebuilt.blockhash != solana_hash::Hash::from_str(hash)?.to_bytes() {
+                    continue;
+                }
+                verify_block_integrity(rebuilt, reference)?;
+                ensure!(progress.lock().unwrap().resumed(),
+                    "no injected disconnect followed by a successful reconnect");
+                return Ok(());
+            }
+        }
+    }).await.context("bank integrity scenario timed out")?
+}
+
+#[cfg(test)]
+mod integrity_tests {
+    use {super::*, yellowstone_grpc_proto::geyser::*};
+
+    #[test]
+    fn integrity_accepts_matching_empty_block() {
+        let reference = SubscribeUpdateBlock {
+            slot: 10,
+            blockhash: solana_hash::Hash::default().to_string(),
+            ..Default::default()
+        };
+        let rebuilt = Block {
+            slot: 10,
+            blockhash: [0; 32],
+            events: SimpleBlockStore {
+                slot: 10,
+                events: vec![],
+                account_idx_map: vec![],
+                transaction_idx_map: vec![],
+                entry_idx_map: vec![],
+                other_idx_map: vec![],
+            },
+        };
+        verify_block_integrity(&rebuilt, &reference).unwrap();
+    }
+
+    #[test]
+    fn integrity_rejects_corruption_with_unchanged_counts() {
+        let account = SubscribeUpdateAccountInfo {
+            pubkey: vec![1; 32],
+            lamports: 42,
+            ..Default::default()
+        };
+        let transaction = SubscribeUpdateTransactionInfo {
+            signature: vec![2; 64],
+            ..Default::default()
+        };
+        let entry = SubscribeUpdateEntry {
+            slot: 10,
+            bank_id: 7,
+            hash: vec![3; 32],
+            executed_transaction_count: 1,
+            ..Default::default()
+        };
+        let reference = SubscribeUpdateBlock {
+            slot: 10,
+            bank_id: 7,
+            blockhash: solana_hash::Hash::default().to_string(),
+            executed_transaction_count: 1,
+            updated_account_count: 1,
+            entries_count: 1,
+            accounts: vec![account.clone()],
+            transactions: vec![transaction.clone()],
+            entries: vec![entry.clone()],
+            ..Default::default()
+        };
+        let events = vec![
+            UpdateOneof::Account(SubscribeUpdateAccount {
+                slot: 10,
+                bank_id: Some(7),
+                account: Some(account),
+                ..Default::default()
+            }),
+            UpdateOneof::Transaction(SubscribeUpdateTransaction {
+                slot: 10,
+                bank_id: 7,
+                transaction: Some(transaction),
+            }),
+            UpdateOneof::Entry(entry),
+        ]
+        .into_iter()
+        .map(|payload| SubscribeUpdate {
+            update_oneof: Some(payload),
+            ..Default::default()
+        })
+        .collect();
+        let rebuilt = Block {
+            slot: 10,
+            blockhash: [0; 32],
+            events: SimpleBlockStore {
+                slot: 10,
+                events,
+                account_idx_map: vec![0],
+                transaction_idx_map: vec![1],
+                entry_idx_map: vec![2],
+                other_idx_map: vec![],
+            },
+        };
+        verify_block_integrity(&rebuilt, &reference).unwrap();
+        let mut corrupt = reference.clone();
+        corrupt.accounts[0].lamports += 1;
+        assert!(verify_block_integrity(&rebuilt, &corrupt)
+            .unwrap_err()
+            .to_string()
+            .contains("account payload"));
+        let mut corrupt = reference.clone();
+        corrupt.transactions[0].signature[0] ^= 1;
+        assert!(verify_block_integrity(&rebuilt, &corrupt)
+            .unwrap_err()
+            .to_string()
+            .contains("payload or metadata"));
+        let mut corrupt = reference.clone();
+        corrupt.entries[0].hash[0] ^= 1;
+        assert!(verify_block_integrity(&rebuilt, &corrupt)
+            .unwrap_err()
+            .to_string()
+            .contains("hash or transaction range"));
+        let mut corrupt = reference;
+        corrupt.bank_id += 1;
+        assert!(verify_block_integrity(&rebuilt, &corrupt)
+            .unwrap_err()
+            .to_string()
+            .contains("wrong bank"));
     }
 }

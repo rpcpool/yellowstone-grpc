@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "17.0.0-rc1+solana.4.3.0"
+version = "17.0.0-rc1+solana.4.4.0-alpha.5"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -70,7 +70,7 @@ solana-logger = { workspace = true }
 
 # Solana SDK
 solana-account = { workspace = true }
-solana-account-decoder = { workspace = true }
+solana-account-decoder = { workspace = true, features = ["agave-unstable-api"] }
 solana-clock = { workspace = true }
 solana-commitment-config = { workspace = true }
 solana-hash = { workspace = true }
@@ -78,13 +78,13 @@ solana-message = { workspace = true }
 solana-pubkey = { workspace = true }
 solana-signature = { workspace = true }
 solana-transaction = { workspace = true, features = ["wincode"] }
-solana-transaction-context = { workspace = true }
+solana-transaction-context = { workspace = true, features = ["agave-unstable-api"] }
 solana-transaction-error = { workspace = true, features = ["wincode"] }
-solana-transaction-status = { workspace = true }
+solana-transaction-status = { workspace = true, features = ["agave-unstable-api"] }
 
 # Solana Misc
 smallvec = { workspace = true }
-solana-storage-proto = { workspace = true, optional = true }
+solana-storage-proto = { workspace = true, optional = true, features = ["agave-unstable-api"] }
 spl-token-2022-interface = { workspace = true }
 
 # Yellowstone
@@ -115,9 +115,12 @@ tonic-prost-build = { workspace = true }
 vergen = { workspace = true, features = ["build", "rustc"] }
 
 [dev-dependencies]
+agave-votor-messages = { workspace = true, features = ["agave-unstable-api"] }
 bytes = { workspace = true }
 criterion = { workspace = true }
 fastrand = { workspace = true }
+solana-bls-signatures = { workspace = true }
+solana-entry = { workspace = true, features = ["agave-unstable-api"] }
 solana-keypair = { workspace = true }
 solana-signature = { workspace = true }
 solana-signer = { workspace = true }

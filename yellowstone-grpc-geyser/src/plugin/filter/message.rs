@@ -9,8 +9,9 @@ use {
             },
             message::{
                 MessageAccount, MessageAccountInfo, MessageBlockFooter, MessageBlockMeta,
-                MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageEntry,
-                MessageSlot, MessageTransaction, MessageTransactionInfo,
+                MessageDeshredTransaction, MessageDeshredTransactionInfo,
+                MessageDeshredUpdateParent, MessageEntry, MessageEntryUpdateParent, MessageSlot,
+                MessageTransaction, MessageTransactionInfo,
             },
         },
     },
@@ -245,6 +246,9 @@ impl FilteredUpdate {
             FilteredUpdateOneof::Ping => UpdateOneof::Ping(SubscribeUpdatePing {}),
             FilteredUpdateOneof::Pong(msg) => UpdateOneof::Pong(*msg),
             FilteredUpdateOneof::BlockMeta(msg) => UpdateOneof::BlockMeta(msg.block_meta.clone()),
+            FilteredUpdateOneof::EntryUpdateParent(msg) => {
+                UpdateOneof::EntryUpdateParent(msg.update_parent.clone())
+            }
             FilteredUpdateOneof::Entry(msg) => {
                 UpdateOneof::Entry(Self::as_subscribe_update_entry(&msg.0))
             }
@@ -278,6 +282,7 @@ pub enum FilteredUpdateOneof {
     Pong(SubscribeUpdatePong),                          // 9
     BlockMeta(Arc<MessageBlockMeta>),                   // 7
     Entry(FilteredUpdateEntry),                         // 8
+    EntryUpdateParent(Arc<MessageEntryUpdateParent>),   // 13
     BlockFooter(Arc<MessageBlockFooter>),               // 12
 }
 
@@ -338,6 +343,7 @@ impl FilteredUpdateOneof {
 impl prost::Message for FilteredUpdateOneof {
     fn encode_raw(&self, buf: &mut impl BufMut) {
         match self {
+            Self::EntryUpdateParent(msg) => message::encode(13u32, &msg.update_parent, buf),
             Self::Account(msg) => message::encode(2u32, msg, buf),
             Self::Slot(msg) => message::encode(3u32, msg, buf),
             Self::Transaction(msg) => message::encode(4u32, msg, buf),
@@ -356,6 +362,7 @@ impl prost::Message for FilteredUpdateOneof {
 
     fn encoded_len(&self) -> usize {
         match self {
+            Self::EntryUpdateParent(msg) => message::encoded_len(13u32, &msg.update_parent),
             Self::Account(msg) => message::encoded_len(2u32, msg),
             Self::Slot(msg) => message::encoded_len(3u32, msg),
             Self::Transaction(msg) => message::encoded_len(4u32, msg),
@@ -975,6 +982,7 @@ impl FilteredUpdateDeshred {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilteredUpdateDeshredOneof {
+    DeshredUpdateParent(Arc<MessageDeshredUpdateParent>), // tag 7
     DeshredTransaction(FilteredUpdateDeshredTransaction), // tag 2
     Ping,                                                 // tag 3
     Pong(SubscribeUpdatePong),                            // tag 4
@@ -1000,6 +1008,7 @@ impl FilteredUpdateDeshredOneof {
 impl prost::Message for FilteredUpdateDeshredOneof {
     fn encode_raw(&self, buf: &mut impl BufMut) {
         match self {
+            Self::DeshredUpdateParent(msg) => message::encode(7u32, &msg.update_parent, buf),
             Self::DeshredTransaction(msg) => message::encode(2u32, msg, buf),
             Self::Ping => {
                 encode_key(3u32, WireType::LengthDelimited, buf);
@@ -1012,6 +1021,7 @@ impl prost::Message for FilteredUpdateDeshredOneof {
 
     fn encoded_len(&self) -> usize {
         match self {
+            Self::DeshredUpdateParent(msg) => message::encoded_len(7u32, &msg.update_parent),
             Self::DeshredTransaction(msg) => message::encoded_len(2u32, msg),
             Self::Ping => key_len(3u32) + encoded_len_varint(0),
             Self::Pong(msg) => message::encoded_len(4u32, msg),
@@ -1936,12 +1946,18 @@ pub mod tests {
 
     #[test]
     fn test_message_block_footer() {
-        // An empty user agent and a maximal timestamp are the interesting edges
-        // for the hand-rolled encoder.
-        for (bank_hash, nanos, user_agent) in [
-            (vec![0u8; 32], 0u64, Vec::new()),
-            (vec![7u8; 32], u64::MAX, b"agave/3.0.0".to_vec()),
+        // An empty user agent, a maximal timestamp, absent certificates and an
+        // empty certificate are the interesting edges for the hand-rolled encoder.
+        for (bank_hash, nanos, user_agent, certs) in [
+            (vec![0u8; 32], 0u64, Vec::new(), [None, None, None]),
+            (
+                vec![7u8; 32],
+                u64::MAX,
+                b"agave/3.0.0".to_vec(),
+                [Some(vec![1u8; 96]), Some(Vec::new()), Some(vec![2u8; 48])],
+            ),
         ] {
+            let [block_final_cert, skip_reward_cert, notar_reward_cert] = certs;
             let message = Arc::new(MessageBlockFooter {
                 block_footer: SubscribeUpdateBlockFooter {
                     slot: 42,
@@ -1949,6 +1965,9 @@ pub mod tests {
                     bank_hash,
                     block_producer_time_nanos: nanos,
                     block_user_agent: user_agent,
+                    block_final_cert,
+                    skip_reward_cert,
+                    notar_reward_cert,
                 },
                 created_at: Timestamp::default(),
             });
