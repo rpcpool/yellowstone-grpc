@@ -286,6 +286,7 @@ pub struct ReconnectStream<S> {
     dedup: crate::dedup::CompleteBankDedup,
     pending: VecDeque<SubscribeUpdate>,
     recovery: Option<reconnect::RecoveryDecision>,
+    finalized: Option<u64>,
     stopped: bool,
 }
 
@@ -318,6 +319,33 @@ impl<S> ReconnectStream<S> {
             generation: self.generation,
             update,
         }))
+    }
+
+    /// Every bank at or below a finalized slot is decided: the finalized bank is complete and
+    /// the others are dead forks or cleared by an update parent. Only banks still waiting for
+    /// recovery are kept, and the next reconnect starts after the finalized slot, so tracking
+    /// stays bounded and the replay boundary stays inside the server's replay window.
+    fn settle_finalized(&mut self, slot: u64)
+    where
+        S: crate::dedup::ReconnectCounter,
+    {
+        if self.finalized.is_some_and(|finalized| finalized >= slot) {
+            return;
+        }
+        self.finalized = Some(slot);
+        let recovering = self
+            .recovery
+            .as_ref()
+            .map(|recovery| recovery.banks.as_slice())
+            .unwrap_or_default();
+        self.delivered_banks
+            .retain(|bank| bank.slot > slot || recovering.contains(bank));
+        self.dedup.prune_through(slot);
+        let boundary = recovering
+            .iter()
+            .map(|bank| bank.slot)
+            .fold(slot.saturating_add(1), u64::min);
+        self.inner.settle_before(boundary);
     }
 
     fn begin_replay(&mut self, generation: u64, from_slot: Option<u64>) -> Result<(), Status> {
@@ -369,6 +397,7 @@ impl<S: crate::dedup::ReconnectCounter> ReconnectStream<S> {
             dedup: Default::default(),
             pending: Default::default(),
             recovery: None,
+            finalized: None,
             stopped: false,
         }
     }
@@ -400,6 +429,9 @@ where
             })??;
             if let Some(recovery) = &mut self.recovery {
                 recovery.observe(&update)?;
+            }
+            if let Some(slot) = reconnect::finalized_slot(&update) {
+                self.settle_finalized(slot);
             }
             self.dedup
                 .filter(self.generation, update, &mut self.pending);

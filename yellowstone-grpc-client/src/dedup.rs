@@ -34,6 +34,13 @@ impl CompleteBankDedup {
         self.complete.contains_key(bank)
     }
 
+    /// Forget completion state for slots at or below a finalized slot. A reconnect never
+    /// replays them, so their hashes and statuses are never compared again.
+    pub(crate) fn prune_through(&mut self, slot: u64) {
+        self.complete.retain(|bank, _| bank.slot > slot);
+        self.statuses.retain(|(bank_slot, _), _| *bank_slot > slot);
+    }
+
     pub(crate) fn begin_replay(&mut self, partial: &[crate::BankRef]) {
         self.replay_hashes.clear();
         let partial_slots: HashSet<_> = partial.iter().map(|bank| bank.slot).collect();
@@ -202,6 +209,9 @@ pub trait ReconnectCounter {
     fn replay_from_slot(&self) -> Option<u64> {
         None
     }
+
+    /// Every slot below `slot` is settled, so a later reconnect does not need to replay it.
+    fn settle_before(&mut self, _slot: u64) {}
 }
 
 /// Wrapper stream that filters out duplicate subscribe updates.
@@ -282,6 +292,10 @@ impl<S: ReconnectCounter, T> ReconnectCounter for DedupStream<S, T> {
 
     fn replay_from_slot(&self) -> Option<u64> {
         self.inner.replay_from_slot()
+    }
+
+    fn settle_before(&mut self, slot: u64) {
+        self.inner.settle_before(slot);
     }
 }
 

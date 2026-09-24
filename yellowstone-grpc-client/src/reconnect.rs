@@ -16,7 +16,7 @@ use {
     },
     yellowstone_grpc_proto::{
         geyser::geyser_client::GeyserClient,
-        prelude::{subscribe_update::UpdateOneof, SubscribeRequest, SubscribeUpdate},
+        prelude::{subscribe_update::UpdateOneof, SlotStatus, SubscribeRequest, SubscribeUpdate},
     },
 };
 
@@ -80,7 +80,6 @@ impl RecoveryDecision {
     }
 
     pub(crate) fn observe(&mut self, update: &SubscribeUpdate) -> Result<(), Status> {
-        use yellowstone_grpc_proto::prelude::SlotStatus;
         let identity = match update.update_oneof.as_ref() {
             Some(UpdateOneof::BlockMeta(m)) => {
                 Some((m.slot, m.bank_id, &m.blockhash, m.parent_slot))
@@ -530,6 +529,13 @@ impl<S, Connector> ReconnectCounter for AutoReconnect<S, Connector> {
     fn replay_from_slot(&self) -> Option<u64> {
         self.replay_from_slot
     }
+
+    fn settle_before(&mut self, slot: u64) {
+        // Only bank replay keeps the lowest slot seen; the legacy heuristic sets its own.
+        if self.bank_replay {
+            self.last_checkpoint = Some(self.last_checkpoint.map_or(slot, |c| c.max(slot)));
+        }
+    }
 }
 
 impl<S, Connector> AutoReconnect<S, Connector> {
@@ -723,6 +729,13 @@ pub(crate) fn unverified_replay() -> Status {
     Status::failed_precondition(
         "recovery unavailable: the existing Subscribe protocol cannot certify complete replacement coverage",
     )
+}
+
+pub(crate) fn finalized_slot(update: &SubscribeUpdate) -> Option<u64> {
+    match update.update_oneof.as_ref()? {
+        UpdateOneof::Slot(m) if m.status == SlotStatus::SlotFinalized as i32 => Some(m.slot),
+        _ => None,
+    }
 }
 
 // Hide control-only messages only after checkpoint and dedup machinery has seen them.
@@ -1515,6 +1528,108 @@ mod tests {
         }
     }
 
+    // Before settle_before, bank replay kept the lowest slot ever seen, so any reconnect
+    // after the server's replay window asked for an expired slot and failed with OutOfRange.
+    #[tokio::test]
+    async fn bank_recovery_resumes_after_the_settled_boundary() {
+        let connector = MockGrpcConnector::new(vec![ConnectPlan {
+            expected_from_slot: Some(Some(201)),
+            result: Ok(vec![Ok(make_account_msg(201))]),
+        }]);
+        let mut stream = AutoReconnect::new(
+            stream::iter(vec![
+                Ok(make_account_msg(100)),
+                Ok(make_account_msg(205)),
+                Err(Status::unavailable("disconnected")),
+            ])
+            .boxed(),
+            connector.clone(),
+            request_state(SubscribeRequest::default()),
+            backoff_with_retries(1),
+        )
+        .with_bank_replay();
+        assert!(stream.next().await.unwrap().is_ok());
+        stream.settle_before(201);
+        assert!(stream.next().await.unwrap().is_ok());
+        assert_eq!(stream.last_checkpoint, Some(201));
+        assert_eq!(stream.next().await.unwrap().unwrap(), make_account_msg(201));
+        assert_eq!(connector.calls(), vec![Some(201)]);
+    }
+
+    // ReconnectStream reports finality to AutoReconnect through settle_before; without that
+    // wiring a reconnect asks for the first slot of the subscription.
+    #[tokio::test]
+    async fn reconnect_stream_resumes_after_finalized_slot() {
+        use yellowstone_grpc_proto::prelude::{
+            SlotStatus, SubscribeUpdateBlockMeta, SubscribeUpdateSlot,
+        };
+        let control = |update_oneof| SubscribeUpdate {
+            filters: vec![AUTORECONNECT_FILTER_KEY.into()],
+            update_oneof: Some(update_oneof),
+            ..Default::default()
+        };
+        let mut initial = Vec::new();
+        for slot in 100..=110 {
+            initial.push(Ok(make_account_msg(slot)));
+            initial.push(Ok(control(UpdateOneof::BlockMeta(
+                SubscribeUpdateBlockMeta {
+                    slot,
+                    bank_id: slot,
+                    blockhash: format!("hash-{slot}"),
+                    parent_slot: slot - 1,
+                    ..Default::default()
+                },
+            ))));
+        }
+        initial.push(Ok(control(UpdateOneof::Slot(SubscribeUpdateSlot {
+            slot: 108,
+            bank_id: Some(108),
+            status: SlotStatus::SlotFinalized as i32,
+            ..Default::default()
+        }))));
+        initial.push(Err(Status::unavailable("disconnected")));
+        let connector = MockGrpcConnector::new(vec![ConnectPlan {
+            expected_from_slot: Some(Some(109)),
+            result: Ok(vec![Ok(make_account_msg(111))]),
+        }]);
+        let mut stream = crate::ReconnectStream::new(
+            AutoReconnect::new(
+                stream::iter(initial).boxed(),
+                connector.clone(),
+                request_state(SubscribeRequest::default()),
+                backoff_with_retries(1),
+            )
+            .with_bank_replay(),
+        );
+        for slot in 100..=110 {
+            let crate::ReconnectEvent::Update { update, .. } =
+                stream.next().await.unwrap().unwrap()
+            else {
+                panic!("unexpected discard")
+            };
+            assert_eq!(update, make_account_msg(slot));
+        }
+        let crate::ReconnectEvent::Update { generation, update } =
+            stream.next().await.unwrap().unwrap()
+        else {
+            panic!("complete banks need no discard")
+        };
+        assert_eq!((generation, update), (1, make_account_msg(111)));
+        assert_eq!(connector.calls(), vec![Some(109)]);
+    }
+
+    #[tokio::test]
+    async fn settle_before_is_ignored_without_bank_replay() {
+        let mut stream = AutoReconnect::new(
+            stream::iter(vec![Ok(make_account_msg(100))]).boxed(),
+            MockGrpcConnector::new(vec![]),
+            request_state(SubscribeRequest::default()),
+            backoff_with_retries(1),
+        );
+        stream.settle_before(201);
+        assert_eq!(stream.last_checkpoint, None);
+    }
+
     #[tokio::test]
     async fn bank_recovery_keeps_checkpoint_on_another_replay_disconnect() {
         let connector = MockGrpcConnector::new(vec![
@@ -1753,6 +1868,7 @@ mod reconnect_stream_tests {
         generation: u32,
         replay_from_slot: Option<u64>,
         steps: VecDeque<(u32, StreamPoll)>,
+        settled: Vec<u64>,
     }
 
     impl ReconnectCounter for Source {
@@ -1762,6 +1878,10 @@ mod reconnect_stream_tests {
 
         fn replay_from_slot(&self) -> Option<u64> {
             self.replay_from_slot
+        }
+
+        fn settle_before(&mut self, slot: u64) {
+            self.settled.push(slot);
         }
     }
 
@@ -1833,7 +1953,73 @@ mod reconnect_stream_tests {
                 .into_iter()
                 .map(|(generation, update)| (generation, std::task::Poll::Ready(Some(Ok(update)))))
                 .collect(),
+            settled: Vec::new(),
         }
+    }
+
+    // Before finality pruning, every bank ever delivered stayed tracked and a long lived
+    // subscription hit the bank limit and failed after 65,536 banks.
+    #[tokio::test]
+    async fn finality_prunes_settled_banks_so_the_bank_limit_is_not_reached() {
+        let mut updates = Vec::new();
+        for slot in 1..=100 {
+            updates.push((0, account(slot, slot)));
+            updates.push((0, metadata(slot, slot, &format!("hash-{slot}"), slot - 1)));
+            // A dead fork bank at the same slot never completes.
+            updates.push((0, account(slot, slot + 1_000)));
+            updates.push((0, finalized(slot, slot)));
+        }
+        let mut stream = ReconnectStream::with_bank_limit(source(updates), 4);
+        for _ in 1..=100 {
+            let ReconnectEvent::Update { .. } = stream.next().await.unwrap().unwrap() else {
+                panic!("unexpected discard")
+            };
+            let ReconnectEvent::Update { .. } = stream.next().await.unwrap().unwrap() else {
+                panic!("unexpected discard")
+            };
+        }
+        assert!(stream.next().await.unwrap().is_err(), "source ended");
+        assert!(stream.delivered_banks.is_empty());
+        assert!(!stream.dedup.is_complete(&BankRef {
+            generation: 0,
+            slot: 100,
+            bank_id: 100
+        }));
+        assert_eq!(stream.inner.settled, (2..=101).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn finality_keeps_banks_awaiting_recovery_and_holds_the_boundary() {
+        let mut stream = ReconnectStream::new(source(vec![
+            (0, account(42, 7)),
+            (1, finalized(40, 3)),
+            (1, account(43, 9)),
+            (1, finalized(50, 11)),
+        ]));
+        stream.inner.steps.push_back((1, std::task::Poll::Pending));
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(stream.next().now_or_never().is_none());
+        let partial = BankRef {
+            generation: 0,
+            slot: 42,
+            bank_id: 7,
+        };
+        assert!(stream.recovery.is_some());
+        assert!(stream.delivered_banks.contains(&partial));
+        // The partial bank at 42 has no finalized identity yet, so a further reconnect
+        // must still replay from 42 even though slot 50 is finalized.
+        assert_eq!(stream.inner.settled, vec![41, 42]);
+    }
+
+    #[tokio::test]
+    async fn finality_never_moves_the_boundary_backwards() {
+        let mut stream = ReconnectStream::new(source(vec![
+            (0, finalized(50, 1)),
+            (0, finalized(49, 2)),
+            (0, account(51, 3)),
+        ]));
+        assert!(stream.next().await.unwrap().is_ok());
+        assert_eq!(stream.inner.settled, vec![51]);
     }
 
     #[tokio::test]
@@ -1904,11 +2090,9 @@ mod reconnect_stream_tests {
                     ReconnectEvent::Update { generation: actual, update }
                     if actual == generation && update == account(42, if generation == 1 { replacement_id } else { 7 })));
             }
-            assert!(stream.delivered_banks.contains(&BankRef {
-                generation: 0,
-                slot: 41,
-                bank_id: 6
-            }));
+            // The discards above never listed slot 41. Finality at 42 then settles it, so
+            // its bank is no longer tracked.
+            assert!(!stream.delivered_banks.iter().any(|bank| bank.slot == 41));
         }
     }
 

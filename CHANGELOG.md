@@ -10,7 +10,13 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Breaking
+
+- client: `subscribe` and `subscribe_with_request` no longer reconnect, even when a reconnect config is set. Use `subscribe_with_reconnect`, which requires processed commitment and no startup snapshot.
+
 ### Features
+
+- client: added `subscribe_with_reconnect`, a bank-aware reconnecting stream. After a reconnect it emits `ReconnectEvent::DiscardBanks` for partially delivered banks, with the finalized winners, before the replacement updates.
 
 - proto/plugin/client: added standalone Alpenglow block footer updates via the `block_footer` filter.
 
@@ -24,6 +30,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - plugin: `convert_from::create_tx_meta` respects `inner_instructions_none` and `log_messages_none` instead of always returning empty collections.
 - plugin: `convert_from::create_reward` decodes unknown `reward_type` values as `None` instead of failing the whole conversion.
+- client: `subscribe_with_reconnect` resumes after the last finalized slot instead of the first slot of the subscription, so a reconnect later than the server replay window no longer fails with `OutOfRange`.
+- client: `subscribe_with_reconnect` forgets banks at or below the last finalized slot, so a long lived stream no longer fails with `bank tracking limit reached` after 65,536 banks.
 
 ## 2026-08-31
 
