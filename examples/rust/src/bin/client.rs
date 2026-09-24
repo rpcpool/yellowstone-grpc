@@ -860,7 +860,9 @@ async fn geyser_subscribe(
                         Some(UpdateOneof::Slot(_)) => (&mut pb_slots_c, &pb_slots),
                         Some(UpdateOneof::Transaction(_)) => (&mut pb_txs_c, &pb_txs),
                         Some(UpdateOneof::TransactionStatus(_)) => (&mut pb_txs_st_c, &pb_txs_st),
-                        Some(UpdateOneof::Entry(_)) => (&mut pb_entries_c, &pb_entries),
+                        Some(UpdateOneof::Entry(_) | UpdateOneof::EntryUpdateParent(_)) => {
+                            (&mut pb_entries_c, &pb_entries)
+                        }
                         Some(UpdateOneof::BlockMeta(_)) => (&mut pb_blocks_mt_c, &pb_blocks_mt),
                         Some(UpdateOneof::BlockFooter(_)) => {
                             (&mut pb_block_footer_c, &pb_block_footer)
@@ -962,6 +964,7 @@ async fn geyser_subscribe(
                             }),
                         );
                     }
+                    Some(UpdateOneof::EntryUpdateParent(msg)) => info!("{msg:?}"),
                     Some(UpdateOneof::BlockFooter(msg)) => {
                         print_update(
                             "blockfooter",
@@ -1078,7 +1081,10 @@ async fn geyser_subscribe_deshred(
                 if stats {
                     let encoded_len = msg.encoded_len() as u64;
                     let (pb_c, pb) = match msg.update_oneof {
-                        Some(DeshredUpdateOneof::DeshredTransaction(_)) => (&mut pb_txs_c, &pb_txs),
+                        Some(
+                            DeshredUpdateOneof::DeshredTransaction(_)
+                            | DeshredUpdateOneof::DeshredUpdateParent(_),
+                        ) => (&mut pb_txs_c, &pb_txs),
                         Some(DeshredUpdateOneof::Ping(_)) => (&mut pb_pp_c, &pb_pp),
                         Some(DeshredUpdateOneof::Pong(_)) => (&mut pb_pp_c, &pb_pp),
                         Some(DeshredUpdateOneof::Slot(_)) => (&mut pb_slot_c, &pb_slot),
@@ -1104,6 +1110,7 @@ async fn geyser_subscribe_deshred(
                     .try_into()
                     .context("failed to parse created_at")?;
                 match msg.update_oneof {
+                    Some(DeshredUpdateOneof::DeshredUpdateParent(msg)) => info!("{msg:?}"),
                     Some(DeshredUpdateOneof::DeshredTransaction(msg)) => {
                         let tx = msg
                             .transaction

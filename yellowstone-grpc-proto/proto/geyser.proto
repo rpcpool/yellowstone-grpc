@@ -191,6 +191,7 @@ message SubscribeUpdate {
     SubscribeUpdateBlockMeta block_meta = 7;
     SubscribeUpdateEntry entry = 8;
     SubscribeUpdateBlockFooter block_footer = 12;
+    SubscribeUpdateEntryUpdateParent entry_update_parent = 13;
   }
   google.protobuf.Timestamp created_at = 11;
 }
@@ -301,6 +302,23 @@ message SubscribeUpdateEntry {
   uint64 bank_id = 7;
 }
 
+// Invalidates entries for cleared_bank_id, including entries that arrive after this update.
+// The replacement bank ID is reported by the CreatedBank slot update.
+message SubscribeUpdateEntryUpdateParent {
+  uint64 slot = 1;
+  uint64 cleared_bank_id = 2;
+  uint64 parent_slot = 3;
+  bytes parent_block_id = 4;
+}
+
+// Precedes transactions from the data set at this UpdateParent FEC-set boundary.
+message SubscribeUpdateDeshredUpdateParent {
+  uint64 slot = 1;
+  uint32 update_parent_fec_set_index = 2;
+  uint64 parent_slot = 3;
+  bytes parent_block_id = 4;
+}
+
 message SubscribeUpdateDeshredTransaction {
   SubscribeUpdateDeshredTransactionInfo transaction = 1;
   uint64 slot = 2;
@@ -330,6 +348,7 @@ message SubscribeUpdateDeshred {
     SubscribeUpdatePong pong = 4;
     // field 5 is reserved for created_at (below the oneof)
     SubscribeUpdateSlot slot = 6;
+    SubscribeUpdateDeshredUpdateParent deshred_update_parent = 7;
   }
   google.protobuf.Timestamp created_at = 5;
 }

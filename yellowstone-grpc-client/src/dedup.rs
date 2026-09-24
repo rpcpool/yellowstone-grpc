@@ -210,7 +210,7 @@ impl Dedupable for SubscribeUpdate {
             // One footer per bank, so a fork can produce several in the same slot.
             UpdateOneof::BlockFooter(m) => Some((m.slot, DedupKey::BlockFooter(m.bank_id))),
             UpdateOneof::Block(m) => Some((m.slot, DedupKey::Block(m.slot))),
-            UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => None,
+            UpdateOneof::EntryUpdateParent(_) | UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => None,
         }
     }
 }
@@ -226,7 +226,9 @@ impl Dedupable for SubscribeUpdateDeshred {
                 Some((m.slot, DedupKey::DeshredTransaction(sig)))
             }
             DeshredUpdateOneof::Slot(m) => Some((m.slot, DedupKey::Slot(m.status))),
-            DeshredUpdateOneof::Ping(_) | DeshredUpdateOneof::Pong(_) => None,
+            DeshredUpdateOneof::DeshredUpdateParent(_)
+            | DeshredUpdateOneof::Ping(_)
+            | DeshredUpdateOneof::Pong(_) => None,
         }
     }
 }

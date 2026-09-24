@@ -3,8 +3,8 @@ use {
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         ReplicaAccountInfoV3, ReplicaBlockFooterInfo, ReplicaBlockInfoV4, ReplicaContactInfoV0_0_1,
         ReplicaDeshredTransactionInfo, ReplicaDeshredTransactionInfoV2,
-        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
-        SlotStatus as GeyserSlotStatus,
+        ReplicaDeshredTransactionInfoVersions, ReplicaDeshredUpdateParentInfo, ReplicaEntryInfoV2,
+        ReplicaEntryUpdateParentInfo, ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
     },
     bytes::Bytes,
     foldhash::{HashSet as FoldHashSet, HashSetExt},
@@ -24,6 +24,7 @@ use {
         geyser::{
             CommitmentLevel as CommitmentLevelProto, SlotStatus as SlotStatusProto,
             SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta,
+            SubscribeUpdateDeshredUpdateParent, SubscribeUpdateEntryUpdateParent,
         },
         solana::storage::confirmed_block,
     },
@@ -680,7 +681,49 @@ pub enum ContactInfoMessage {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct MessageEntryUpdateParent {
+    pub update_parent: SubscribeUpdateEntryUpdateParent,
+    pub created_at: Timestamp,
+}
+
+impl MessageEntryUpdateParent {
+    pub fn from_geyser(info: &ReplicaEntryUpdateParentInfo<'_>) -> Self {
+        Self {
+            update_parent: SubscribeUpdateEntryUpdateParent {
+                slot: info.slot,
+                cleared_bank_id: info.cleared_bank_id,
+                parent_slot: info.parent_slot,
+                parent_block_id: info.parent_block_id.as_ref().to_vec(),
+            },
+            created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageDeshredUpdateParent {
+    pub update_parent: SubscribeUpdateDeshredUpdateParent,
+    pub created_at: Timestamp,
+}
+
+impl MessageDeshredUpdateParent {
+    pub fn from_geyser(info: &ReplicaDeshredUpdateParentInfo<'_>) -> Self {
+        Self {
+            update_parent: SubscribeUpdateDeshredUpdateParent {
+                slot: info.slot,
+                update_parent_fec_set_index: info.update_parent_fec_set_index,
+                parent_slot: info.parent_slot,
+                parent_block_id: info.parent_block_id.as_ref().to_vec(),
+            },
+            created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Message {
+    DeshredUpdateParent(Arc<MessageDeshredUpdateParent>),
+    EntryUpdateParent(Arc<MessageEntryUpdateParent>),
     Slot(Arc<MessageSlot>),
     Account(Arc<MessageAccount>),
     Transaction(Arc<MessageTransaction>),
@@ -699,6 +742,8 @@ impl Message {
             Self::Account(msg) => msg.slot,
             Self::Transaction(msg) => msg.slot,
             Self::DeshredTransaction(msg) => msg.slot,
+            Self::EntryUpdateParent(msg) => msg.update_parent.slot,
+            Self::DeshredUpdateParent(msg) => msg.update_parent.slot,
             Self::Entry(msg) => msg.slot,
             Self::BlockFooter(msg) => msg.slot,
             Self::BlockMeta(msg) => msg.slot,
