@@ -471,7 +471,10 @@ mod tests {
     );
 
     let mut entry = HashMap::new();
-    entry.insert("entry_client".to_string(), SubscribeRequestFilterEntry {});
+    entry.insert(
+      "entry_client".to_string(),
+      SubscribeRequestFilterEntry::default(),
+    );
 
     SubscribeRequest {
       block_footer: Default::default(),

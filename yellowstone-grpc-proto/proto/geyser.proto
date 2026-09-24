@@ -141,7 +141,10 @@ message SubscribeRequestFilterBlocks {
 
 message SubscribeRequestFilterBlocksMeta {}
 
-message SubscribeRequestFilterEntry {}
+message SubscribeRequestFilterEntry {
+  // Include SubscribeUpdateEntryUpdateParent updates. Omitted or false sends entries only.
+  optional bool include_update_parent = 1;
+}
 
 message SubscribeRequestFilterBlockFooter {
   // Include available certificates. Omitted or false sends footer metadata only.
@@ -158,6 +161,8 @@ message SubscribeRequestFilterDeshredTransactions {
   repeated string account_include = 2;
   repeated string account_exclude = 3;
   repeated string account_required = 4;
+  // Include SubscribeUpdateDeshredUpdateParent updates. Omitted or false sends transactions only.
+  optional bool include_update_parent = 5;
 }
 
 message SubscribeRequestAccountsDataSlice {
