@@ -395,6 +395,10 @@ struct ActionSubscribe {
     #[clap(long)]
     block_footer: bool,
 
+    /// Include available certificates in block footer updates
+    #[clap(long)]
+    block_footer_include_certificates: Option<bool>,
+
     /// Re-send message from slot
     #[clap(long)]
     from_slot: Option<u64>,
@@ -601,7 +605,12 @@ impl Action {
 
                 let mut block_footer: BlockFooterFilterMap = HashMap::new();
                 if args.block_footer {
-                    block_footer.insert("client".to_owned(), SubscribeRequestFilterBlockFooter {});
+                    block_footer.insert(
+                        "client".to_owned(),
+                        SubscribeRequestFilterBlockFooter {
+                            include_certificates: args.block_footer_include_certificates,
+                        },
+                    );
                 }
 
                 let mut accounts_data_slice = Vec::new();
@@ -976,6 +985,9 @@ async fn geyser_subscribe(
                                 "bankHash": bs58::encode(msg.bank_hash).into_string(),
                                 "blockProducerTimeNanos": msg.block_producer_time_nanos,
                                 "blockUserAgent": String::from_utf8_lossy(&msg.block_user_agent),
+                                "blockFinalCert": msg.block_final_cert.map(|cert| bs58::encode(cert).into_string()),
+                                "skipRewardCert": msg.skip_reward_cert.map(|cert| bs58::encode(cert).into_string()),
+                                "notarRewardCert": msg.notar_reward_cert.map(|cert| bs58::encode(cert).into_string()),
                             }),
                         );
                     }

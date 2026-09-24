@@ -131,6 +131,9 @@ pub fn message_block_footer(slot: u64, bank_id: u64) -> Arc<MessageBlockFooter> 
             bank_hash: vec![1; 32],
             block_producer_time_nanos: 1_000,
             block_user_agent: b"agave".to_vec(),
+            block_final_cert: None,
+            skip_reward_cert: None,
+            notar_reward_cert: None,
         },
         created_at: Timestamp::default(),
     })

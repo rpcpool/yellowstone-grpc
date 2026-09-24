@@ -7545,7 +7545,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "13.0.0-rc4"
+version = "14.0.0-rc.0"
 dependencies = [
  "anyhow",
  "bytes",
