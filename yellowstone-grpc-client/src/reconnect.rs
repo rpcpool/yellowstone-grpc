@@ -1237,7 +1237,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_interrupted_slot_payload_quarantined_not_dropped() {
+    async fn test_interrupted_slot_payload_reconciled_without_duplicates() {
         // slot 100 is inflight (account seen, no BlockMeta) when the connection dies
         let initial = stream::iter(vec![
             Ok(make_account_msg(100)),
@@ -1268,18 +1268,12 @@ mod tests {
         let m1 = stream.next().await.expect("item").expect("ok");
         assert!(matches!(m1.update_oneof, Some(UpdateOneof::Account(_))));
 
-        // Without prepare_for_replay, slot 100 is still inflight and this account
-        // matches the existing key -> dropped as Duplicate. With it, slot 100 is
-        // sealed with blockhash None, so the account is quarantined and released
-        // when the BlockMeta arrives (no stored hash -> always flush).
+        // Matching replay delivers BlockMeta without repeating the account payload.
         let m2 = stream.next().await.expect("item").expect("ok");
-        assert!(matches!(m2.update_oneof, Some(UpdateOneof::Account(_))));
+        assert!(matches!(m2.update_oneof, Some(UpdateOneof::BlockMeta(_))));
 
         let m3 = stream.next().await.expect("item").expect("ok");
-        assert!(matches!(m3.update_oneof, Some(UpdateOneof::BlockMeta(_))));
-
-        let m4 = stream.next().await.expect("item").expect("ok");
-        assert_eq!(extract_slot(&m4), Some(101));
+        assert_eq!(extract_slot(&m3), Some(101));
     }
 
     #[tokio::test]
@@ -1840,11 +1834,8 @@ mod tests {
             DedupState::default(),
         );
         assert!(stream.next().await.unwrap().is_ok());
-        let replacement = stream.next().await.unwrap().unwrap();
-        let Some(UpdateOneof::Account(account)) = replacement.update_oneof else {
-            panic!("expected account")
-        };
-        assert_ne!(account.account.unwrap().lamports, 200);
+        // The account was delivered before the first disconnect, so the second replay only
+        // adds BlockMeta; the stale account from the interrupted replay never surfaces.
         assert!(matches!(
             stream.next().await.unwrap().unwrap().update_oneof,
             Some(UpdateOneof::BlockMeta(_))
@@ -1875,10 +1866,7 @@ mod tests {
             DedupState::default(),
         );
         assert!(stream.next().await.unwrap().is_ok());
-        assert!(matches!(
-            stream.next().await.unwrap().unwrap().update_oneof,
-            Some(UpdateOneof::Account(_))
-        ));
+        // The replayed account was already delivered; only the metadata comes through.
         let mut metadata = stream.next().await.unwrap().unwrap();
         assert!(!visible_update(&mut metadata));
         assert!(stream.next().await.is_none());
