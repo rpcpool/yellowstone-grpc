@@ -30,6 +30,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - plugin: `convert_from::create_tx_meta` respects `inner_instructions_none` and `log_messages_none` instead of always returning empty collections.
 - plugin: `convert_from::create_reward` decodes unknown `reward_type` values as `None` instead of failing the whole conversion.
+- plugin: block reconstruction drops a bank cleared by an Alpenglow update parent, so the replacement bank's block is still delivered when its commitment is inherited from a descendant.
 - client: `subscribe_with_reconnect` resumes after the last finalized slot instead of the first slot of the subscription, so a reconnect later than the server replay window no longer fails with `OutOfRange`.
 - client: `subscribe_with_reconnect` forgets banks at or below the last finalized slot, so a long lived stream no longer fails with `bank tracking limit reached` after 65,536 banks.
 

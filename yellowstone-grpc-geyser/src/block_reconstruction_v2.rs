@@ -385,6 +385,10 @@ impl BlockMachineStorage {
                 self.handle_block_data(message);
             }
             Message::BlockMeta(block_meta) => self.handle_block_meta(block_meta),
+            Message::EntryUpdateParent(message) => self.handle_cleared_bank(
+                message.update_parent.slot,
+                message.update_parent.cleared_bank_id,
+            ),
             _ => {
                 // Message::Block is synthesized internally and never fed back in;
                 // Message::DeshredTransaction goes through a separate pipeline entirely;
@@ -485,6 +489,23 @@ impl BlockMachineStorage {
             bank.parent_slot = message_slot.parent;
         }
         self.try_seal_bank(bank_id);
+    }
+
+    /// An update parent clears a bank and replays its slot on a new parent under a new
+    /// bank_id; the cleared bank never freezes. Left registered, it stays a second candidate
+    /// for the slot and a commitment inherited from a descendant cannot resolve a winner.
+    fn handle_cleared_bank(&mut self, slot: Slot, bank_id: BankId) {
+        if let Some(ids) = self.slot_to_banks.get_mut(&slot) {
+            ids.retain(|id| *id != bank_id);
+            if ids.is_empty() {
+                self.slot_to_banks.remove(&slot);
+            }
+        }
+        self.banks.remove(&bank_id);
+        self.discarded_bank_ids.insert(bank_id, slot);
+        if self.resolved_bank_per_slot.get(&slot) == Some(&bank_id) {
+            self.resolved_bank_per_slot.remove(&slot);
+        }
     }
 
     fn handle_dead_slot(&mut self, slot: Slot) {
@@ -934,14 +955,17 @@ mod tests {
     use {
         super::*,
         crate::plugin::message::{
-            MessageAccount, MessageAccountInfo, MessageEntry, MessageSlot, SlotStatus,
+            MessageAccount, MessageAccountInfo, MessageEntry, MessageEntryUpdateParent,
+            MessageSlot, SlotStatus,
         },
         bytes::Bytes,
         prost_types::Timestamp,
         solana_hash::Hash,
         solana_pubkey::Pubkey,
         std::{sync::OnceLock, time::SystemTime},
-        yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta,
+        yellowstone_grpc_proto::geyser::{
+            SubscribeUpdateBlockMeta, SubscribeUpdateEntryUpdateParent,
+        },
     };
 
     fn ts() -> Timestamp {
@@ -1084,6 +1108,47 @@ mod tests {
             SlotStatus::Processed,
             bank_id,
         ));
+    }
+
+    fn make_update_parent_msg(slot: u64, cleared_bank_id: BankId, parent_slot: u64) -> Message {
+        Message::EntryUpdateParent(Arc::new(MessageEntryUpdateParent {
+            update_parent: SubscribeUpdateEntryUpdateParent {
+                slot,
+                cleared_bank_id,
+                parent_slot,
+                parent_block_id: vec![0; 32],
+            },
+            created_at: ts(),
+        }))
+    }
+
+    // An update parent clears a bank and replays the slot under a new bank_id. The cleared
+    // bank used to stay a candidate, so a commitment inherited from a descendant saw two
+    // banks for the slot and never delivered its block.
+    #[test]
+    fn update_parent_cleared_bank_does_not_block_inherited_commitment() {
+        let mut storage = BlockMachineStorage::new(16);
+        storage.add(make_created_bank_msg(10, Some(8), 1));
+        storage.add(make_entry_msg(10, 0, 1));
+        storage.add(make_update_parent_msg(10, 1, 9));
+        // Data for the cleared bank after the update parent is ignored.
+        storage.add(make_entry_msg(10, 1, 1));
+        drive_bank_to_processed(&mut storage, 10, 2, Some(9));
+        drive_bank_to_processed(&mut storage, 11, 3, Some(10));
+        while storage.pop_ready_block().is_some() {}
+
+        storage.add(make_commitment_msg(11, Some(10), SlotStatus::Confirmed, 3));
+
+        let mut confirmed = Vec::new();
+        while let Some((update, frozen)) = storage.pop_ready_block() {
+            if update.commitment == CommitmentLevel::Confirmed {
+                confirmed.push((update.slot, frozen.bank_id));
+            }
+        }
+        confirmed.sort_unstable();
+        assert_eq!(confirmed, vec![(10, 2), (11, 3)]);
+        assert!(!storage.banks.contains_key(&1));
+        assert_eq!(storage.discarded_bank_ids.get(&1), Some(&10));
     }
 
     #[test]
