@@ -61,7 +61,7 @@ pub async fn block_footer_should_match_block_meta(config: &RunConfig) -> Result<
     let subscription = SubscribeRequest {
         block_footer: HashMap::from([(
             FILTER_NAME.to_string(),
-            SubscribeRequestFilterBlockFooter {},
+            SubscribeRequestFilterBlockFooter::default(),
         )]),
         blocks_meta: HashMap::from([(
             FILTER_NAME.to_string(),

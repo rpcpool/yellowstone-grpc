@@ -367,6 +367,10 @@ struct ActionSubscribe {
     #[clap(long)]
     entries: bool,
 
+    /// Include entry update parent messages
+    #[clap(long)]
+    entries_include_update_parent: Option<bool>,
+
     /// Subscribe on block updates
     #[clap(long)]
     blocks: bool,
@@ -394,6 +398,10 @@ struct ActionSubscribe {
     /// Subscribe on Alpenglow block footer updates
     #[clap(long)]
     block_footer: bool,
+
+    /// Include available certificates in block footer updates
+    #[clap(long)]
+    block_footer_include_certificates: Option<bool>,
 
     /// Re-send message from slot
     #[clap(long)]
@@ -430,6 +438,10 @@ struct ActionSubscribeDeshred {
     /// Filter by required account keys - all must be present (static or ALT-loaded)
     #[clap(long)]
     account_required: Vec<String>,
+
+    /// Include deshred update parent messages
+    #[clap(long)]
+    include_update_parent: Option<bool>,
 
     /// Send ping in subscribe request
     #[clap(long)]
@@ -577,7 +589,12 @@ impl Action {
 
                 let mut entries: EntryFilterMap = HashMap::new();
                 if args.entries {
-                    entries.insert("client".to_owned(), SubscribeRequestFilterEntry {});
+                    entries.insert(
+                        "client".to_owned(),
+                        SubscribeRequestFilterEntry {
+                            include_update_parent: args.entries_include_update_parent,
+                        },
+                    );
                 }
 
                 let mut blocks: BlocksFilterMap = HashMap::new();
@@ -601,7 +618,12 @@ impl Action {
 
                 let mut block_footer: BlockFooterFilterMap = HashMap::new();
                 if args.block_footer {
-                    block_footer.insert("client".to_owned(), SubscribeRequestFilterBlockFooter {});
+                    block_footer.insert(
+                        "client".to_owned(),
+                        SubscribeRequestFilterBlockFooter {
+                            include_certificates: args.block_footer_include_certificates,
+                        },
+                    );
                 }
 
                 let mut accounts_data_slice = Vec::new();
@@ -654,6 +676,7 @@ impl Action {
                         account_include: args.account_include.clone(),
                         account_exclude: args.account_exclude.clone(),
                         account_required: args.account_required.clone(),
+                        include_update_parent: args.include_update_parent,
                     },
                 );
 
@@ -860,7 +883,9 @@ async fn geyser_subscribe(
                         Some(UpdateOneof::Slot(_)) => (&mut pb_slots_c, &pb_slots),
                         Some(UpdateOneof::Transaction(_)) => (&mut pb_txs_c, &pb_txs),
                         Some(UpdateOneof::TransactionStatus(_)) => (&mut pb_txs_st_c, &pb_txs_st),
-                        Some(UpdateOneof::Entry(_)) => (&mut pb_entries_c, &pb_entries),
+                        Some(UpdateOneof::Entry(_) | UpdateOneof::EntryUpdateParent(_)) => {
+                            (&mut pb_entries_c, &pb_entries)
+                        }
                         Some(UpdateOneof::BlockMeta(_)) => (&mut pb_blocks_mt_c, &pb_blocks_mt),
                         Some(UpdateOneof::BlockFooter(_)) => {
                             (&mut pb_block_footer_c, &pb_block_footer)
@@ -962,6 +987,7 @@ async fn geyser_subscribe(
                             }),
                         );
                     }
+                    Some(UpdateOneof::EntryUpdateParent(msg)) => info!("{msg:?}"),
                     Some(UpdateOneof::BlockFooter(msg)) => {
                         print_update(
                             "blockfooter",
@@ -973,6 +999,9 @@ async fn geyser_subscribe(
                                 "bankHash": bs58::encode(msg.bank_hash).into_string(),
                                 "blockProducerTimeNanos": msg.block_producer_time_nanos,
                                 "blockUserAgent": String::from_utf8_lossy(&msg.block_user_agent),
+                                "blockFinalCert": msg.block_final_cert.map(|cert| bs58::encode(cert).into_string()),
+                                "skipRewardCert": msg.skip_reward_cert.map(|cert| bs58::encode(cert).into_string()),
+                                "notarRewardCert": msg.notar_reward_cert.map(|cert| bs58::encode(cert).into_string()),
                             }),
                         );
                     }
@@ -1078,7 +1107,10 @@ async fn geyser_subscribe_deshred(
                 if stats {
                     let encoded_len = msg.encoded_len() as u64;
                     let (pb_c, pb) = match msg.update_oneof {
-                        Some(DeshredUpdateOneof::DeshredTransaction(_)) => (&mut pb_txs_c, &pb_txs),
+                        Some(
+                            DeshredUpdateOneof::DeshredTransaction(_)
+                            | DeshredUpdateOneof::DeshredUpdateParent(_),
+                        ) => (&mut pb_txs_c, &pb_txs),
                         Some(DeshredUpdateOneof::Ping(_)) => (&mut pb_pp_c, &pb_pp),
                         Some(DeshredUpdateOneof::Pong(_)) => (&mut pb_pp_c, &pb_pp),
                         Some(DeshredUpdateOneof::Slot(_)) => (&mut pb_slot_c, &pb_slot),
@@ -1104,6 +1136,7 @@ async fn geyser_subscribe_deshred(
                     .try_into()
                     .context("failed to parse created_at")?;
                 match msg.update_oneof {
+                    Some(DeshredUpdateOneof::DeshredUpdateParent(msg)) => info!("{msg:?}"),
                     Some(DeshredUpdateOneof::DeshredTransaction(msg)) => {
                         let tx = msg
                             .transaction

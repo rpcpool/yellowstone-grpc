@@ -50,6 +50,27 @@ cargo run --bin client -- -e "https://api.rpcpool.com" \
   --transactions-account-include "<Pubkey>"
 ```
 
+### subscribe to block footer updates
+
+```shell
+cargo run --bin client -- -e "https://api.rpcpool.com" \
+  --x-token "<token>" \
+  subscribe \
+  --block-footer
+```
+
+### subscribe to block footer updates with certificates
+
+Certificates are omitted by default. Set `--block-footer-include-certificates true` to include available certificates as opaque wincode bytes.
+
+```shell
+cargo run --bin client -- -e "https://api.rpcpool.com" \
+  --x-token "<token>" \
+  subscribe \
+  --block-footer \
+  --block-footer-include-certificates true
+```
+
 ### subscribe to deshred transaction updates
 ```shell
 cargo run --bin client -- -e "https://api.rpcpool.com" \

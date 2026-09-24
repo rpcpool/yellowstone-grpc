@@ -10,7 +10,8 @@ use {
             message::{
                 CommitmentLevel, ContactInfoMessage, Message, MessageAccount, MessageBlockFooter,
                 MessageBlockMeta, MessageContactInfo, MessageContactInfoRemoved,
-                MessageDeshredTransaction, MessageEntry, MessageSlot, MessageTransaction,
+                MessageDeshredTransaction, MessageDeshredUpdateParent, MessageEntry,
+                MessageEntryUpdateParent, MessageSlot, MessageTransaction,
             },
         },
         stream::tokio::BatchStreamUnboundedReceiver,
@@ -19,7 +20,8 @@ use {
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions,
         ReplicaBlockFooterInfoVersions, ReplicaBlockInfoVersions, ReplicaContactInfoVersions,
-        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoVersions,
+        ReplicaDeshredTransactionInfoVersions, ReplicaDeshredUpdateParentInfoVersions,
+        ReplicaEntryInfoVersions, ReplicaEntryUpdateParentInfoVersions,
         ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
     },
     solana_clock::{BankId, Slot},
@@ -456,6 +458,33 @@ impl GeyserPlugin for Plugin {
             )));
             inner.send_message(message);
 
+            Ok(())
+        })
+    }
+
+    fn notify_entry_update_parent(
+        &self,
+        update_parent: ReplicaEntryUpdateParentInfoVersions,
+    ) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            let ReplicaEntryUpdateParentInfoVersions::V0_0_1(info) = update_parent;
+            let message =
+                Message::EntryUpdateParent(Arc::new(MessageEntryUpdateParent::from_geyser(info)));
+            inner.send_message(message);
+            Ok(())
+        })
+    }
+
+    fn notify_deshred_update_parent(
+        &self,
+        update_parent: ReplicaDeshredUpdateParentInfoVersions,
+    ) -> PluginResult<()> {
+        self.with_inner(|inner| {
+            let ReplicaDeshredUpdateParentInfoVersions::V0_0_1(info) = update_parent;
+            let message = Message::DeshredUpdateParent(Arc::new(
+                MessageDeshredUpdateParent::from_geyser(info),
+            ));
+            inner.send_deshred_message(message);
             Ok(())
         })
     }
