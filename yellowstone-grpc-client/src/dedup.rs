@@ -2,6 +2,7 @@ use {
     futures::stream::{Stream, StreamExt},
     std::{
         collections::{HashMap, HashSet, VecDeque},
+        hash::{DefaultHasher, Hash, Hasher},
         task::Poll,
     },
     tonic::Status,
@@ -193,6 +194,9 @@ impl<T> ReplayBuffer<T> {
     }
 
     fn prune(&mut self, state: &DedupState) {
+        if self.quarantine.is_empty() {
+            return;
+        }
         self.quarantine
             .retain(|slot, _| state.inflight.contains_key(slot) || state.sealed.contains_key(slot));
     }
@@ -332,13 +336,13 @@ impl<S: ReconnectCounter, T> ReconnectCounter for DedupStream<S, T> {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub(crate) enum DedupKey {
-    Slot(i32),                           // status
-    Account([u8; 32], Option<[u8; 64]>), // pubkey, txn_signature
-    Transaction(u64),                    // index
-    TransactionStatus(u64),              // index
-    Entry(u64),                          // index
-    BlockMeta(String),                   // blockhash,
-    BlockFooter(u64),                    // bank_id
+    Slot(i32),                                        // status
+    Account([u8; 32], Option<[u8; 64]>, Option<u64>), // pubkey, txn_signature, content hash
+    Transaction(u64),                                 // index
+    TransactionStatus(u64),                           // index
+    Entry(u64),                                       // index
+    BlockMeta(String),                                // blockhash,
+    BlockFooter(u64),                                 // bank_id
     Block(u64),
     DeshredTransaction([u8; 64]), // signature
 }
@@ -388,7 +392,24 @@ impl Dedupable for SubscribeUpdate {
                     .txn_signature
                     .as_ref()
                     .and_then(|s| <[u8; 64]>::try_from(s.as_slice()).ok());
-                Some((m.slot, DedupKey::Account(pubkey, sig)))
+                // A transaction writes an account once, so pubkey and signature identify a
+                // write on any provider. Writes without a signature, such as the two Clock
+                // sysvar writes per slot on Alpenglow, are told apart by their content:
+                // write_version would also separate them, but it is a per-validator counter
+                // and would not match the same write replayed by another endpoint.
+                let content = sig.is_none().then(|| {
+                    let mut hasher = DefaultHasher::new();
+                    (
+                        info.lamports,
+                        &info.owner,
+                        info.executable,
+                        info.rent_epoch,
+                        &info.data,
+                    )
+                        .hash(&mut hasher);
+                    hasher.finish()
+                });
+                Some((m.slot, DedupKey::Account(pubkey, sig, content)))
             }
             UpdateOneof::Transaction(m) => {
                 let info = m.transaction.as_ref()?;
@@ -445,7 +466,11 @@ impl DedupState {
     pub(crate) fn observe(&mut self, slot: u64, key: DedupKey) -> Observation {
         match key {
             DedupKey::Slot(status) => {
-                // CreatedBank during replay keeps partial state for reconciliation.
+                // CreatedBank means a bank was just created for this slot. Outside replay it
+                // wipes prior state, which recovers from a rollback; during replay it keeps the
+                // partial state so the replay can be reconciled against what was delivered.
+                // The server only sends CreatedBank to filters with interslot_updates=true, so
+                // without that flag this branch is dormant.
                 if status == CREATED_BANK_STATUS {
                     let partial = self.inflight.get(&slot);
                     if !partial.is_some_and(|state| state.replaying) {
@@ -821,6 +846,67 @@ mod tests {
             )),
             created_at: None,
         }
+    }
+
+    fn unsigned_write(slot: u64, data: u8, write_version: u64) -> SubscribeUpdate {
+        let mut msg = make_account_msg(slot);
+        if let Some(UpdateOneof::Account(update)) = &mut msg.update_oneof {
+            let account = update.account.as_mut().expect("test account");
+            account.txn_signature = None;
+            account.data = vec![data; 40].into();
+            account.write_version = write_version;
+        }
+        msg
+    }
+
+    // On Alpenglow the Clock sysvar is written twice per slot with no transaction signature,
+    // once at bank creation and once at the block footer. Keyed by pubkey and signature only,
+    // the second write was dropped as a duplicate.
+    #[test]
+    fn unsigned_writes_with_different_content_are_distinct() {
+        let mut dedup = DedupState::default();
+        assert!(matches!(
+            observe(&mut dedup, &unsigned_write(10, 1, 1)),
+            Observation::New
+        ));
+        assert!(matches!(
+            observe(&mut dedup, &unsigned_write(10, 2, 2)),
+            Observation::New
+        ));
+    }
+
+    // write_version is a per-validator counter, so the same unsigned write replayed by another
+    // endpoint carries a different one and must still be recognised.
+    #[test]
+    fn unsigned_write_from_another_endpoint_is_a_duplicate() {
+        let mut dedup = DedupState::default();
+        assert!(matches!(
+            observe(&mut dedup, &unsigned_write(10, 1, 7)),
+            Observation::New
+        ));
+        assert!(matches!(
+            observe(&mut dedup, &unsigned_write(10, 1, 9_000)),
+            Observation::Duplicate
+        ));
+    }
+
+    // write_version is local to a validator process, so a signed write replayed by another
+    // provider must still be recognised by pubkey and signature alone.
+    #[test]
+    fn signed_writes_dedup_across_write_versions() {
+        let mut dedup = DedupState::default();
+        let mut other_provider = make_account_msg(10);
+        if let Some(UpdateOneof::Account(update)) = &mut other_provider.update_oneof {
+            update.account.as_mut().expect("test account").write_version = 99;
+        }
+        assert!(matches!(
+            observe(&mut dedup, &make_account_msg(10)),
+            Observation::New
+        ));
+        assert!(matches!(
+            observe(&mut dedup, &other_provider),
+            Observation::Duplicate
+        ));
     }
 
     fn observe(dedup: &mut DedupState, msg: &SubscribeUpdate) -> Observation {
