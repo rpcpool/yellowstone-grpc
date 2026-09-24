@@ -367,6 +367,10 @@ struct ActionSubscribe {
     #[clap(long)]
     entries: bool,
 
+    /// Include entry update parent messages
+    #[clap(long)]
+    entries_include_update_parent: Option<bool>,
+
     /// Subscribe on block updates
     #[clap(long)]
     blocks: bool,
@@ -434,6 +438,10 @@ struct ActionSubscribeDeshred {
     /// Filter by required account keys - all must be present (static or ALT-loaded)
     #[clap(long)]
     account_required: Vec<String>,
+
+    /// Include deshred update parent messages
+    #[clap(long)]
+    include_update_parent: Option<bool>,
 
     /// Send ping in subscribe request
     #[clap(long)]
@@ -581,7 +589,12 @@ impl Action {
 
                 let mut entries: EntryFilterMap = HashMap::new();
                 if args.entries {
-                    entries.insert("client".to_owned(), SubscribeRequestFilterEntry {});
+                    entries.insert(
+                        "client".to_owned(),
+                        SubscribeRequestFilterEntry {
+                            include_update_parent: args.entries_include_update_parent,
+                        },
+                    );
                 }
 
                 let mut blocks: BlocksFilterMap = HashMap::new();
@@ -663,6 +676,7 @@ impl Action {
                         account_include: args.account_include.clone(),
                         account_exclude: args.account_exclude.clone(),
                         account_required: args.account_required.clone(),
+                        include_update_parent: args.include_update_parent,
                     },
                 );
 

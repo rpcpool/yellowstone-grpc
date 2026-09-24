@@ -16,7 +16,7 @@ use {
         message::{
             CommitmentLevel, Message, MessageAccount, MessageAccountInfo, MessageBlock,
             MessageBlockFooter, MessageBlockMeta, MessageDeshredTransaction, MessageEntry,
-            MessageSlot, MessageTransaction, SlotStatus,
+            MessageEntryUpdateParent, MessageSlot, MessageTransaction, SlotStatus,
         },
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
@@ -433,14 +433,7 @@ impl Filter {
             Message::DeshredTransaction(_) | Message::DeshredUpdateParent(_) => {
                 FilteredUpdates::new()
             }
-            Message::EntryUpdateParent(message) => {
-                let filters = self.entries.filters.as_slice();
-                filtered_updates_once_ref!(
-                    filters,
-                    FilteredUpdateOneof::EntryUpdateParent(Arc::clone(message)),
-                    message.created_at
-                )
-            }
+            Message::EntryUpdateParent(message) => self.entries.get_update_parent_updates(message),
             Message::Entry(message) => self.entries.get_updates(message),
             Message::BlockFooter(message) => self.block_footer.get_updates(message),
             Message::Block(message) => self.blocks.get_updates(message, &self.accounts_data_slice),
@@ -1865,6 +1858,7 @@ struct FilterDeshredTransactionsInner {
     account_include: FoldHashSet<Pubkey>,
     account_exclude: FoldHashSet<Pubkey>,
     account_required: FoldHashSet<Pubkey>,
+    include_update_parent: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -1918,6 +1912,7 @@ impl FilterDeshredTransactions {
                         &filter.account_required,
                         &FoldHashSet::new(),
                     )?,
+                    include_update_parent: filter.include_update_parent.unwrap_or(false),
                 },
             );
         }
@@ -2017,8 +2012,9 @@ impl DeshredFilter {
                 let filters = self
                     .deshred_transactions
                     .filters
-                    .keys()
-                    .cloned()
+                    .iter()
+                    .filter(|(_, inner)| inner.include_update_parent)
+                    .map(|(name, _)| name.clone())
                     .collect::<FilteredUpdateFilters>();
                 let mut updates = FilteredUpdatesDeshred::new();
                 if !filters.is_empty() {
@@ -2095,6 +2091,9 @@ impl DeshredFilter {
 #[derive(Debug, Default, Clone)]
 struct FilterEntries {
     filters: Vec<FilterName>,
+    // Names that opted into update parent messages. Opt-in because clients built on an older
+    // proto see the new oneof as an empty update, and many treat that as a fatal error.
+    update_parent_filters: Vec<FilterName>,
 }
 
 impl FilterEntries {
@@ -2105,12 +2104,15 @@ impl FilterEntries {
     ) -> FilterResult<Self> {
         FilterLimits::check_max(configs.len(), limits.max)?;
 
-        Ok(Self {
-            filters: configs
-                .keys()
-                .map(|name| names.get(name))
-                .collect::<Result<_, _>>()?,
-        })
+        let mut this = Self::default();
+        for (name, config) in configs {
+            let name = names.get(name)?;
+            if config.include_update_parent.unwrap_or(false) {
+                this.update_parent_filters.push(name.clone());
+            }
+            this.filters.push(name);
+        }
+        Ok(this)
     }
 
     fn get_updates(&self, message: &Arc<MessageEntry>) -> FilteredUpdates {
@@ -2118,6 +2120,18 @@ impl FilterEntries {
         filtered_updates_once_ref!(
             filters,
             FilteredUpdateOneof::entry(Arc::clone(message)),
+            message.created_at
+        )
+    }
+
+    fn get_update_parent_updates(
+        &self,
+        message: &Arc<MessageEntryUpdateParent>,
+    ) -> FilteredUpdates {
+        let filters = self.update_parent_filters.as_slice();
+        filtered_updates_once_ref!(
+            filters,
+            FilteredUpdateOneof::EntryUpdateParent(Arc::clone(message)),
             message.created_at
         )
     }
@@ -3137,18 +3151,30 @@ mod tests {
             assert_eq!(deshred.update_parent.parent_block_id, vec![7; 32]);
             let entry_msg = Message::EntryUpdateParent(Arc::clone(&entry));
             let deshred_msg = Message::DeshredUpdateParent(Arc::clone(&deshred));
-            for subscribed in [false, true] {
+            // Update parent messages are opt-in: subscribing to entries or deshred
+            // transactions alone must not deliver them.
+            for (subscribed, include_update_parent) in [
+                (false, None),
+                (true, None),
+                (true, Some(false)),
+                (true, Some(true)),
+            ] {
+                let delivered = subscribed && include_update_parent == Some(true);
                 let mut request = SubscribeRequest::default();
                 let mut deshred_request = SubscribeDeshredRequest::default();
                 if subscribed {
-                    request
-                        .entry
-                        .insert("entries".into(), SubscribeRequestFilterEntry {});
+                    request.entry.insert(
+                        "entries".into(),
+                        SubscribeRequestFilterEntry {
+                            include_update_parent,
+                        },
+                    );
                     deshred_request.deshred_transactions.insert(
                         "transactions".into(),
                         SubscribeRequestFilterDeshredTransactions {
                             vote: Some(true),
                             account_include: vec![Pubkey::new_unique().to_string()],
+                            include_update_parent,
                             ..Default::default()
                         },
                     );
@@ -3169,9 +3195,9 @@ mod tests {
                 assert!(deshred_filter.get_updates(&entry_msg, None).is_empty());
                 let updates = filter.get_updates(&entry_msg, None);
                 let deshred_updates = deshred_filter.get_updates(&deshred_msg, None);
-                assert_eq!(updates.len(), usize::from(subscribed));
-                assert_eq!(deshred_updates.len(), usize::from(subscribed));
-                if subscribed {
+                assert_eq!(updates.len(), usize::from(delivered));
+                assert_eq!(deshred_updates.len(), usize::from(delivered));
+                if delivered {
                     let bytes = updates[0].encode_to_vec();
                     assert_eq!(bytes.len(), updates[0].encoded_len());
                     let decoded = SubscribeUpdate::decode(bytes.as_slice()).unwrap();
@@ -3201,6 +3227,93 @@ mod tests {
     }
 
     #[test]
+    fn test_update_parent_reaches_only_opted_in_filter_names() {
+        use {
+            crate::plugin::message::{MessageDeshredUpdateParent, MessageEntryUpdateParent},
+            agave_geyser_plugin_interface::geyser_plugin_interface::{
+                ReplicaDeshredUpdateParentInfo, ReplicaEntryUpdateParentInfo,
+            },
+            solana_hash::Hash,
+            yellowstone_grpc_proto::geyser::SubscribeRequestFilterEntry,
+        };
+        let hash = Hash::new_from_array([7; 32]);
+        let entry_msg = Message::EntryUpdateParent(Arc::new(
+            MessageEntryUpdateParent::from_geyser(&ReplicaEntryUpdateParentInfo {
+                slot: 10,
+                cleared_bank_id: 3,
+                parent_slot: 8,
+                parent_block_id: &hash,
+            }),
+        ));
+        let deshred_msg = Message::DeshredUpdateParent(Arc::new(
+            MessageDeshredUpdateParent::from_geyser(&ReplicaDeshredUpdateParentInfo {
+                slot: 10,
+                update_parent_fec_set_index: 32,
+                parent_slot: 8,
+                parent_block_id: &hash,
+            }),
+        ));
+        let request = SubscribeRequest {
+            entry: HashMap::from([
+                ("plain".to_owned(), SubscribeRequestFilterEntry::default()),
+                (
+                    "parents".to_owned(),
+                    SubscribeRequestFilterEntry {
+                        include_update_parent: Some(true),
+                    },
+                ),
+            ]),
+            ..Default::default()
+        };
+        let deshred_request = SubscribeDeshredRequest {
+            deshred_transactions: HashMap::from([
+                (
+                    "plain".to_owned(),
+                    SubscribeRequestFilterDeshredTransactions {
+                        vote: Some(false),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "parents".to_owned(),
+                    SubscribeRequestFilterDeshredTransactions {
+                        vote: Some(false),
+                        include_update_parent: Some(true),
+                        ..Default::default()
+                    },
+                ),
+            ]),
+            ..Default::default()
+        };
+        let filter = Filter::new(
+            &request,
+            &FilterLimits::default(),
+            &mut create_filter_names(),
+        )
+        .unwrap();
+        let deshred_filter = DeshredFilter::new(
+            &deshred_request,
+            &FilterLimits::default(),
+            &mut create_filter_names(),
+        )
+        .unwrap();
+
+        let updates = filter.get_updates(&entry_msg, None);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].as_subscribe_update().filters, vec!["parents"]);
+        let updates = deshred_filter.get_updates(&deshred_msg, None);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(
+            updates[0]
+                .filters
+                .iter()
+                .map(|name| name.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["parents"]
+        );
+    }
+
+    #[test]
     fn test_deshred_filter_empty_rejects() {
         let mut deshred_transactions = HashMap::new();
         deshred_transactions.insert(
@@ -3210,6 +3323,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                include_update_parent: None,
             },
         );
 
@@ -3238,6 +3352,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                include_update_parent: None,
             },
         );
 
@@ -3283,6 +3398,7 @@ mod tests {
                 account_include: vec![key_b.to_string()],
                 account_exclude: vec![],
                 account_required: vec![],
+                include_update_parent: None,
             },
         );
 
@@ -3324,6 +3440,7 @@ mod tests {
                 account_include: vec![key_alt_w.to_string()],
                 account_exclude: vec![],
                 account_required: vec![],
+                include_update_parent: None,
             },
         );
 
@@ -3356,6 +3473,7 @@ mod tests {
                 account_include: vec![key_alt_r.to_string()],
                 account_exclude: vec![],
                 account_required: vec![],
+                include_update_parent: None,
             },
         );
         let config2 = SubscribeDeshredRequest {
@@ -3391,6 +3509,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![key_b.to_string()],
                 account_required: vec![],
+                include_update_parent: None,
             },
         );
 
@@ -3431,6 +3550,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![key_b.to_string(), key_c.to_string()],
+                include_update_parent: None,
             },
         );
 
@@ -4928,7 +5048,7 @@ mod filter_kind_coverage {
     #[test]
     fn entry_filter_matches_every_entry_and_absence_yields_nothing() {
         let filter = build(SubscribeRequest {
-            entry: HashMap::from([("e".to_owned(), SubscribeRequestFilterEntry {})]),
+            entry: HashMap::from([("e".to_owned(), SubscribeRequestFilterEntry::default())]),
             ..Default::default()
         });
         let updates = filter.get_updates(&Message::Entry(fixtures::message_entry(42, 3)), None);
