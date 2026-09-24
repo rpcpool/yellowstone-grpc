@@ -34,11 +34,12 @@ impl CompleteBankDedup {
         self.complete.contains_key(bank)
     }
 
-    /// Forget completion state for slots at or below a finalized slot. A reconnect never
-    /// replays them, so their hashes and statuses are never compared again.
-    pub(crate) fn prune_through(&mut self, slot: u64) {
-        self.complete.retain(|bank, _| bank.slot > slot);
-        self.statuses.retain(|(bank_slot, _), _| *bank_slot > slot);
+    /// Forget completion state below the replay boundary. A reconnect never replays those
+    /// slots, so their hashes and statuses are never compared again.
+    pub(crate) fn prune_before(&mut self, boundary: u64) {
+        self.complete.retain(|bank, _| bank.slot >= boundary);
+        self.statuses
+            .retain(|(bank_slot, _), _| *bank_slot >= boundary);
     }
 
     pub(crate) fn begin_replay(&mut self, partial: &[crate::BankRef]) {

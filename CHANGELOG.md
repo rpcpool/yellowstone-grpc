@@ -33,6 +33,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 - plugin: block reconstruction drops a bank cleared by an Alpenglow update parent, so the replacement bank's block is still delivered when its commitment is inherited from a descendant.
 - client: `subscribe_with_reconnect` resumes after the last finalized slot instead of the first slot of the subscription, so a reconnect later than the server replay window no longer fails with `OutOfRange`.
 - client: `subscribe_with_reconnect` forgets banks at or below the last finalized slot, so a long lived stream no longer fails with `bank tracking limit reached` after 65,536 banks.
+- client: `subscribe_with_reconnect` only forgets banks below the replay boundary, so a second reconnect during recovery no longer delivers complete banks between the boundary and the finalized slot twice.
 
 ## 2026-08-31
 
