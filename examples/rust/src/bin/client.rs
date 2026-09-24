@@ -395,6 +395,10 @@ struct ActionSubscribe {
     #[clap(long)]
     block_footer: bool,
 
+    /// Include available certificates in block footer updates
+    #[clap(long)]
+    block_footer_include_certificates: Option<bool>,
+
     /// Re-send message from slot
     #[clap(long)]
     from_slot: Option<u64>,
@@ -601,7 +605,12 @@ impl Action {
 
                 let mut block_footer: BlockFooterFilterMap = HashMap::new();
                 if args.block_footer {
-                    block_footer.insert("client".to_owned(), SubscribeRequestFilterBlockFooter {});
+                    block_footer.insert(
+                        "client".to_owned(),
+                        SubscribeRequestFilterBlockFooter {
+                            include_certificates: args.block_footer_include_certificates,
+                        },
+                    );
                 }
 
                 let mut accounts_data_slice = Vec::new();

@@ -143,7 +143,10 @@ message SubscribeRequestFilterBlocksMeta {}
 
 message SubscribeRequestFilterEntry {}
 
-message SubscribeRequestFilterBlockFooter {}
+message SubscribeRequestFilterBlockFooter {
+  // Include available certificates. Omitted or false sends footer metadata only.
+  optional bool include_certificates = 1;
+}
 
 // Filter for deshred transactions (transactions received before execution).
 // Deshred transactions are received when entries are formed from shreds,
