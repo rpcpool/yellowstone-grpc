@@ -8,9 +8,10 @@ use {
                 FilterAccountsDataSlice,
             },
             message::{
-                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageDeshredTransaction,
-                MessageDeshredTransactionInfo, MessageEntry, MessageSlot, MessageTransaction,
-                MessageTransactionInfo,
+                MessageAccount, MessageAccountInfo, MessageBlockFooter, MessageBlockMeta,
+                MessageDeshredTransaction, MessageDeshredTransactionInfo,
+                MessageDeshredUpdateParent, MessageEntry, MessageEntryUpdateParent, MessageSlot,
+                MessageTransaction, MessageTransactionInfo,
             },
         },
     },
@@ -172,6 +173,7 @@ impl FilteredUpdate {
             hash: message.hash.to_bytes().to_vec(),
             executed_transaction_count: message.executed_transaction_count,
             starting_transaction_index: message.starting_transaction_index,
+            bank_id: message.bank_id,
         }
     }
 
@@ -184,17 +186,20 @@ impl FilteredUpdate {
                 )),
                 is_startup: msg.account.is_startup,
                 slot: msg.account.slot,
+                bank_id: msg.account.bank_id,
             }),
             FilteredUpdateOneof::Slot(msg) => UpdateOneof::Slot(SubscribeUpdateSlot {
                 slot: msg.slot,
                 parent: msg.parent,
                 status: msg.status as i32,
                 dead_error: msg.dead_error.clone(),
+                bank_id: msg.bank_id,
             }),
             FilteredUpdateOneof::Transaction(msg) => {
                 UpdateOneof::Transaction(SubscribeUpdateTransaction {
                     transaction: Some(Self::as_subscribe_update_transaction(&msg.transaction)),
                     slot: msg.slot,
+                    bank_id: msg.transaction.bank_id,
                 })
             }
             FilteredUpdateOneof::TransactionStatus(msg) => {
@@ -205,6 +210,7 @@ impl FilteredUpdate {
                     is_vote: tx.transaction.is_vote,
                     index: tx.transaction.index as u64,
                     err: tx.transaction.meta.err.clone(),
+                    bank_id: tx.bank_id,
                 })
             }
             FilteredUpdateOneof::Block(msg) => UpdateOneof::Block(SubscribeUpdateBlock {
@@ -235,12 +241,19 @@ impl FilteredUpdate {
                     .iter()
                     .map(|entry| Self::as_subscribe_update_entry(entry.as_ref()))
                     .collect(),
+                bank_id: msg.meta.bank_id,
             }),
             FilteredUpdateOneof::Ping => UpdateOneof::Ping(SubscribeUpdatePing {}),
             FilteredUpdateOneof::Pong(msg) => UpdateOneof::Pong(*msg),
             FilteredUpdateOneof::BlockMeta(msg) => UpdateOneof::BlockMeta(msg.block_meta.clone()),
+            FilteredUpdateOneof::EntryUpdateParent(msg) => {
+                UpdateOneof::EntryUpdateParent(msg.update_parent.clone())
+            }
             FilteredUpdateOneof::Entry(msg) => {
                 UpdateOneof::Entry(Self::as_subscribe_update_entry(&msg.0))
+            }
+            FilteredUpdateOneof::BlockFooter(msg) => {
+                UpdateOneof::BlockFooter(msg.block_footer.clone())
             }
         };
 
@@ -269,6 +282,8 @@ pub enum FilteredUpdateOneof {
     Pong(SubscribeUpdatePong),                          // 9
     BlockMeta(Arc<MessageBlockMeta>),                   // 7
     Entry(FilteredUpdateEntry),                         // 8
+    EntryUpdateParent(Arc<MessageEntryUpdateParent>),   // 13
+    BlockFooter(Arc<MessageBlockFooter>),               // 12
 }
 
 impl FilteredUpdateOneof {
@@ -319,11 +334,16 @@ impl FilteredUpdateOneof {
     pub const fn entry(message: Arc<MessageEntry>) -> Self {
         Self::Entry(FilteredUpdateEntry(message))
     }
+
+    pub const fn block_footer(message: Arc<MessageBlockFooter>) -> Self {
+        Self::BlockFooter(message)
+    }
 }
 
 impl prost::Message for FilteredUpdateOneof {
     fn encode_raw(&self, buf: &mut impl BufMut) {
         match self {
+            Self::EntryUpdateParent(msg) => message::encode(13u32, &msg.update_parent, buf),
             Self::Account(msg) => message::encode(2u32, msg, buf),
             Self::Slot(msg) => message::encode(3u32, msg, buf),
             Self::Transaction(msg) => message::encode(4u32, msg, buf),
@@ -336,11 +356,13 @@ impl prost::Message for FilteredUpdateOneof {
             Self::Pong(msg) => message::encode(9u32, msg, buf),
             Self::BlockMeta(msg) => message::encode(7u32, &msg.block_meta, buf),
             Self::Entry(msg) => message::encode(8u32, msg, buf),
+            Self::BlockFooter(msg) => message::encode(12u32, &msg.block_footer, buf),
         }
     }
 
     fn encoded_len(&self) -> usize {
         match self {
+            Self::EntryUpdateParent(msg) => message::encoded_len(13u32, &msg.update_parent),
             Self::Account(msg) => message::encoded_len(2u32, msg),
             Self::Slot(msg) => message::encoded_len(3u32, msg),
             Self::Transaction(msg) => message::encoded_len(4u32, msg),
@@ -350,6 +372,7 @@ impl prost::Message for FilteredUpdateOneof {
             Self::Pong(msg) => message::encoded_len(9u32, msg),
             Self::BlockMeta(msg) => message::encoded_len(7u32, &msg.block_meta),
             Self::Entry(msg) => message::encoded_len(8u32, msg),
+            Self::BlockFooter(msg) => message::encoded_len(12u32, &msg.block_footer),
         }
     }
 
@@ -383,6 +406,9 @@ impl prost::Message for FilteredUpdateAccount {
         if self.account.is_startup {
             ::prost::encoding::bool::encode(3u32, &self.account.is_startup, buf);
         }
+        if let ::core::option::Option::Some(ref value) = self.account.bank_id {
+            ::prost::encoding::uint64::encode(4u32, value, buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
@@ -397,7 +423,9 @@ impl prost::Message for FilteredUpdateAccount {
             ::prost::encoding::bool::encoded_len(3u32, &self.account.is_startup)
         } else {
             0
-        }
+        } + self.account.bank_id.as_ref().map_or(0, |value| {
+            ::prost::encoding::uint64::encoded_len(4u32, value)
+        })
     }
 
     fn merge_field(
@@ -553,6 +581,9 @@ impl prost::Message for FilteredUpdateSlot {
         if let Some(error) = &self.dead_error {
             ::prost::encoding::string::encode(4u32, error, buf);
         }
+        if let ::core::option::Option::Some(ref value) = self.bank_id {
+            ::prost::encoding::uint64::encode(5u32, value, buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
@@ -572,7 +603,9 @@ impl prost::Message for FilteredUpdateSlot {
             ::prost::encoding::string::encoded_len(4u32, error)
         } else {
             0
-        }
+        } + self.bank_id.as_ref().map_or(0, |value| {
+            ::prost::encoding::uint64::encoded_len(5u32, value)
+        })
     }
 
     fn merge_field(
@@ -602,12 +635,20 @@ impl prost::Message for FilteredUpdateTransaction {
         if self.slot != 0u64 {
             ::prost::encoding::uint64::encode(2u32, &self.slot, buf);
         }
+        if self.transaction.bank_id != 0u64 {
+            ::prost::encoding::uint64::encode(3u32, &self.transaction.bank_id, buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
         prost_field_encoded_len(1u32, Self::tx_encoded_len(&self.transaction.transaction))
             + if self.slot != 0u64 {
                 ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
+            } else {
+                0
+            }
+            + if self.transaction.bank_id != 0u64 {
+                ::prost::encoding::uint64::encoded_len(3u32, &self.transaction.bank_id)
             } else {
                 0
             }
@@ -716,6 +757,9 @@ impl prost::Message for FilteredUpdateTransactionStatus {
         if let Some(msg) = &tx.meta.err {
             message::encode(5u32, msg, buf)
         }
+        if self.transaction.bank_id != 0u64 {
+            ::prost::encoding::uint64::encode(6u32, &self.transaction.bank_id, buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
@@ -741,6 +785,11 @@ impl prost::Message for FilteredUpdateTransactionStatus {
                 .err
                 .as_ref()
                 .map_or(0, |msg| message::encoded_len(5u32, msg))
+            + if self.transaction.bank_id != 0u64 {
+                ::prost::encoding::uint64::encoded_len(6u32, &self.transaction.bank_id)
+            } else {
+                0
+            }
     }
 
     fn merge_field(
@@ -933,6 +982,7 @@ impl FilteredUpdateDeshred {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilteredUpdateDeshredOneof {
+    DeshredUpdateParent(Arc<MessageDeshredUpdateParent>), // tag 7
     DeshredTransaction(FilteredUpdateDeshredTransaction), // tag 2
     Ping,                                                 // tag 3
     Pong(SubscribeUpdatePong),                            // tag 4
@@ -958,6 +1008,7 @@ impl FilteredUpdateDeshredOneof {
 impl prost::Message for FilteredUpdateDeshredOneof {
     fn encode_raw(&self, buf: &mut impl BufMut) {
         match self {
+            Self::DeshredUpdateParent(msg) => message::encode(7u32, &msg.update_parent, buf),
             Self::DeshredTransaction(msg) => message::encode(2u32, msg, buf),
             Self::Ping => {
                 encode_key(3u32, WireType::LengthDelimited, buf);
@@ -970,6 +1021,7 @@ impl prost::Message for FilteredUpdateDeshredOneof {
 
     fn encoded_len(&self) -> usize {
         match self {
+            Self::DeshredUpdateParent(msg) => message::encoded_len(7u32, &msg.update_parent),
             Self::DeshredTransaction(msg) => message::encoded_len(2u32, msg),
             Self::Ping => key_len(3u32) + encoded_len_varint(0),
             Self::Pong(msg) => message::encoded_len(4u32, msg),
@@ -1053,6 +1105,9 @@ impl prost::Message for FilteredUpdateBlock {
             );
             FilteredUpdateEntry::entry_encode_raw(entry, buf);
         }
+        if self.meta.bank_id != 0u64 {
+            ::prost::encoding::uint64::encode(14u32, &self.meta.bank_id, buf);
+        }
     }
 
     fn encoded_len(&self) -> usize {
@@ -1116,6 +1171,11 @@ impl prost::Message for FilteredUpdateBlock {
             + prost_repeated_encoded_len_map!(13u32, self.entries, |entry| {
                 FilteredUpdateEntry::entry_encoded_len(entry)
             })
+            + if self.meta.bank_id != 0u64 {
+                ::prost::encoding::uint64::encoded_len(14u32, &self.meta.bank_id)
+            } else {
+                0
+            }
     }
 
     fn merge_field(
@@ -1180,6 +1240,9 @@ impl FilteredUpdateEntry {
         if entry.starting_transaction_index != 0u64 {
             ::prost::encoding::uint64::encode(6u32, &entry.starting_transaction_index, buf);
         }
+        if entry.bank_id != 0u64 {
+            ::prost::encoding::uint64::encode(7u32, &entry.bank_id, buf);
+        }
     }
 
     fn entry_encoded_len(entry: &MessageEntry) -> usize {
@@ -1208,6 +1271,11 @@ impl FilteredUpdateEntry {
             } else {
                 0
             }
+            + if entry.bank_id != 0u64 {
+                ::prost::encoding::uint64::encoded_len(7u32, &entry.bank_id)
+            } else {
+                0
+            }
     }
 }
 
@@ -1231,8 +1299,8 @@ pub mod tests {
             convert_to,
             filter::{name::FilterName, FilterAccountsDataSlice},
             message::{
-                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
-                MessageTransaction, MessageTransactionInfo,
+                MessageAccount, MessageAccountInfo, MessageBlockFooter, MessageBlockMeta,
+                MessageEntry, MessageTransaction, MessageTransactionInfo,
             },
         },
         bytes::Bytes,
@@ -1252,7 +1320,7 @@ pub mod tests {
             sync::{Arc, OnceLock},
             time::SystemTime,
         },
-        yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta,
+        yellowstone_grpc_proto::geyser::{SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta},
     };
 
     pub fn create_message_filters(names: &[&str]) -> FilteredUpdateFilters {
@@ -1324,6 +1392,7 @@ pub mod tests {
                             account: account.clone(),
                             slot,
                             is_startup,
+                            bank_id: Some(slot),
                             created_at: Timestamp::from(SystemTime::now()),
                         };
                         vec.push((msg, data_slice));
@@ -1344,6 +1413,7 @@ pub mod tests {
                 executed_transaction_count: 32,
                 starting_transaction_index: 1000,
                 created_at: Timestamp::from(SystemTime::now()),
+                bank_id: 299888121,
             },
             MessageEntry {
                 slot: 299888121,
@@ -1353,6 +1423,7 @@ pub mod tests {
                 executed_transaction_count: 32,
                 starting_transaction_index: 1000,
                 created_at: Timestamp::from(SystemTime::now()),
+                bank_id: 299888121,
             },
         ]
         .into_iter()
@@ -1423,6 +1494,7 @@ pub mod tests {
                             },
                             slot: block.parent_slot + 1,
                             created_at: Timestamp::from(SystemTime::now()),
+                            bank_id: block.parent_slot + 1,
                         }
                     })
                     .map(Arc::new)
@@ -1445,6 +1517,7 @@ pub mod tests {
                         block_height: block.block_height.map(convert_to::create_block_height),
                         executed_transaction_count: transactions.len() as u64,
                         entries_count: entries.len() as u64,
+                        bank_id: slot,
                     },
                     created_at: Timestamp::from(SystemTime::now()),
                 };
@@ -1463,6 +1536,7 @@ pub mod tests {
                             slot: block.parent_slot + 1,
                             is_startup: false,
                             created_at: Timestamp::from(SystemTime::now()),
+                            bank_id: Some(block.parent_slot + 1),
                         })
                     })
                     .collect::<Vec<_>>();
@@ -1610,6 +1684,17 @@ pub mod tests {
                     SlotStatus::CreatedBank,
                     SlotStatus::Dead,
                 ] {
+                    let bank_id = if [
+                        SlotStatus::Completed,
+                        SlotStatus::FirstShredReceived,
+                        SlotStatus::Dead,
+                    ]
+                    .contains(&status)
+                    {
+                        None
+                    } else {
+                        Some(slot)
+                    };
                     encode_decode_cmp(
                         &["123"],
                         FilteredUpdateOneof::slot(MessageSlot {
@@ -1618,6 +1703,7 @@ pub mod tests {
                             status,
                             dead_error: None,
                             created_at: Timestamp::from(SystemTime::now()),
+                            bank_id,
                         }),
                     )
                 }
@@ -1629,6 +1715,7 @@ pub mod tests {
                         status: SlotStatus::Dead,
                         dead_error: Some("123".to_owned()),
                         created_at: Timestamp::from(SystemTime::now()),
+                        bank_id: None,
                     }),
                 )
             }
@@ -1655,6 +1742,7 @@ pub mod tests {
                 },
                 slot: message_arc.slot,
                 created_at: message_arc.created_at,
+                bank_id: message_arc.bank_id,
             });
 
             // Create version without cache (fallback path)
@@ -1672,6 +1760,7 @@ pub mod tests {
                 },
                 slot: message_arc.slot,
                 created_at: message_arc.created_at,
+                bank_id: message_arc.bank_id,
             });
 
             // Pre-encode one of them
@@ -1746,6 +1835,37 @@ pub mod tests {
     fn test_message_blockmeta() {
         for block_meta in load_predefined_blockmeta() {
             encode_decode_cmp(&["123"], FilteredUpdateOneof::block_meta(block_meta));
+        }
+    }
+
+    #[test]
+    fn test_message_block_footer() {
+        // An empty user agent, a maximal timestamp, absent certificates and an
+        // empty certificate are the interesting edges for the hand-rolled encoder.
+        for (bank_hash, nanos, user_agent, certs) in [
+            (vec![0u8; 32], 0u64, Vec::new(), [None, None, None]),
+            (
+                vec![7u8; 32],
+                u64::MAX,
+                b"agave/3.0.0".to_vec(),
+                [Some(vec![1u8; 96]), Some(Vec::new()), Some(vec![2u8; 48])],
+            ),
+        ] {
+            let [block_final_cert, skip_reward_cert, notar_reward_cert] = certs;
+            let message = Arc::new(MessageBlockFooter {
+                block_footer: SubscribeUpdateBlockFooter {
+                    slot: 42,
+                    bank_id: 7,
+                    bank_hash,
+                    block_producer_time_nanos: nanos,
+                    block_user_agent: user_agent,
+                    block_final_cert,
+                    skip_reward_cert,
+                    notar_reward_cert,
+                },
+                created_at: Timestamp::default(),
+            });
+            encode_decode_cmp(&["123"], FilteredUpdateOneof::block_footer(message));
         }
     }
 

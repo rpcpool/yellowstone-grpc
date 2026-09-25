@@ -2,9 +2,9 @@ use {
     crate::plugin::{
         filter::{
             limits::{
-                FilterLimits, FilterLimitsAccounts, FilterLimitsBlocks, FilterLimitsBlocksMeta,
-                FilterLimitsCheckError, FilterLimitsDeshredTransactions, FilterLimitsEntries,
-                FilterLimitsSlots, FilterLimitsTransactions,
+                FilterLimits, FilterLimitsAccounts, FilterLimitsBlockFooter, FilterLimitsBlocks,
+                FilterLimitsBlocksMeta, FilterLimitsCheckError, FilterLimitsDeshredTransactions,
+                FilterLimitsEntries, FilterLimitsSlots, FilterLimitsTransactions,
             },
             message::{
                 FilteredUpdate, FilteredUpdateBlock, FilteredUpdateDeshred,
@@ -15,8 +15,8 @@ use {
         },
         message::{
             CommitmentLevel, Message, MessageAccount, MessageAccountInfo, MessageBlock,
-            MessageBlockMeta, MessageDeshredTransaction, MessageEntry, MessageSlot,
-            MessageTransaction, SlotStatus,
+            MessageBlockFooter, MessageBlockMeta, MessageDeshredTransaction, MessageEntry,
+            MessageEntryUpdateParent, MessageSlot, MessageTransaction, SlotStatus,
         },
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
@@ -38,10 +38,10 @@ use {
             CommitmentLevel as CommitmentLevelProto, SubscribeDeshredRequest, SubscribeRequest,
             SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
             SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
-            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
-            SubscribeRequestFilterDeshredTransactions, SubscribeRequestFilterEntry,
-            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
-            TokenAccountExpansionControlFlag,
+            SubscribeRequestFilterBlockFooter, SubscribeRequestFilterBlocks,
+            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterDeshredTransactions,
+            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions, TokenAccountExpansionControlFlag,
         },
         solana::storage::confirmed_block,
     },
@@ -152,6 +152,7 @@ pub struct Filter {
     entries: FilterEntries,
     blocks: FilterBlocks,
     blocks_meta: FilterBlocksMeta,
+    block_footer: FilterBlockFooter,
     commitment: CommitmentLevel,
     accounts_data_slice: FilterAccountsDataSlice,
     ping: Option<i32>,
@@ -173,6 +174,7 @@ impl Default for Filter {
             entries: FilterEntries::default(),
             blocks: FilterBlocks::default(),
             blocks_meta: FilterBlocksMeta::default(),
+            block_footer: FilterBlockFooter::default(),
             commitment: CommitmentLevel::Processed,
             accounts_data_slice: FilterAccountsDataSlice::default(),
             ping: None,
@@ -253,6 +255,11 @@ impl Filter {
             entries: FilterEntries::new(&config.entry, &limits.entries, names)?,
             blocks: FilterBlocks::new(&config.blocks, &limits.blocks, names)?,
             blocks_meta: FilterBlocksMeta::new(&config.blocks_meta, &limits.blocks_meta, names)?,
+            block_footer: FilterBlockFooter::new(
+                &config.block_footer,
+                &limits.block_footer,
+                names,
+            )?,
             commitment: Self::decode_commitment(config.commitment)?,
             accounts_data_slice: FilterAccountsDataSlice::new(
                 &config.accounts_data_slice,
@@ -423,8 +430,12 @@ impl Filter {
                 updates.append(&mut self.transactions_status.get_updates(message));
                 updates
             }
-            Message::DeshredTransaction(_) => FilteredUpdates::new(),
+            Message::DeshredTransaction(_) | Message::DeshredUpdateParent(_) => {
+                FilteredUpdates::new()
+            }
+            Message::EntryUpdateParent(message) => self.entries.get_update_parent_updates(message),
             Message::Entry(message) => self.entries.get_updates(message),
+            Message::BlockFooter(message) => self.block_footer.get_updates(message),
             Message::Block(message) => self.blocks.get_updates(message, &self.accounts_data_slice),
             Message::BlockMeta(message) => self.blocks_meta.get_updates(message),
         }
@@ -1847,6 +1858,7 @@ struct FilterDeshredTransactionsInner {
     account_include: FoldHashSet<Pubkey>,
     account_exclude: FoldHashSet<Pubkey>,
     account_required: FoldHashSet<Pubkey>,
+    include_update_parent: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -1900,6 +1912,7 @@ impl FilterDeshredTransactions {
                         &filter.account_required,
                         &FoldHashSet::new(),
                     )?,
+                    include_update_parent: filter.include_update_parent.unwrap_or(false),
                 },
             );
         }
@@ -1995,6 +2008,24 @@ impl DeshredFilter {
     ) -> FilteredUpdatesDeshred {
         match message {
             Message::DeshredTransaction(message) => self.deshred_transactions.get_updates(message),
+            Message::DeshredUpdateParent(message) => {
+                let filters = self
+                    .deshred_transactions
+                    .filters
+                    .iter()
+                    .filter(|(_, inner)| inner.include_update_parent)
+                    .map(|(name, _)| name.clone())
+                    .collect::<FilteredUpdateFilters>();
+                let mut updates = FilteredUpdatesDeshred::new();
+                if !filters.is_empty() {
+                    updates.push(FilteredUpdateDeshred::new(
+                        filters,
+                        FilteredUpdateDeshredOneof::DeshredUpdateParent(Arc::clone(message)),
+                        message.created_at,
+                    ));
+                }
+                updates
+            }
             Message::Slot(message) => self.get_slot_updates(message, commitment),
             _ => FilteredUpdatesDeshred::new(),
         }
@@ -2060,6 +2091,9 @@ impl DeshredFilter {
 #[derive(Debug, Default, Clone)]
 struct FilterEntries {
     filters: Vec<FilterName>,
+    // Names that opted into update parent messages. Opt-in because clients built on an older
+    // proto see the new oneof as an empty update, and many treat that as a fatal error.
+    update_parent_filters: Vec<FilterName>,
 }
 
 impl FilterEntries {
@@ -2070,12 +2104,15 @@ impl FilterEntries {
     ) -> FilterResult<Self> {
         FilterLimits::check_max(configs.len(), limits.max)?;
 
-        Ok(Self {
-            filters: configs
-                .keys()
-                .map(|name| names.get(name))
-                .collect::<Result<_, _>>()?,
-        })
+        let mut this = Self::default();
+        for (name, config) in configs {
+            let name = names.get(name)?;
+            if config.include_update_parent.unwrap_or(false) {
+                this.update_parent_filters.push(name.clone());
+            }
+            this.filters.push(name);
+        }
+        Ok(this)
     }
 
     fn get_updates(&self, message: &Arc<MessageEntry>) -> FilteredUpdates {
@@ -2083,6 +2120,18 @@ impl FilterEntries {
         filtered_updates_once_ref!(
             filters,
             FilteredUpdateOneof::entry(Arc::clone(message)),
+            message.created_at
+        )
+    }
+
+    fn get_update_parent_updates(
+        &self,
+        message: &Arc<MessageEntryUpdateParent>,
+    ) -> FilteredUpdates {
+        let filters = self.update_parent_filters.as_slice();
+        filtered_updates_once_ref!(
+            filters,
+            FilteredUpdateOneof::EntryUpdateParent(Arc::clone(message)),
             message.created_at
         )
     }
@@ -2298,6 +2347,60 @@ impl FilterBlocksMeta {
             FilteredUpdateOneof::block_meta(Arc::clone(message)),
             message.created_at
         )
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct FilterBlockFooter {
+    filters: [Vec<FilterName>; 2],
+}
+
+impl FilterBlockFooter {
+    fn new(
+        configs: &HashMap<String, SubscribeRequestFilterBlockFooter>,
+        limits: &FilterLimitsBlockFooter,
+        names: &mut FilterNames,
+    ) -> FilterResult<Self> {
+        FilterLimits::check_max(configs.len(), limits.max)?;
+        let mut this = Self::default();
+        for (name, config) in configs {
+            let include_certificates = config.include_certificates.unwrap_or(false);
+            this.filters[usize::from(include_certificates)].push(names.get(name)?);
+        }
+        Ok(this)
+    }
+
+    fn get_updates(&self, message: &Arc<MessageBlockFooter>) -> FilteredUpdates {
+        let mut updates = FilteredUpdates::new();
+        for (include_certificates, filters) in self.filters.iter().enumerate() {
+            if filters.is_empty() {
+                continue;
+            }
+            let filtered = if include_certificates == 1 {
+                Arc::clone(message)
+            } else {
+                let footer = &message.block_footer;
+                Arc::new(MessageBlockFooter {
+                    block_footer: yellowstone_grpc_proto::geyser::SubscribeUpdateBlockFooter {
+                        slot: footer.slot,
+                        bank_id: footer.bank_id,
+                        bank_hash: footer.bank_hash.clone(),
+                        block_producer_time_nanos: footer.block_producer_time_nanos,
+                        block_user_agent: footer.block_user_agent.clone(),
+                        block_final_cert: None,
+                        skip_reward_cert: None,
+                        notar_reward_cert: None,
+                    },
+                    created_at: message.created_at,
+                })
+            };
+            updates.push(FilteredUpdate::new(
+                filters.iter().cloned().collect(),
+                FilteredUpdateOneof::block_footer(filtered),
+                message.created_at,
+            ));
+        }
+        updates
     }
 }
 
@@ -2549,6 +2652,7 @@ mod tests {
             },
             slot: 100,
             created_at: Timestamp::from(SystemTime::now()),
+            bank_id: 100,
         })
     }
 
@@ -2574,6 +2678,7 @@ mod tests {
             slot: 100,
             is_startup: false,
             created_at: Timestamp::from(SystemTime::now()),
+            bank_id: Some(100),
         })
     }
 
@@ -2581,6 +2686,7 @@ mod tests {
     fn test_filters_all_empty() {
         // ensure Filter can be created with empty values
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions: HashMap::new(),
@@ -2614,6 +2720,7 @@ mod tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts,
             slots: HashMap::new(),
             transactions: HashMap::new(),
@@ -2652,6 +2759,7 @@ mod tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
@@ -2689,6 +2797,7 @@ mod tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
@@ -2732,6 +2841,7 @@ mod tests {
         );
 
         let mut config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions: transactions.clone(),
@@ -2799,6 +2909,7 @@ mod tests {
         );
 
         let mut config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions: transactions.clone(),
@@ -2866,6 +2977,7 @@ mod tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
@@ -2919,6 +3031,7 @@ mod tests {
         );
 
         let mut config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions: transactions.clone(),
@@ -3003,6 +3116,204 @@ mod tests {
     }
 
     #[test]
+    fn test_update_parent_filters_and_wire_encoding() {
+        use {
+            crate::plugin::message::{MessageDeshredUpdateParent, MessageEntryUpdateParent},
+            agave_geyser_plugin_interface::geyser_plugin_interface::{
+                ReplicaDeshredUpdateParentInfo, ReplicaEntryUpdateParentInfo,
+            },
+            prost::Message as _,
+            solana_hash::Hash,
+            yellowstone_grpc_proto::geyser::{
+                subscribe_update, subscribe_update_deshred, SubscribeRequestFilterEntry,
+                SubscribeUpdate, SubscribeUpdateDeshred,
+            },
+        };
+        let hash = Hash::new_from_array([7; 32]);
+        for (slot, bank_id, fec_index) in [(0, 0, 0), (u64::MAX, u64::MAX, u32::MAX)] {
+            let entry = Arc::new(MessageEntryUpdateParent::from_geyser(
+                &ReplicaEntryUpdateParentInfo {
+                    slot,
+                    cleared_bank_id: bank_id,
+                    parent_slot: slot.saturating_sub(1),
+                    parent_block_id: &hash,
+                },
+            ));
+            let deshred = Arc::new(MessageDeshredUpdateParent::from_geyser(
+                &ReplicaDeshredUpdateParentInfo {
+                    slot,
+                    update_parent_fec_set_index: fec_index,
+                    parent_slot: slot.saturating_sub(1),
+                    parent_block_id: &hash,
+                },
+            ));
+            assert_eq!(entry.update_parent.parent_block_id, vec![7; 32]);
+            assert_eq!(deshred.update_parent.parent_block_id, vec![7; 32]);
+            let entry_msg = Message::EntryUpdateParent(Arc::clone(&entry));
+            let deshred_msg = Message::DeshredUpdateParent(Arc::clone(&deshred));
+            // Update parent messages are opt-in: subscribing to entries or deshred
+            // transactions alone must not deliver them.
+            for (subscribed, include_update_parent) in [
+                (false, None),
+                (true, None),
+                (true, Some(false)),
+                (true, Some(true)),
+            ] {
+                let delivered = subscribed && include_update_parent == Some(true);
+                let mut request = SubscribeRequest::default();
+                let mut deshred_request = SubscribeDeshredRequest::default();
+                if subscribed {
+                    request.entry.insert(
+                        "entries".into(),
+                        SubscribeRequestFilterEntry {
+                            include_update_parent,
+                        },
+                    );
+                    deshred_request.deshred_transactions.insert(
+                        "transactions".into(),
+                        SubscribeRequestFilterDeshredTransactions {
+                            vote: Some(true),
+                            account_include: vec![Pubkey::new_unique().to_string()],
+                            include_update_parent,
+                            ..Default::default()
+                        },
+                    );
+                }
+                let filter = Filter::new(
+                    &request,
+                    &FilterLimits::default(),
+                    &mut create_filter_names(),
+                )
+                .unwrap();
+                let deshred_filter = DeshredFilter::new(
+                    &deshred_request,
+                    &FilterLimits::default(),
+                    &mut create_filter_names(),
+                )
+                .unwrap();
+                assert!(filter.get_updates(&deshred_msg, None).is_empty());
+                assert!(deshred_filter.get_updates(&entry_msg, None).is_empty());
+                let updates = filter.get_updates(&entry_msg, None);
+                let deshred_updates = deshred_filter.get_updates(&deshred_msg, None);
+                assert_eq!(updates.len(), usize::from(delivered));
+                assert_eq!(deshred_updates.len(), usize::from(delivered));
+                if delivered {
+                    let bytes = updates[0].encode_to_vec();
+                    assert_eq!(bytes.len(), updates[0].encoded_len());
+                    let decoded = SubscribeUpdate::decode(bytes.as_slice()).unwrap();
+                    assert_eq!(decoded.filters, vec!["entries"]);
+                    assert_eq!(decoded.created_at, Some(entry.created_at));
+                    assert_eq!(
+                        decoded.update_oneof,
+                        Some(subscribe_update::UpdateOneof::EntryUpdateParent(
+                            entry.update_parent.clone()
+                        ))
+                    );
+                    assert_eq!(updates[0].as_subscribe_update(), decoded);
+                    let bytes = deshred_updates[0].encode_to_vec();
+                    assert_eq!(bytes.len(), deshred_updates[0].encoded_len());
+                    let decoded = SubscribeUpdateDeshred::decode(bytes.as_slice()).unwrap();
+                    assert_eq!(decoded.filters, vec!["transactions"]);
+                    assert_eq!(decoded.created_at, Some(deshred.created_at));
+                    assert_eq!(
+                        decoded.update_oneof,
+                        Some(subscribe_update_deshred::UpdateOneof::DeshredUpdateParent(
+                            deshred.update_parent.clone()
+                        ))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_update_parent_reaches_only_opted_in_filter_names() {
+        use {
+            crate::plugin::message::{MessageDeshredUpdateParent, MessageEntryUpdateParent},
+            agave_geyser_plugin_interface::geyser_plugin_interface::{
+                ReplicaDeshredUpdateParentInfo, ReplicaEntryUpdateParentInfo,
+            },
+            solana_hash::Hash,
+            yellowstone_grpc_proto::geyser::SubscribeRequestFilterEntry,
+        };
+        let hash = Hash::new_from_array([7; 32]);
+        let entry_msg = Message::EntryUpdateParent(Arc::new(
+            MessageEntryUpdateParent::from_geyser(&ReplicaEntryUpdateParentInfo {
+                slot: 10,
+                cleared_bank_id: 3,
+                parent_slot: 8,
+                parent_block_id: &hash,
+            }),
+        ));
+        let deshred_msg = Message::DeshredUpdateParent(Arc::new(
+            MessageDeshredUpdateParent::from_geyser(&ReplicaDeshredUpdateParentInfo {
+                slot: 10,
+                update_parent_fec_set_index: 32,
+                parent_slot: 8,
+                parent_block_id: &hash,
+            }),
+        ));
+        let request = SubscribeRequest {
+            entry: HashMap::from([
+                ("plain".to_owned(), SubscribeRequestFilterEntry::default()),
+                (
+                    "parents".to_owned(),
+                    SubscribeRequestFilterEntry {
+                        include_update_parent: Some(true),
+                    },
+                ),
+            ]),
+            ..Default::default()
+        };
+        let deshred_request = SubscribeDeshredRequest {
+            deshred_transactions: HashMap::from([
+                (
+                    "plain".to_owned(),
+                    SubscribeRequestFilterDeshredTransactions {
+                        vote: Some(false),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "parents".to_owned(),
+                    SubscribeRequestFilterDeshredTransactions {
+                        vote: Some(false),
+                        include_update_parent: Some(true),
+                        ..Default::default()
+                    },
+                ),
+            ]),
+            ..Default::default()
+        };
+        let filter = Filter::new(
+            &request,
+            &FilterLimits::default(),
+            &mut create_filter_names(),
+        )
+        .unwrap();
+        let deshred_filter = DeshredFilter::new(
+            &deshred_request,
+            &FilterLimits::default(),
+            &mut create_filter_names(),
+        )
+        .unwrap();
+
+        let updates = filter.get_updates(&entry_msg, None);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].as_subscribe_update().filters, vec!["parents"]);
+        let updates = deshred_filter.get_updates(&deshred_msg, None);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(
+            updates[0]
+                .filters
+                .iter()
+                .map(|name| name.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["parents"]
+        );
+    }
+
+    #[test]
     fn test_deshred_filter_empty_rejects() {
         let mut deshred_transactions = HashMap::new();
         deshred_transactions.insert(
@@ -3012,6 +3323,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                include_update_parent: None,
             },
         );
 
@@ -3040,6 +3352,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                include_update_parent: None,
             },
         );
 
@@ -3085,6 +3398,7 @@ mod tests {
                 account_include: vec![key_b.to_string()],
                 account_exclude: vec![],
                 account_required: vec![],
+                include_update_parent: None,
             },
         );
 
@@ -3126,6 +3440,7 @@ mod tests {
                 account_include: vec![key_alt_w.to_string()],
                 account_exclude: vec![],
                 account_required: vec![],
+                include_update_parent: None,
             },
         );
 
@@ -3158,6 +3473,7 @@ mod tests {
                 account_include: vec![key_alt_r.to_string()],
                 account_exclude: vec![],
                 account_required: vec![],
+                include_update_parent: None,
             },
         );
         let config2 = SubscribeDeshredRequest {
@@ -3193,6 +3509,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![key_b.to_string()],
                 account_required: vec![],
+                include_update_parent: None,
             },
         );
 
@@ -3233,6 +3550,7 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![key_b.to_string(), key_c.to_string()],
+                include_update_parent: None,
             },
         );
 
@@ -3323,6 +3641,7 @@ mod tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts: HashMap::new(),
             slots: HashMap::new(),
             transactions,
@@ -3599,6 +3918,7 @@ mod account_filter_regression_tests {
             slot: 42,
             is_startup: false,
             created_at: Timestamp::default(),
+            bank_id: Some(42),
         });
         let updates = filter.get_updates(&Message::Account(message), None);
         assert!(updates.len() <= 1);
@@ -4728,7 +5048,7 @@ mod filter_kind_coverage {
     #[test]
     fn entry_filter_matches_every_entry_and_absence_yields_nothing() {
         let filter = build(SubscribeRequest {
-            entry: HashMap::from([("e".to_owned(), SubscribeRequestFilterEntry {})]),
+            entry: HashMap::from([("e".to_owned(), SubscribeRequestFilterEntry::default())]),
             ..Default::default()
         });
         let updates = filter.get_updates(&Message::Entry(fixtures::message_entry(42, 3)), None);
@@ -4758,6 +5078,134 @@ mod filter_kind_coverage {
         let empty = build(SubscribeRequest::default());
         assert!(empty
             .get_updates(&Message::BlockMeta(fixtures::message_block_meta(42)), None)
+            .is_empty());
+    }
+
+    #[test]
+    fn block_footer_filter_matches_and_reports_every_subscribed_name() {
+        let filter = build(SubscribeRequest {
+            block_footer: HashMap::from([
+                ("a".to_owned(), SubscribeRequestFilterBlockFooter::default()),
+                ("b".to_owned(), SubscribeRequestFilterBlockFooter::default()),
+            ]),
+            ..Default::default()
+        });
+
+        let updates = filter.get_updates(
+            &Message::BlockFooter(fixtures::message_block_footer(42, 7)),
+            None,
+        );
+        assert_eq!(updates.len(), 1, "one update carrying both filter names");
+        assert_eq!(matched_names(&updates), ["a", "b"]);
+
+        let empty = build(SubscribeRequest::default());
+        assert!(empty
+            .get_updates(
+                &Message::BlockFooter(fixtures::message_block_footer(42, 7)),
+                None
+            )
+            .is_empty());
+    }
+
+    #[test]
+    fn block_footer_certificate_selection_on_wire() {
+        use {
+            prost::Message as _,
+            yellowstone_grpc_proto::geyser::{subscribe_update::UpdateOneof, SubscribeUpdate},
+        };
+
+        for certificates in [
+            [None, None, None],
+            [Some(vec![1; 96]), Some(Vec::new()), Some(vec![2; 48])],
+        ] {
+            let mut source = fixtures::message_block_footer(42, 7);
+            let footer = &mut Arc::make_mut(&mut source).block_footer;
+            [
+                footer.block_final_cert,
+                footer.skip_reward_cert,
+                footer.notar_reward_cert,
+            ] = certificates;
+            let original = source.block_footer.clone();
+
+            for settings in [
+                vec![("default", None)],
+                vec![("false", Some(false))],
+                vec![("true", Some(true))],
+                vec![
+                    ("default", None),
+                    ("false", Some(false)),
+                    ("true", Some(true)),
+                    ("also_true", Some(true)),
+                ],
+            ] {
+                let request = SubscribeRequest {
+                    block_footer: settings
+                        .iter()
+                        .map(|(name, include_certificates)| {
+                            (
+                                name.to_string(),
+                                SubscribeRequestFilterBlockFooter {
+                                    include_certificates: *include_certificates,
+                                },
+                            )
+                        })
+                        .collect(),
+                    ..Default::default()
+                };
+                let request = SubscribeRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+                let updates =
+                    build(request).get_updates(&Message::BlockFooter(Arc::clone(&source)), None);
+                assert_eq!(updates.len(), if settings.len() == 1 { 1 } else { 2 });
+                let mut names = Vec::new();
+                for update in updates {
+                    let encoded = update.encode_to_vec();
+                    assert_eq!(encoded.len(), update.encoded_len());
+                    let decoded = SubscribeUpdate::decode(encoded.as_slice()).unwrap();
+                    assert_eq!(decoded, update.as_subscribe_update());
+                    assert_eq!(decoded.created_at, Some(source.created_at));
+                    let Some(UpdateOneof::BlockFooter(actual)) = decoded.update_oneof else {
+                        panic!("expected a block footer");
+                    };
+                    for name in decoded.filters {
+                        let include = settings.iter().find(|(key, _)| *key == name).unwrap().1;
+                        let mut expected = original.clone();
+                        if include != Some(true) {
+                            expected.block_final_cert = None;
+                            expected.skip_reward_cert = None;
+                            expected.notar_reward_cert = None;
+                        }
+                        assert_eq!(actual, expected, "filter {name}");
+                        names.push(name);
+                    }
+                }
+                names.sort_unstable();
+                let mut expected_names = settings
+                    .iter()
+                    .map(|(name, _)| name.to_string())
+                    .collect::<Vec<_>>();
+                expected_names.sort_unstable();
+                assert_eq!(names, expected_names);
+                assert_eq!(
+                    source.block_footer, original,
+                    "shared source must stay intact"
+                );
+            }
+        }
+    }
+
+    // A footer must not reach a subscriber who only asked for block meta.
+    #[test]
+    fn blocks_meta_filter_does_not_match_a_block_footer() {
+        let filter = build(SubscribeRequest {
+            blocks_meta: HashMap::from([("a".to_owned(), SubscribeRequestFilterBlocksMeta {})]),
+            ..Default::default()
+        });
+
+        assert!(filter
+            .get_updates(
+                &Message::BlockFooter(fixtures::message_block_footer(42, 7)),
+                None
+            )
             .is_empty());
     }
 
@@ -5046,6 +5494,7 @@ mod cuckoo_tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts,
             slots: HashMap::new(),
             transactions: HashMap::new(),
@@ -5106,6 +5555,7 @@ mod cuckoo_tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts,
             slots: HashMap::new(),
             transactions: HashMap::new(),
@@ -5158,6 +5608,7 @@ mod cuckoo_tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts,
             slots: HashMap::new(),
             transactions: HashMap::new(),
@@ -5214,6 +5665,7 @@ mod cuckoo_tests {
         );
 
         let config = SubscribeRequest {
+            block_footer: Default::default(),
             accounts,
             slots: HashMap::new(),
             transactions: HashMap::new(),
@@ -5398,6 +5850,7 @@ mod cuckoo_tests {
                 },
                 slot: 100,
                 created_at: Timestamp::from(SystemTime::now()),
+                bank_id: 100,
             })
         }
 
@@ -5405,6 +5858,7 @@ mod cuckoo_tests {
             tx_filters: HashMap<String, SubscribeRequestFilterTransactions>,
         ) -> Filter {
             let config = SubscribeRequest {
+                block_footer: Default::default(),
                 accounts: HashMap::new(),
                 slots: HashMap::new(),
                 transactions: tx_filters,
@@ -5944,6 +6398,7 @@ mod cuckoo_tests {
             );
 
             let config = SubscribeRequest {
+                block_footer: Default::default(),
                 accounts: HashMap::new(),
                 slots: HashMap::new(),
                 transactions: HashMap::new(),
@@ -5990,6 +6445,7 @@ mod cuckoo_tests {
             );
 
             let config = SubscribeRequest {
+                block_footer: Default::default(),
                 accounts: HashMap::new(),
                 slots: HashMap::new(),
                 transactions: tx_filters,
@@ -6031,6 +6487,7 @@ mod cuckoo_tests {
             );
 
             let config = SubscribeRequest {
+                block_footer: Default::default(),
                 accounts: HashMap::new(),
                 slots: HashMap::new(),
                 transactions: tx_filters,

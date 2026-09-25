@@ -2,6 +2,7 @@ use {
     futures::stream::{Stream, StreamExt},
     std::{
         collections::{HashMap, HashSet, VecDeque},
+        hash::{DefaultHasher, Hash, Hasher},
         task::Poll,
     },
     tonic::Status,
@@ -14,6 +15,144 @@ use {
         },
     },
 };
+
+#[derive(Default)]
+pub(crate) struct CompleteBankDedup {
+    complete: HashMap<crate::BankRef, String>,
+    replay_hashes: HashMap<u64, HashSet<String>>,
+    replay: HashMap<crate::BankRef, BankReplay>,
+    statuses: HashMap<(u64, String), HashSet<i32>>,
+}
+
+enum BankReplay {
+    Pending(VecDeque<SubscribeUpdate>),
+    Duplicate(String),
+    Changed,
+}
+
+impl CompleteBankDedup {
+    pub(crate) fn is_complete(&self, bank: &crate::BankRef) -> bool {
+        self.complete.contains_key(bank)
+    }
+
+    /// Forget completion state below the replay boundary. A reconnect never replays those
+    /// slots, so their hashes and statuses are never compared again.
+    pub(crate) fn prune_before(&mut self, boundary: u64) {
+        self.complete.retain(|bank, _| bank.slot >= boundary);
+        self.statuses
+            .retain(|(bank_slot, _), _| *bank_slot >= boundary);
+    }
+
+    pub(crate) fn begin_replay(&mut self, partial: &[crate::BankRef]) {
+        self.replay_hashes.clear();
+        let partial_slots: HashSet<_> = partial.iter().map(|bank| bank.slot).collect();
+        for (bank, hash) in &self.complete {
+            if !partial_slots.contains(&bank.slot) {
+                self.replay_hashes
+                    .entry(bank.slot)
+                    .or_default()
+                    .insert(hash.clone());
+            }
+        }
+        self.replay.clear();
+    }
+
+    pub(crate) fn delivered(&mut self, bank: crate::BankRef, update: &SubscribeUpdate) {
+        match update.update_oneof.as_ref() {
+            Some(UpdateOneof::BlockMeta(meta)) if !meta.blockhash.is_empty() => {
+                self.complete.insert(bank, meta.blockhash.clone());
+            }
+            Some(UpdateOneof::Slot(status)) => {
+                if let Some(hash) = self.complete.get(&bank) {
+                    self.statuses
+                        .entry((bank.slot, hash.clone()))
+                        .or_default()
+                        .insert(status.status);
+                }
+            }
+            Some(
+                UpdateOneof::Account(_)
+                | UpdateOneof::Transaction(_)
+                | UpdateOneof::Entry(_)
+                | UpdateOneof::TransactionStatus(_)
+                | UpdateOneof::Block(_)
+                | UpdateOneof::BlockFooter(_),
+            ) => {
+                // Payloads after BlockMeta invalidate that bank's completion marker.
+                self.complete.remove(&bank);
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn filter(
+        &mut self,
+        generation: u64,
+        update: SubscribeUpdate,
+        ready: &mut VecDeque<SubscribeUpdate>,
+    ) {
+        let Some(bank) = crate::BankRef::from_update(generation, &update) else {
+            ready.push_back(update);
+            return;
+        };
+        let Some(hashes) = self.replay_hashes.get(&bank.slot) else {
+            ready.push_back(update);
+            return;
+        };
+        let replay = self
+            .replay
+            .entry(bank)
+            .or_insert_with(|| BankReplay::Pending(VecDeque::new()));
+        match replay {
+            BankReplay::Changed => ready.push_back(update),
+            BankReplay::Duplicate(hash) => {
+                let hash = hash.clone();
+                self.new_statuses(bank.slot, &hash, std::iter::once(update), ready);
+            }
+            BankReplay::Pending(buffered) => {
+                let hash = match update.update_oneof.as_ref() {
+                    Some(UpdateOneof::BlockMeta(meta)) => Some(meta.blockhash.clone()),
+                    _ => None,
+                };
+                buffered.push_back(update);
+                if let Some(hash) = hash {
+                    let mut buffered = std::mem::take(buffered);
+                    if hashes.contains(&hash) {
+                        *replay = BankReplay::Duplicate(hash.clone());
+                        self.complete.insert(bank, hash.clone());
+                        self.new_statuses(bank.slot, &hash, buffered, ready);
+                    } else {
+                        *replay = BankReplay::Changed;
+                        ready.append(&mut buffered);
+                    }
+                }
+            }
+        }
+    }
+
+    fn new_statuses(
+        &mut self,
+        slot: u64,
+        hash: &str,
+        buffered: impl IntoIterator<Item = SubscribeUpdate>,
+        ready: &mut VecDeque<SubscribeUpdate>,
+    ) {
+        let seen = self.statuses.entry((slot, hash.to_owned())).or_default();
+        ready.extend(
+            buffered
+                .into_iter()
+                .filter(|update| match update.update_oneof.as_ref() {
+                    Some(UpdateOneof::Slot(status)) => {
+                        matches!(
+                            status.status(),
+                            SlotStatus::SlotConfirmed | SlotStatus::SlotFinalized
+                        ) && seen.insert(status.status)
+                    }
+                    _ => false,
+                }),
+        );
+    }
+}
 
 pub const DEFAULT_SLOT_RETENTION: usize = 250;
 
@@ -55,6 +194,9 @@ impl<T> ReplayBuffer<T> {
     }
 
     fn prune(&mut self, state: &DedupState) {
+        if self.quarantine.is_empty() {
+            return;
+        }
         self.quarantine
             .retain(|slot, _| state.inflight.contains_key(slot) || state.sealed.contains_key(slot));
     }
@@ -90,6 +232,14 @@ impl<T: Dedupable> ReplayBuffer<T> {
 
 pub trait ReconnectCounter {
     fn reconnect_count(&self) -> u32;
+
+    /// Inclusive replay boundary requested for the active replacement connection.
+    fn replay_from_slot(&self) -> Option<u64> {
+        None
+    }
+
+    /// Every slot below `slot` is settled, so a later reconnect does not need to replay it.
+    fn settle_before(&mut self, _slot: u64) {}
 }
 
 /// Wrapper stream that filters out duplicate subscribe updates.
@@ -170,14 +320,29 @@ where
     }
 }
 
+impl<S: ReconnectCounter, T> ReconnectCounter for DedupStream<S, T> {
+    fn reconnect_count(&self) -> u32 {
+        self.inner.reconnect_count()
+    }
+
+    fn replay_from_slot(&self) -> Option<u64> {
+        self.inner.replay_from_slot()
+    }
+
+    fn settle_before(&mut self, slot: u64) {
+        self.inner.settle_before(slot);
+    }
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub(crate) enum DedupKey {
-    Slot(i32),                           // status
-    Account([u8; 32], Option<[u8; 64]>), // pubkey, txn_signature
-    Transaction(u64),                    // index
-    TransactionStatus(u64),              // index
-    Entry(u64),                          // index
-    BlockMeta(String),                   // blockhash,
+    Slot(i32),                                        // status
+    Account([u8; 32], Option<[u8; 64]>, Option<u64>), // pubkey, txn_signature, content hash
+    Transaction(u64),                                 // index
+    TransactionStatus(u64),                           // index
+    Entry(u64),                                       // index
+    BlockMeta(String),                                // blockhash,
+    BlockFooter(u64),                                 // bank_id
     Block(u64),
     DeshredTransaction([u8; 64]), // signature
 }
@@ -227,7 +392,24 @@ impl Dedupable for SubscribeUpdate {
                     .txn_signature
                     .as_ref()
                     .and_then(|s| <[u8; 64]>::try_from(s.as_slice()).ok());
-                Some((m.slot, DedupKey::Account(pubkey, sig)))
+                // A transaction writes an account once, so pubkey and signature identify a
+                // write on any provider. Writes without a signature, such as the two Clock
+                // sysvar writes per slot on Alpenglow, are told apart by their content:
+                // write_version would also separate them, but it is a per-validator counter
+                // and would not match the same write replayed by another endpoint.
+                let content = sig.is_none().then(|| {
+                    let mut hasher = DefaultHasher::new();
+                    (
+                        info.lamports,
+                        &info.owner,
+                        info.executable,
+                        info.rent_epoch,
+                        &info.data,
+                    )
+                        .hash(&mut hasher);
+                    hasher.finish()
+                });
+                Some((m.slot, DedupKey::Account(pubkey, sig, content)))
             }
             UpdateOneof::Transaction(m) => {
                 let info = m.transaction.as_ref()?;
@@ -238,8 +420,10 @@ impl Dedupable for SubscribeUpdate {
             }
             UpdateOneof::Entry(m) => Some((m.slot, DedupKey::Entry(m.index))),
             UpdateOneof::BlockMeta(m) => Some((m.slot, DedupKey::BlockMeta(m.blockhash.clone()))),
+            // One footer per bank, so a fork can produce several in the same slot.
+            UpdateOneof::BlockFooter(m) => Some((m.slot, DedupKey::BlockFooter(m.bank_id))),
             UpdateOneof::Block(m) => Some((m.slot, DedupKey::Block(m.slot))),
-            UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => None,
+            UpdateOneof::EntryUpdateParent(_) | UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => None,
         }
     }
 }
@@ -255,7 +439,9 @@ impl Dedupable for SubscribeUpdateDeshred {
                 Some((m.slot, DedupKey::DeshredTransaction(sig)))
             }
             DeshredUpdateOneof::Slot(m) => Some((m.slot, DedupKey::Slot(m.status))),
-            DeshredUpdateOneof::Ping(_) | DeshredUpdateOneof::Pong(_) => None,
+            DeshredUpdateOneof::DeshredUpdateParent(_)
+            | DeshredUpdateOneof::Ping(_)
+            | DeshredUpdateOneof::Pong(_) => None,
         }
     }
 }
@@ -280,7 +466,11 @@ impl DedupState {
     pub(crate) fn observe(&mut self, slot: u64, key: DedupKey) -> Observation {
         match key {
             DedupKey::Slot(status) => {
-                // CreatedBank during replay keeps partial state for reconciliation.
+                // CreatedBank means a bank was just created for this slot. Outside replay it
+                // wipes prior state, which recovers from a rollback; during replay it keeps the
+                // partial state so the replay can be reconciled against what was delivered.
+                // The server only sends CreatedBank to filters with interslot_updates=true, so
+                // without that flag this branch is dormant.
                 if status == CREATED_BANK_STATUS {
                     let partial = self.inflight.get(&slot);
                     if !partial.is_some_and(|state| state.replaying) {
@@ -387,8 +577,9 @@ mod tests {
     use {
         super::*,
         futures::{stream, StreamExt},
-        yellowstone_grpc_proto::prelude::{
-            subscribe_update::UpdateOneof, SubscribeUpdatePing, SubscribeUpdateSlot,
+        yellowstone_grpc_proto::{
+            geyser::SlotStatus::{SlotCompleted, SlotDead, SlotFirstShredReceived},
+            prelude::{subscribe_update::UpdateOneof, SubscribeUpdatePing, SubscribeUpdateSlot},
         },
     };
 
@@ -567,6 +758,17 @@ mod tests {
     }
 
     fn make_slot_msg(slot: u64, status: i32) -> SubscribeUpdate {
+        let bank_id = if [
+            SlotFirstShredReceived as i32,
+            SlotCompleted as i32,
+            SlotDead as i32,
+        ]
+        .contains(&status)
+        {
+            None
+        } else {
+            Some(slot)
+        };
         SubscribeUpdate {
             filters: vec![],
             update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
@@ -574,6 +776,7 @@ mod tests {
                 parent: None,
                 status,
                 dead_error: None,
+                bank_id,
             })),
             created_at: None,
         }
@@ -593,6 +796,7 @@ mod tests {
                     parent_blockhash: String::new(),
                     executed_transaction_count: 0,
                     entries_count: 0,
+                    bank_id: slot,
                 },
             )),
             created_at: None,
@@ -613,6 +817,7 @@ mod tests {
                     parent_blockhash: String::new(),
                     executed_transaction_count: 0,
                     entries_count: 0,
+                    bank_id: slot,
                 },
             )),
             created_at: None,
@@ -636,10 +841,72 @@ mod tests {
                     }),
                     slot,
                     is_startup: false,
+                    bank_id: Some(slot),
                 },
             )),
             created_at: None,
         }
+    }
+
+    fn unsigned_write(slot: u64, data: u8, write_version: u64) -> SubscribeUpdate {
+        let mut msg = make_account_msg(slot);
+        if let Some(UpdateOneof::Account(update)) = &mut msg.update_oneof {
+            let account = update.account.as_mut().expect("test account");
+            account.txn_signature = None;
+            account.data = vec![data; 40].into();
+            account.write_version = write_version;
+        }
+        msg
+    }
+
+    // On Alpenglow the Clock sysvar is written twice per slot with no transaction signature,
+    // once at bank creation and once at the block footer. Keyed by pubkey and signature only,
+    // the second write was dropped as a duplicate.
+    #[test]
+    fn unsigned_writes_with_different_content_are_distinct() {
+        let mut dedup = DedupState::default();
+        assert!(matches!(
+            observe(&mut dedup, &unsigned_write(10, 1, 1)),
+            Observation::New
+        ));
+        assert!(matches!(
+            observe(&mut dedup, &unsigned_write(10, 2, 2)),
+            Observation::New
+        ));
+    }
+
+    // write_version is a per-validator counter, so the same unsigned write replayed by another
+    // endpoint carries a different one and must still be recognised.
+    #[test]
+    fn unsigned_write_from_another_endpoint_is_a_duplicate() {
+        let mut dedup = DedupState::default();
+        assert!(matches!(
+            observe(&mut dedup, &unsigned_write(10, 1, 7)),
+            Observation::New
+        ));
+        assert!(matches!(
+            observe(&mut dedup, &unsigned_write(10, 1, 9_000)),
+            Observation::Duplicate
+        ));
+    }
+
+    // write_version is local to a validator process, so a signed write replayed by another
+    // provider must still be recognised by pubkey and signature alone.
+    #[test]
+    fn signed_writes_dedup_across_write_versions() {
+        let mut dedup = DedupState::default();
+        let mut other_provider = make_account_msg(10);
+        if let Some(UpdateOneof::Account(update)) = &mut other_provider.update_oneof {
+            update.account.as_mut().expect("test account").write_version = 99;
+        }
+        assert!(matches!(
+            observe(&mut dedup, &make_account_msg(10)),
+            Observation::New
+        ));
+        assert!(matches!(
+            observe(&mut dedup, &other_provider),
+            Observation::Duplicate
+        ));
     }
 
     fn observe(dedup: &mut DedupState, msg: &SubscribeUpdate) -> Observation {

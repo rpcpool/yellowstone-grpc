@@ -3,8 +3,8 @@ use {
         convert_to,
         filter::name::FilterNames,
         message::{
-            MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockMeta, MessageEntry,
-            MessageSlot, MessageTransaction, MessageTransactionInfo, SlotStatus,
+            MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockFooter, MessageBlockMeta,
+            MessageEntry, MessageSlot, MessageTransaction, MessageTransactionInfo, SlotStatus,
         },
     },
     bytes::Bytes,
@@ -18,7 +18,10 @@ use {
         sync::{Arc, OnceLock},
         time::Duration,
     },
-    yellowstone_grpc_proto::{geyser::SubscribeUpdateBlockMeta, solana::storage::confirmed_block},
+    yellowstone_grpc_proto::{
+        geyser::{SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta},
+        solana::storage::confirmed_block,
+    },
 };
 
 pub const TOKEN_ACCOUNT_LEN: usize = 165;
@@ -77,6 +80,7 @@ pub fn message_account(account: MessageAccountInfo) -> Arc<MessageAccount> {
         slot: 100,
         is_startup: false,
         created_at: Timestamp::default(),
+        bank_id: Some(100),
     })
 }
 
@@ -85,12 +89,24 @@ pub fn simple_message_account(pubkey: Pubkey, owner: Pubkey) -> Arc<MessageAccou
 }
 
 pub fn message_slot(slot: u64, status: SlotStatus) -> MessageSlot {
+    let bank_id = if [
+        SlotStatus::Completed,
+        SlotStatus::Dead,
+        SlotStatus::FirstShredReceived,
+    ]
+    .contains(&status)
+    {
+        None
+    } else {
+        Some(slot)
+    };
     MessageSlot {
         slot,
         parent: Some(slot.saturating_sub(1)),
         status,
         dead_error: None,
         created_at: Timestamp::default(),
+        bank_id,
     }
 }
 
@@ -102,6 +118,23 @@ pub fn message_entry(slot: u64, index: usize) -> Arc<MessageEntry> {
         hash: Hash::default(),
         executed_transaction_count: 4,
         starting_transaction_index: 0,
+        created_at: Timestamp::default(),
+        bank_id: slot,
+    })
+}
+
+pub fn message_block_footer(slot: u64, bank_id: u64) -> Arc<MessageBlockFooter> {
+    Arc::new(MessageBlockFooter {
+        block_footer: SubscribeUpdateBlockFooter {
+            slot,
+            bank_id,
+            bank_hash: vec![1; 32],
+            block_producer_time_nanos: 1_000,
+            block_user_agent: b"agave".to_vec(),
+            block_final_cert: None,
+            skip_reward_cert: None,
+            notar_reward_cert: None,
+        },
         created_at: Timestamp::default(),
     })
 }
@@ -171,5 +204,6 @@ pub fn message_transaction(
         },
         slot: 100,
         created_at: Timestamp::default(),
+        bank_id: 100,
     })
 }

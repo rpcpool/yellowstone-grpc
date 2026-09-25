@@ -34,11 +34,11 @@ use {
             SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestAccountsDataSlice,
             SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
             SubscribeRequestFilterAccountsFilterLamports,
-            SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlocks,
-            SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterDeshredTransactions,
-            SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions, SubscribeRequestPing, SubscribeUpdateAccountInfo,
-            SubscribeUpdateEntry, SubscribeUpdateTransactionInfo,
+            SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlockFooter,
+            SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
+            SubscribeRequestFilterDeshredTransactions, SubscribeRequestFilterEntry,
+            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions, SubscribeRequestPing,
+            SubscribeUpdateAccountInfo, SubscribeUpdateEntry, SubscribeUpdateTransactionInfo,
         },
         prost::Message,
     },
@@ -51,6 +51,7 @@ type TransactionsStatusFilterMap = HashMap<String, SubscribeRequestFilterTransac
 type EntryFilterMap = HashMap<String, SubscribeRequestFilterEntry>;
 type BlocksFilterMap = HashMap<String, SubscribeRequestFilterBlocks>;
 type BlocksMetaFilterMap = HashMap<String, SubscribeRequestFilterBlocksMeta>;
+type BlockFooterFilterMap = HashMap<String, SubscribeRequestFilterBlockFooter>;
 type DeshredTransactionsFilterMap = HashMap<String, SubscribeRequestFilterDeshredTransactions>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -366,6 +367,10 @@ struct ActionSubscribe {
     #[clap(long)]
     entries: bool,
 
+    /// Include entry update parent messages
+    #[clap(long)]
+    entries_include_update_parent: Option<bool>,
+
     /// Subscribe on block updates
     #[clap(long)]
     blocks: bool,
@@ -389,6 +394,14 @@ struct ActionSubscribe {
     /// Subscribe on block meta updates (without transactions)
     #[clap(long)]
     blocks_meta: bool,
+
+    /// Subscribe on Alpenglow block footer updates
+    #[clap(long)]
+    block_footer: bool,
+
+    /// Include available certificates in block footer updates
+    #[clap(long)]
+    block_footer_include_certificates: Option<bool>,
 
     /// Re-send message from slot
     #[clap(long)]
@@ -425,6 +438,10 @@ struct ActionSubscribeDeshred {
     /// Filter by required account keys - all must be present (static or ALT-loaded)
     #[clap(long)]
     account_required: Vec<String>,
+
+    /// Include deshred update parent messages
+    #[clap(long)]
+    include_update_parent: Option<bool>,
 
     /// Send ping in subscribe request
     #[clap(long)]
@@ -572,7 +589,12 @@ impl Action {
 
                 let mut entries: EntryFilterMap = HashMap::new();
                 if args.entries {
-                    entries.insert("client".to_owned(), SubscribeRequestFilterEntry {});
+                    entries.insert(
+                        "client".to_owned(),
+                        SubscribeRequestFilterEntry {
+                            include_update_parent: args.entries_include_update_parent,
+                        },
+                    );
                 }
 
                 let mut blocks: BlocksFilterMap = HashMap::new();
@@ -592,6 +614,16 @@ impl Action {
                 let mut blocks_meta: BlocksMetaFilterMap = HashMap::new();
                 if args.blocks_meta {
                     blocks_meta.insert("client".to_owned(), SubscribeRequestFilterBlocksMeta {});
+                }
+
+                let mut block_footer: BlockFooterFilterMap = HashMap::new();
+                if args.block_footer {
+                    block_footer.insert(
+                        "client".to_owned(),
+                        SubscribeRequestFilterBlockFooter {
+                            include_certificates: args.block_footer_include_certificates,
+                        },
+                    );
                 }
 
                 let mut accounts_data_slice = Vec::new();
@@ -619,6 +651,7 @@ impl Action {
                         entry: entries,
                         blocks,
                         blocks_meta,
+                        block_footer,
                         commitment: commitment.map(|x| x as i32),
                         accounts_data_slice,
                         ping,
@@ -643,6 +676,7 @@ impl Action {
                         account_include: args.account_include.clone(),
                         account_exclude: args.account_exclude.clone(),
                         account_required: args.account_required.clone(),
+                        include_update_parent: args.include_update_parent,
                     },
                 );
 
@@ -826,6 +860,8 @@ async fn geyser_subscribe(
     let pb_entries = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("entries"))?;
     let mut pb_blocks_mt_c = 0;
     let pb_blocks_mt = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("blocks meta"))?;
+    let mut pb_block_footer_c = 0;
+    let pb_block_footer = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("block footer"))?;
     let mut pb_blocks_c = 0;
     let pb_blocks = crate_progress_bar(&pb_multi, ProgressBarTpl::Msg("blocks"))?;
     let mut pb_pp_c = 0;
@@ -847,8 +883,13 @@ async fn geyser_subscribe(
                         Some(UpdateOneof::Slot(_)) => (&mut pb_slots_c, &pb_slots),
                         Some(UpdateOneof::Transaction(_)) => (&mut pb_txs_c, &pb_txs),
                         Some(UpdateOneof::TransactionStatus(_)) => (&mut pb_txs_st_c, &pb_txs_st),
-                        Some(UpdateOneof::Entry(_)) => (&mut pb_entries_c, &pb_entries),
+                        Some(UpdateOneof::Entry(_) | UpdateOneof::EntryUpdateParent(_)) => {
+                            (&mut pb_entries_c, &pb_entries)
+                        }
                         Some(UpdateOneof::BlockMeta(_)) => (&mut pb_blocks_mt_c, &pb_blocks_mt),
+                        Some(UpdateOneof::BlockFooter(_)) => {
+                            (&mut pb_block_footer_c, &pb_block_footer)
+                        }
                         Some(UpdateOneof::Block(_)) => (&mut pb_blocks_c, &pb_blocks),
                         Some(UpdateOneof::Ping(_)) => (&mut pb_pp_c, &pb_pp),
                         Some(UpdateOneof::Pong(_)) => (&mut pb_pp_c, &pb_pp),
@@ -946,6 +987,24 @@ async fn geyser_subscribe(
                             }),
                         );
                     }
+                    Some(UpdateOneof::EntryUpdateParent(msg)) => info!("{msg:?}"),
+                    Some(UpdateOneof::BlockFooter(msg)) => {
+                        print_update(
+                            "blockfooter",
+                            created_at,
+                            &filters,
+                            json!({
+                                "slot": msg.slot,
+                                "bankId": msg.bank_id,
+                                "bankHash": bs58::encode(msg.bank_hash).into_string(),
+                                "blockProducerTimeNanos": msg.block_producer_time_nanos,
+                                "blockUserAgent": String::from_utf8_lossy(&msg.block_user_agent),
+                                "blockFinalCert": msg.block_final_cert.map(|cert| bs58::encode(cert).into_string()),
+                                "skipRewardCert": msg.skip_reward_cert.map(|cert| bs58::encode(cert).into_string()),
+                                "notarRewardCert": msg.notar_reward_cert.map(|cert| bs58::encode(cert).into_string()),
+                            }),
+                        );
+                    }
                     Some(UpdateOneof::Block(msg)) => {
                         print_update(
                             "block",
@@ -1003,6 +1062,7 @@ async fn geyser_subscribe(
 
             subscribe_tx
                 .send(SubscribeRequest {
+                    block_footer: Default::default(),
                     slots: new_slots.clone(),
                     accounts: HashMap::default(),
                     transactions: HashMap::default(),
@@ -1047,7 +1107,10 @@ async fn geyser_subscribe_deshred(
                 if stats {
                     let encoded_len = msg.encoded_len() as u64;
                     let (pb_c, pb) = match msg.update_oneof {
-                        Some(DeshredUpdateOneof::DeshredTransaction(_)) => (&mut pb_txs_c, &pb_txs),
+                        Some(
+                            DeshredUpdateOneof::DeshredTransaction(_)
+                            | DeshredUpdateOneof::DeshredUpdateParent(_),
+                        ) => (&mut pb_txs_c, &pb_txs),
                         Some(DeshredUpdateOneof::Ping(_)) => (&mut pb_pp_c, &pb_pp),
                         Some(DeshredUpdateOneof::Pong(_)) => (&mut pb_pp_c, &pb_pp),
                         Some(DeshredUpdateOneof::Slot(_)) => (&mut pb_slot_c, &pb_slot),
@@ -1073,6 +1136,7 @@ async fn geyser_subscribe_deshred(
                     .try_into()
                     .context("failed to parse created_at")?;
                 match msg.update_oneof {
+                    Some(DeshredUpdateOneof::DeshredUpdateParent(msg)) => info!("{msg:?}"),
                     Some(DeshredUpdateOneof::DeshredTransaction(msg)) => {
                         let tx = msg
                             .transaction

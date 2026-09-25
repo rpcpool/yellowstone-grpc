@@ -1,15 +1,16 @@
 use {
     super::convert_to,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockInfoV4, ReplicaContactInfoV0_0_1,
+        ReplicaAccountInfoV3, ReplicaBlockFooterInfo, ReplicaBlockInfoV4, ReplicaContactInfoV0_0_1,
         ReplicaDeshredTransactionInfo, ReplicaDeshredTransactionInfoV2,
-        ReplicaDeshredTransactionInfoVersions, ReplicaEntryInfoV2, ReplicaTransactionInfoV3,
-        SlotStatus as GeyserSlotStatus,
+        ReplicaDeshredTransactionInfoVersions, ReplicaDeshredUpdateParentInfo, ReplicaEntryInfoV2,
+        ReplicaEntryUpdateParentInfo, ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
     },
     bytes::Bytes,
     foldhash::{HashSet as FoldHashSet, HashSetExt},
     prost_types::Timestamp,
-    solana_clock::Slot,
+    solana_clock::{BankId, Slot},
+    solana_entry::block_component::VersionedBlockFooter,
     solana_hash::{Hash, HASH_BYTES},
     solana_pubkey::Pubkey,
     solana_signature::Signature,
@@ -22,7 +23,8 @@ use {
     yellowstone_grpc_proto::{
         geyser::{
             CommitmentLevel as CommitmentLevelProto, SlotStatus as SlotStatusProto,
-            SubscribeUpdateBlockMeta,
+            SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta,
+            SubscribeUpdateDeshredUpdateParent, SubscribeUpdateEntryUpdateParent,
         },
         solana::storage::confirmed_block,
     },
@@ -152,10 +154,17 @@ pub struct MessageSlot {
     pub status: SlotStatus,
     pub dead_error: Option<String>,
     pub created_at: Timestamp,
+    // FIRST_SHRED_RECEIVED and COMPLETED does not have any bank id.
+    pub bank_id: Option<BankId>,
 }
 
 impl MessageSlot {
-    pub fn from_geyser(slot: Slot, parent: Option<Slot>, status: &GeyserSlotStatus) -> Self {
+    pub fn from_geyser(
+        slot: Slot,
+        parent: Option<Slot>,
+        status: &GeyserSlotStatus,
+        bank_id: Option<BankId>,
+    ) -> Self {
         Self {
             slot,
             parent,
@@ -166,6 +175,7 @@ impl MessageSlot {
                 None
             },
             created_at: Timestamp::from(SystemTime::now()),
+            bank_id,
         }
     }
 }
@@ -210,15 +220,29 @@ pub struct MessageAccount {
     pub account: MessageAccountInfo,
     pub slot: Slot,
     pub is_startup: bool,
+    // startup account update has no bank id.
+    pub bank_id: Option<BankId>,
     pub created_at: Timestamp,
 }
 
 impl MessageAccount {
-    pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>, slot: Slot, is_startup: bool) -> Self {
+    pub fn from_geyser(
+        info: &ReplicaAccountInfoV3<'_>,
+        slot: Slot,
+        is_startup: bool,
+        bank_id: Option<BankId>,
+    ) -> Self {
+        if is_startup {
+            assert!(
+                bank_id.is_none(),
+                "startup account update should have no bank id"
+            );
+        }
         Self {
             account: MessageAccountInfo::from_geyser(info),
             slot,
             is_startup,
+            bank_id,
             created_at: Timestamp::from(SystemTime::now()),
         }
     }
@@ -319,14 +343,16 @@ pub struct MessageTransaction {
     pub transaction: MessageTransactionInfo,
     pub slot: u64,
     pub created_at: Timestamp,
+    pub bank_id: BankId,
 }
 
 impl MessageTransaction {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>, slot: Slot) -> Self {
+    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>, slot: Slot, bank_id: BankId) -> Self {
         Self {
             transaction: MessageTransactionInfo::from_geyser(info),
             slot,
             created_at: Timestamp::from(SystemTime::now()),
+            bank_id,
         }
     }
 }
@@ -442,11 +468,12 @@ pub struct MessageEntry {
     pub hash: Hash,
     pub executed_transaction_count: u64,
     pub starting_transaction_index: u64,
+    pub bank_id: BankId,
     pub created_at: Timestamp,
 }
 
 impl MessageEntry {
-    pub fn from_geyser(info: &ReplicaEntryInfoV2) -> Self {
+    pub fn from_geyser(info: &ReplicaEntryInfoV2, bank_id: BankId) -> Self {
         Self {
             slot: info.slot,
             index: info.index,
@@ -458,8 +485,53 @@ impl MessageEntry {
                 .try_into()
                 .expect("failed convert usize to u64"),
             created_at: Timestamp::from(SystemTime::now()),
+            bank_id,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageBlockFooter {
+    pub block_footer: SubscribeUpdateBlockFooter,
+    pub created_at: Timestamp,
+}
+
+impl Deref for MessageBlockFooter {
+    type Target = SubscribeUpdateBlockFooter;
+
+    fn deref(&self) -> &Self::Target {
+        &self.block_footer
+    }
+}
+
+impl MessageBlockFooter {
+    pub fn from_geyser(info: &ReplicaBlockFooterInfo<'_>, bank_id: BankId) -> Self {
+        let VersionedBlockFooter::V1(footer) = info.block_footer;
+
+        Self {
+            block_footer: SubscribeUpdateBlockFooter {
+                slot: info.slot,
+                bank_id,
+                bank_hash: footer.bank_hash.to_bytes().to_vec(),
+                block_producer_time_nanos: footer.block_producer_time_nanos,
+                block_user_agent: footer.block_user_agent.clone(),
+                block_final_cert: serialize_cert(&footer.block_final_cert),
+                skip_reward_cert: serialize_cert(&footer.skip_reward_cert),
+                notar_reward_cert: serialize_cert(&footer.notar_reward_cert),
+            },
+            created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+}
+
+// The Alpenglow certificates travel as opaque wincode bytes, as the footer holds them.
+fn serialize_cert<T>(cert: &Option<T>) -> Option<Vec<u8>>
+where
+    T: wincode::SchemaWrite<wincode::config::DefaultConfig, Src = T>,
+{
+    cert.as_ref().map(|cert| {
+        wincode::serialize(cert).expect("block footer certificate to serialize to bytes")
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -483,7 +555,7 @@ impl DerefMut for MessageBlockMeta {
 }
 
 impl MessageBlockMeta {
-    pub fn from_geyser(info: &ReplicaBlockInfoV4<'_>) -> Self {
+    pub fn from_geyser(info: &ReplicaBlockInfoV4<'_>, bank_id: BankId) -> Self {
         Self {
             block_meta: SubscribeUpdateBlockMeta {
                 parent_slot: info.parent_slot,
@@ -498,6 +570,7 @@ impl MessageBlockMeta {
                 block_height: info.block_height.map(convert_to::create_block_height),
                 executed_transaction_count: info.executed_transaction_count,
                 entries_count: info.entry_count,
+                bank_id,
             },
             created_at: Timestamp::from(SystemTime::now()),
         }
@@ -621,12 +694,55 @@ pub enum ContactInfoMessage {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct MessageEntryUpdateParent {
+    pub update_parent: SubscribeUpdateEntryUpdateParent,
+    pub created_at: Timestamp,
+}
+
+impl MessageEntryUpdateParent {
+    pub fn from_geyser(info: &ReplicaEntryUpdateParentInfo<'_>) -> Self {
+        Self {
+            update_parent: SubscribeUpdateEntryUpdateParent {
+                slot: info.slot,
+                cleared_bank_id: info.cleared_bank_id,
+                parent_slot: info.parent_slot,
+                parent_block_id: info.parent_block_id.as_ref().to_vec(),
+            },
+            created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageDeshredUpdateParent {
+    pub update_parent: SubscribeUpdateDeshredUpdateParent,
+    pub created_at: Timestamp,
+}
+
+impl MessageDeshredUpdateParent {
+    pub fn from_geyser(info: &ReplicaDeshredUpdateParentInfo<'_>) -> Self {
+        Self {
+            update_parent: SubscribeUpdateDeshredUpdateParent {
+                slot: info.slot,
+                update_parent_fec_set_index: info.update_parent_fec_set_index,
+                parent_slot: info.parent_slot,
+                parent_block_id: info.parent_block_id.as_ref().to_vec(),
+            },
+            created_at: Timestamp::from(SystemTime::now()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Message {
+    DeshredUpdateParent(Arc<MessageDeshredUpdateParent>),
+    EntryUpdateParent(Arc<MessageEntryUpdateParent>),
     Slot(Arc<MessageSlot>),
     Account(Arc<MessageAccount>),
     Transaction(Arc<MessageTransaction>),
     DeshredTransaction(Arc<MessageDeshredTransaction>),
     Entry(Arc<MessageEntry>),
+    BlockFooter(Arc<MessageBlockFooter>),
     BlockMeta(Arc<MessageBlockMeta>),
     Block(Arc<MessageBlock>),
 }
@@ -639,7 +755,10 @@ impl Message {
             Self::Account(msg) => msg.slot,
             Self::Transaction(msg) => msg.slot,
             Self::DeshredTransaction(msg) => msg.slot,
+            Self::EntryUpdateParent(msg) => msg.update_parent.slot,
+            Self::DeshredUpdateParent(msg) => msg.update_parent.slot,
             Self::Entry(msg) => msg.slot,
+            Self::BlockFooter(msg) => msg.slot,
             Self::BlockMeta(msg) => msg.slot,
             Self::Block(msg) => msg.meta.slot,
         }

@@ -24,6 +24,7 @@ use {
     },
 };
 
+pub mod block_footer;
 pub mod blockmachine;
 pub mod deshred;
 pub mod gossip;
@@ -1396,7 +1397,7 @@ pub async fn all_sysvar_must_be_present_in_replay(config: &RunConfig) -> Result<
         account: sysvar_account_musthave,
         ..Default::default()
     };
-    let from_slot = tip.saturating_sub(900);
+    let from_slot = tip.saturating_sub(200);
     let subscription = SubscribeRequest {
         slots: HashMap::from([(
             "test".to_string(),

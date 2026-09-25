@@ -252,6 +252,7 @@ pub const fn create_reward_type(reward_type: Option<RewardType>) -> proto::Rewar
         Some(RewardType::Staking) => proto::RewardType::Staking,
         Some(RewardType::Voting) => proto::RewardType::Voting,
         Some(RewardType::DeactivatedStake) => proto::RewardType::DeactivatedStake,
+        Some(RewardType::VATDebit) => proto::RewardType::VatDebit,
     }
 }
 

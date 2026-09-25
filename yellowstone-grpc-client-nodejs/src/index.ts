@@ -442,7 +442,11 @@ export default class Client {
       request === undefined
         ? await grpcClient.subscribe()
         : await grpcClient.subscribe(
-            Buffer.from(SubscribeRequestMessage.encode(request).finish()),
+            Buffer.from(
+              SubscribeRequestMessage.encode(
+                SubscribeRequestMessage.fromPartial(request),
+              ).finish(),
+            ),
           );
 
     return new Promise<ClientDuplexStream>((resolve, reject) => {
@@ -595,7 +599,9 @@ export class ClientDuplexStream extends Duplex {
     }
 
     try {
-      const encodedRequest = SubscribeRequestMessage.encode(chunk).finish();
+      const encodedRequest = SubscribeRequestMessage.encode(
+        SubscribeRequestMessage.fromPartial(chunk),
+      ).finish();
       const nativeStream = this._napiDuplexStream as unknown as {
         writeRaw?: (requestBytes: Uint8Array) => Promise<void>;
       };
@@ -731,7 +737,7 @@ export class ClientDeshredDuplexStream extends Duplex {
     try {
       const normalizedChunk = normalizeSubscribeDeshredRequest(chunk);
       const encodedRequest = SubscribeDeshredRequestMessage.encode(
-        normalizedChunk,
+        SubscribeDeshredRequestMessage.fromPartial(normalizedChunk),
       ).finish();
       const nativeStream = this._napiDuplexStream as unknown as {
         writeRaw?: (requestBytes: Uint8Array) => Promise<void>;

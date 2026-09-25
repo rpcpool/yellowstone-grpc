@@ -10,6 +10,36 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Breaking
+
+- client: `subscribe` and `subscribe_with_request` no longer reconnect, even when a reconnect config is set. Use `subscribe_with_reconnect`, which requires processed commitment and no startup snapshot.
+
+### Features
+
+- client: added `subscribe_with_reconnect`, a bank-aware reconnecting stream. After a reconnect it emits `ReconnectEvent::DiscardBanks` for partially delivered banks, with the finalized winners, before the replacement updates.
+
+- proto/plugin/client: added standalone Alpenglow block footer updates via the `block_footer` filter.
+
+- proto/plugin: added opt-in Alpenglow block footer certificates via `include_certificates`.
+
+- proto/plugin: added Alpenglow entry and deshred update parent messages, opt-in via `include_update_parent` on the entry and deshred transaction filters. Clients that do not set it get no new message types.
+
+- proto/plugin: added `bank_id` to `SubscribeUpdateBlock`, matching `SubscribeUpdateBlockMeta` and `SubscribeUpdateEntry`.
+
+### Fixes
+
+- plugin: `convert_from::create_tx_meta` respects `inner_instructions_none` and `log_messages_none` instead of always returning empty collections.
+- plugin: `convert_from::create_reward` decodes unknown `reward_type` values as `None` instead of failing the whole conversion.
+- plugin: gossip contact info stores the startup replay complete flag even with no subscriber waiting, so `contact info startup replay complete` is logged once instead of on every update.
+- plugin: block reconstruction drops a bank cleared by an Alpenglow update parent, so the replacement bank's block is still delivered when its commitment is inherited from a descendant.
+- client: `subscribe_with_reconnect` resumes after the last finalized slot instead of the first slot of the subscription, so a reconnect later than the server replay window no longer fails with `OutOfRange`.
+- client: `subscribe_with_reconnect` forgets banks at or below the last finalized slot, so a long lived stream no longer fails with `bank tracking limit reached` after 65,536 banks.
+- client: `DedupStream` keys account writes without a transaction signature by their content, so the second Clock sysvar write per slot on Alpenglow is no longer dropped as a duplicate, and the same write replayed by another endpoint is still recognised.
+- client: `DedupStream` reconciles a slot that was only partly delivered before a reconnect and releases only the updates not seen yet, instead of delivering the whole slot again (port of #883 to 4.3).
+- client: `subscribe_with_reconnect` only forgets banks below the replay boundary, so a second reconnect during recovery no longer delivers complete banks between the boundary and the finalized slot twice.
+
+## 2026-09-15
+
 - yellowstone-grpc-client 13.5.1
 
 ### Fixes
