@@ -279,16 +279,16 @@ pub fn create_reward(reward: proto::Reward) -> CreateResult<Reward> {
         pubkey: reward.pubkey,
         lamports: reward.lamports,
         post_balance: reward.post_balance,
-        reward_type: match proto::RewardType::try_from(reward.reward_type)
-            .map_err(|_| "failed to parse reward_type")?
-        {
-            proto::RewardType::Unspecified => None,
-            proto::RewardType::Fee => Some(RewardType::Fee),
-            proto::RewardType::Rent => Some(RewardType::Rent),
-            proto::RewardType::Staking => Some(RewardType::Staking),
-            proto::RewardType::Voting => Some(RewardType::Voting),
-            proto::RewardType::DeactivatedStake => Some(RewardType::DeactivatedStake),
-        },
+        reward_type: proto::RewardType::try_from(reward.reward_type)
+            .ok()
+            .and_then(|reward_type| match reward_type {
+                proto::RewardType::Unspecified => None,
+                proto::RewardType::Fee => Some(RewardType::Fee),
+                proto::RewardType::Rent => Some(RewardType::Rent),
+                proto::RewardType::Staking => Some(RewardType::Staking),
+                proto::RewardType::Voting => Some(RewardType::Voting),
+                proto::RewardType::DeactivatedStake => Some(RewardType::DeactivatedStake),
+            }),
         commission: if reward.commission.is_empty() {
             None
         } else {
@@ -385,7 +385,11 @@ pub fn create_account(
 
 #[cfg(test)]
 mod tests {
-    use {super::create_tx_meta, yellowstone_grpc_proto::prelude as proto};
+    use {
+        super::{create_reward, create_tx_meta},
+        solana_transaction_status::RewardType,
+        yellowstone_grpc_proto::prelude as proto,
+    };
 
     fn base_proto_meta() -> proto::TransactionStatusMeta {
         proto::TransactionStatusMeta {
@@ -420,5 +424,32 @@ mod tests {
 
         assert_eq!(meta.inner_instructions, Some(vec![]));
         assert_eq!(meta.log_messages, Some(log_messages));
+    }
+
+    fn base_proto_reward(reward_type: i32) -> proto::Reward {
+        proto::Reward {
+            pubkey: "11111111111111111111111111111111".to_owned(),
+            lamports: 1_000,
+            post_balance: 50_000,
+            reward_type,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn reward_type_known_value_is_decoded() {
+        let reward = create_reward(base_proto_reward(
+            proto::RewardType::DeactivatedStake as i32,
+        ))
+        .expect("failed to create reward");
+
+        assert_eq!(reward.reward_type, Some(RewardType::DeactivatedStake));
+    }
+
+    #[test]
+    fn reward_type_unknown_value_decodes_as_none() {
+        let reward = create_reward(base_proto_reward(99)).expect("failed to create reward");
+
+        assert_eq!(reward.reward_type, None);
     }
 }
