@@ -14,6 +14,13 @@ const endpoint = process.env.TEST_ENDPOINT;
 const xToken = process.env.TEST_TOKEN;
 const describeLive = endpoint ? describe : describe.skip;
 
+// Block footers only exist on Alpenglow clusters, so they are checked against a separate
+// endpoint. TEST_ENDPOINT may point at a cluster without Alpenglow, where no footer ever
+// arrives.
+const alpenglowEndpoint = process.env.TEST_ALPENGLOW_ENDPOINT;
+const alpenglowToken = process.env.TEST_ALPENGLOW_TOKEN;
+const describeAlpenglow = alpenglowEndpoint ? describe : describe.skip;
+
 describeLive("Client.subscribe", () => {
   test(
     "subscribes to every SubscribeRequest filter and receives every SubscribeUpdate type",
@@ -115,7 +122,6 @@ describeLive("Client.subscribe", () => {
         ping: false,
         pong: false,
         blockMeta: false,
-        blockFooter: false,
         entry: false,
       };
 
@@ -166,7 +172,6 @@ describeLive("Client.subscribe", () => {
             seen.ping ||= update.ping !== undefined;
             seen.pong ||= update.pong !== undefined;
             seen.blockMeta ||= update.blockMeta !== undefined;
-            seen.blockFooter ||= update.blockFooter !== undefined;
             seen.entry ||= update.entry !== undefined;
 
             if (missingTypes().length === 0) {
@@ -205,6 +210,75 @@ describeLive("Client.subscribe", () => {
             }
           });
         });
+      } finally {
+        stream.destroy();
+      }
+    },
+    SUBSCRIBE_TIMEOUT_MS + 10_000,
+  );
+});
+
+describeAlpenglow("Client.subscribe block footers", () => {
+  test(
+    "receives a block footer with its finalization certificate",
+    async () => {
+      if (!alpenglowEndpoint) {
+        throw new Error(
+          "TEST_ALPENGLOW_ENDPOINT is required for block footer tests",
+        );
+      }
+
+      const client = new Client(
+        alpenglowEndpoint,
+        alpenglowToken,
+        undefined,
+        undefined,
+      );
+      await client.connect();
+
+      const request: SubscribeRequest = {
+        accounts: {},
+        slots: {},
+        transactions: {},
+        transactionsStatus: {},
+        blocks: {},
+        blocksMeta: {},
+        blockFooter: { blockFooterClient: { includeCertificates: true } },
+        entry: {},
+        commitment: CommitmentLevel.PROCESSED,
+        accountsDataSlice: [],
+        ping: undefined,
+      };
+
+      const stream = await client.subscribe(request);
+
+      try {
+        const footer = await new Promise<
+          NonNullable<SubscribeUpdate["blockFooter"]>
+        >((resolve, reject) => {
+          const timeout = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `Timed out after ${SUBSCRIBE_TIMEOUT_MS}ms waiting for a block footer`,
+                ),
+              ),
+            SUBSCRIBE_TIMEOUT_MS,
+          );
+          stream.on("data", (update: SubscribeUpdate) => {
+            if (update.blockFooter !== undefined) {
+              clearTimeout(timeout);
+              resolve(update.blockFooter);
+            }
+          });
+          stream.on("error", (error: Error) => {
+            clearTimeout(timeout);
+            reject(error);
+          });
+        });
+
+        expect(footer.bankHash.length).toBe(32);
+        expect(footer.blockFinalCert?.length ?? 0).toBeGreaterThan(0);
       } finally {
         stream.destroy();
       }
