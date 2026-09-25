@@ -10,6 +10,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-09-25
+
+- yellowstone-grpc-proto 14.0.0
+- yellowstone-grpc-geyser 16.0.0
+- yellowstone-grpc-client 14.0.0
+
 ### Breaking
 
 - client: `subscribe` and `subscribe_with_request` no longer reconnect, even when a reconnect config is set. Use `subscribe_with_reconnect`, which requires processed commitment and no startup snapshot.
