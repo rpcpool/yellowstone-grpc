@@ -102,7 +102,7 @@ where
         if !is_startup && !*state.complete_tx.borrow() {
             let nodes = state.map.lock().expect("poisoned").nodes.len();
             info!("contact info startup replay complete: {nodes} nodes");
-            let _ = state.complete_tx.send(true);
+            state.complete_tx.send_replace(true);
         }
 
         // One critical section: subscribers must never observe a revision the map has not
