@@ -482,6 +482,9 @@ pub struct AutoReconnect<GrpcStream, Connector> {
     reconnect_count: u32,
     resume_from_checkpoint: bool,
     bank_replay: bool,
+    // Slots below this are settled. A late message for one of them must not pull the bank
+    // replay checkpoint back, because dedup state below it has already been dropped.
+    settled_before: u64,
     stream_retries: u32,
     replay_from_slot: Option<u64>,
 }
@@ -508,6 +511,7 @@ where
             reconnect_count: 0,
             resume_from_checkpoint: true,
             bank_replay: false,
+            settled_before: 0,
             stream_retries: 0,
             replay_from_slot: None,
         }
@@ -533,6 +537,7 @@ impl<S, Connector> ReconnectCounter for AutoReconnect<S, Connector> {
     fn settle_before(&mut self, slot: u64) {
         // Only bank replay keeps the lowest slot seen; the legacy heuristic sets its own.
         if self.bank_replay {
+            self.settled_before = self.settled_before.max(slot);
             self.last_checkpoint = Some(self.last_checkpoint.map_or(slot, |c| c.max(slot)));
         }
     }
@@ -586,7 +591,8 @@ where
                             if let Some(slot) = extract_slot(&msg) {
                                 me.last_checkpoint = Some(
                                     me.last_checkpoint
-                                        .map_or(slot, |checkpoint| checkpoint.min(slot)),
+                                        .map_or(slot, |checkpoint| checkpoint.min(slot))
+                                        .max(me.settled_before),
                                 );
                             }
                         } else if let Some(UpdateOneof::BlockMeta(_)) = msg.update_oneof.as_ref() {
@@ -1231,7 +1237,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_interrupted_slot_payload_quarantined_not_dropped() {
+    async fn test_interrupted_slot_payload_reconciled_without_duplicates() {
         // slot 100 is inflight (account seen, no BlockMeta) when the connection dies
         let initial = stream::iter(vec![
             Ok(make_account_msg(100)),
@@ -1262,18 +1268,12 @@ mod tests {
         let m1 = stream.next().await.expect("item").expect("ok");
         assert!(matches!(m1.update_oneof, Some(UpdateOneof::Account(_))));
 
-        // Without prepare_for_replay, slot 100 is still inflight and this account
-        // matches the existing key -> dropped as Duplicate. With it, slot 100 is
-        // sealed with blockhash None, so the account is quarantined and released
-        // when the BlockMeta arrives (no stored hash -> always flush).
+        // Matching replay delivers BlockMeta without repeating the account payload.
         let m2 = stream.next().await.expect("item").expect("ok");
-        assert!(matches!(m2.update_oneof, Some(UpdateOneof::Account(_))));
+        assert!(matches!(m2.update_oneof, Some(UpdateOneof::BlockMeta(_))));
 
         let m3 = stream.next().await.expect("item").expect("ok");
-        assert!(matches!(m3.update_oneof, Some(UpdateOneof::BlockMeta(_))));
-
-        let m4 = stream.next().await.expect("item").expect("ok");
-        assert_eq!(extract_slot(&m4), Some(101));
+        assert_eq!(extract_slot(&m3), Some(101));
     }
 
     #[tokio::test]
@@ -1619,6 +1619,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn late_update_below_the_settled_boundary_keeps_the_checkpoint() {
+        let connector = MockGrpcConnector::new(vec![ConnectPlan {
+            expected_from_slot: Some(Some(201)),
+            result: Ok(vec![Ok(make_account_msg(201))]),
+        }]);
+        let mut stream = AutoReconnect::new(
+            stream::iter(vec![
+                Ok(make_account_msg(205)),
+                Ok(make_account_msg(150)),
+                Err(Status::unavailable("disconnected")),
+            ])
+            .boxed(),
+            connector.clone(),
+            request_state(SubscribeRequest::default()),
+            backoff_with_retries(1),
+        )
+        .with_bank_replay();
+        stream.settle_before(201);
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(stream.next().await.unwrap().is_ok());
+        assert_eq!(stream.last_checkpoint, Some(201));
+        assert_eq!(stream.next().await.unwrap().unwrap(), make_account_msg(201));
+        assert_eq!(connector.calls(), vec![Some(201)]);
+    }
+
+    #[tokio::test]
     async fn settle_before_is_ignored_without_bank_replay() {
         let mut stream = AutoReconnect::new(
             stream::iter(vec![Ok(make_account_msg(100))]).boxed(),
@@ -1808,11 +1834,8 @@ mod tests {
             DedupState::default(),
         );
         assert!(stream.next().await.unwrap().is_ok());
-        let replacement = stream.next().await.unwrap().unwrap();
-        let Some(UpdateOneof::Account(account)) = replacement.update_oneof else {
-            panic!("expected account")
-        };
-        assert_ne!(account.account.unwrap().lamports, 200);
+        // The account was delivered before the first disconnect, so the second replay only
+        // adds BlockMeta; the stale account from the interrupted replay never surfaces.
         assert!(matches!(
             stream.next().await.unwrap().unwrap().update_oneof,
             Some(UpdateOneof::BlockMeta(_))
@@ -1843,10 +1866,7 @@ mod tests {
             DedupState::default(),
         );
         assert!(stream.next().await.unwrap().is_ok());
-        assert!(matches!(
-            stream.next().await.unwrap().unwrap().update_oneof,
-            Some(UpdateOneof::Account(_))
-        ));
+        // The replayed account was already delivered; only the metadata comes through.
         let mut metadata = stream.next().await.unwrap().unwrap();
         assert!(!visible_update(&mut metadata));
         assert!(stream.next().await.is_none());
@@ -1986,6 +2006,52 @@ mod reconnect_stream_tests {
             bank_id: 100
         }));
         assert_eq!(stream.inner.settled, (2..=101).collect::<Vec<_>>());
+    }
+
+    // Pruning up to the finalized slot dropped the hash of complete bank 41 while recovery
+    // held the boundary at 40, so the second replay from 40 delivered bank 41 again.
+    #[tokio::test]
+    async fn finality_during_recovery_keeps_dedup_state_above_the_boundary() {
+        let mut stream = ReconnectStream::new(source(vec![
+            (0, account(40, 1)),
+            (0, account(41, 2)),
+            (0, metadata(41, 2, "h41", 40)),
+            (1, finalized(45, 9)),
+            (2, account(40, 1)),
+            (2, account(41, 2)),
+            (2, metadata(41, 2, "h41", 40)),
+            (2, metadata(40, 1, "h40", 39)),
+            (2, finalized(40, 1)),
+        ]));
+        stream.inner.replay_from_slot = Some(40);
+        stream.inner.steps.push_back((2, std::task::Poll::Pending));
+        for slot in [40, 41] {
+            let ReconnectEvent::Update { update, .. } = stream.next().await.unwrap().unwrap()
+            else {
+                panic!("unexpected discard")
+            };
+            assert_eq!(update, account(slot, slot - 39));
+        }
+        let ReconnectEvent::DiscardBanks { banks, .. } = stream.next().await.unwrap().unwrap()
+        else {
+            panic!("expected discard of the partial bank")
+        };
+        assert_eq!(
+            banks,
+            vec![BankRef {
+                generation: 0,
+                slot: 40,
+                bank_id: 1
+            }]
+        );
+        let ReconnectEvent::Update { generation, update } = stream.next().await.unwrap().unwrap()
+        else {
+            panic!("expected the replacement bank")
+        };
+        assert_eq!((generation, update), (2, account(40, 1)));
+        // Bank 41 was complete before the first disconnect; its replay is a duplicate.
+        assert!(stream.next().now_or_never().is_none());
+        assert_eq!(stream.inner.settled, vec![40]);
     }
 
     #[tokio::test]
