@@ -256,7 +256,9 @@ fn connector(
 enum Key {
     Slot(u64, i32),
     Transaction(u64, u64),
-    Account(u64, Vec<u8>, Option<Vec<u8>>),
+    // write_version tells apart writes without a transaction signature: on Alpenglow the
+    // Clock sysvar is written twice per slot, at bank creation and at the block footer.
+    Account(u64, Vec<u8>, Option<Vec<u8>>, u64),
 }
 
 #[derive(Default)]
@@ -332,7 +334,7 @@ where
                 if progress.lock().unwrap().resumed() {
                     observed.accounts += 1;
                 }
-                Key::Account(m.slot, acct.pubkey, acct.txn_signature)
+                Key::Account(m.slot, acct.pubkey, acct.txn_signature, acct.write_version)
             }
             _ => continue,
         };

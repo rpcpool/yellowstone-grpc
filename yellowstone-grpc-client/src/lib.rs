@@ -322,9 +322,11 @@ impl<S> ReconnectStream<S> {
     }
 
     /// Every bank at or below a finalized slot is decided: the finalized bank is complete and
-    /// the others are dead forks or cleared by an update parent. Only banks still waiting for
-    /// recovery are kept, and the next reconnect starts after the finalized slot, so tracking
-    /// stays bounded and the replay boundary stays inside the server's replay window.
+    /// the others are dead forks or cleared by an update parent. The next reconnect starts
+    /// after the finalized slot, or at the earliest bank still waiting for recovery, so the
+    /// replay boundary stays inside the server's replay window. Only state below that boundary
+    /// is dropped: a replay from the boundary resends every complete bank above it, and those
+    /// must still be recognised as duplicates.
     fn settle_finalized(&mut self, slot: u64)
     where
         S: crate::dedup::ReconnectCounter,
@@ -338,13 +340,13 @@ impl<S> ReconnectStream<S> {
             .as_ref()
             .map(|recovery| recovery.banks.as_slice())
             .unwrap_or_default();
-        self.delivered_banks
-            .retain(|bank| bank.slot > slot || recovering.contains(bank));
-        self.dedup.prune_through(slot);
         let boundary = recovering
             .iter()
             .map(|bank| bank.slot)
             .fold(slot.saturating_add(1), u64::min);
+        // Every recovering bank is at or above the boundary, so this keeps them too.
+        self.delivered_banks.retain(|bank| bank.slot >= boundary);
+        self.dedup.prune_before(boundary);
         self.inner.settle_before(boundary);
     }
 

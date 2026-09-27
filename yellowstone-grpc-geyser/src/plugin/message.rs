@@ -537,6 +537,7 @@ impl MessageBlockFooter {
 }
 
 // The Alpenglow certificates travel as opaque wincode bytes, as the footer holds them.
+// TODO: Should probably have the entire wincode implementation on agave's side instead of here.
 fn encode_final_cert(cert: &BlockFinalizationCert<'_>) -> Vec<u8> {
     let BlockFinalizationCert {
         slot,
