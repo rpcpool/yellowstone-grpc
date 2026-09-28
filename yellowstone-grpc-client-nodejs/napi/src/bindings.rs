@@ -65,12 +65,12 @@ pub struct JsReconnectBackoff {
 #[napi(object)]
 #[derive(Deserialize, Debug, Clone)]
 pub struct JsReconnectConfig {
-  /// Omitted or true enables reconnect when this object is provided.
-  /// False keeps legacy no-reconnect behavior.
+  /// Unsupported. Call subscribeWithReconnect to enable recovery.
   pub enabled: Option<bool>,
   pub backoff: Option<JsReconnectBackoff>,
+  /// Unsupported for bank recovery.
   pub slot_retention: Option<u32>,
-  /// Omitted defaults to RecoverMissedData.
+  /// Unsupported for bank recovery.
   pub policy: Option<JsReconnectPolicy>,
 }
 
