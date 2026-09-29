@@ -313,6 +313,16 @@ impl GrpcClient {
     crate::subscribe_duplex_stream(env, self, initial_request_bytes)
   }
 
+  /// Opens a subscription that emits updates and bank recovery events.
+  #[napi]
+  pub fn subscribe_with_reconnect<'env>(
+    &self,
+    env: &'env Env,
+    initial_request_bytes: Option<Buffer>,
+  ) -> napi::Result<PromiseRaw<'env, crate::reconnect::ReconnectDuplexStream>> {
+    crate::reconnect::subscribe_with_reconnect(env, self, initial_request_bytes)
+  }
+
   /// Creates a deshred subscription stream bound to this client connection.
   ///
   /// Unlike `subscribe()`, this method opens the underlying gRPC stream before

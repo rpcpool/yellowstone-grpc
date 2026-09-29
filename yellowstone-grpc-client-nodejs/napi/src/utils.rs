@@ -1,11 +1,7 @@
-use crate::bindings::{
-  JsChannelOptions, JsCompressionAlgorithm, JsReconnectConfig, JsReconnectPolicy,
-};
+use crate::bindings::{JsChannelOptions, JsCompressionAlgorithm, JsReconnectConfig};
 use napi::bindgen_prelude::{Result, Status};
 use std::time::Duration;
-use yellowstone_grpc_client::{
-  Backoff, ClientTlsConfig, GeyserGrpcBuilder, ReconnectConfig, ReconnectionPolicy,
-};
+use yellowstone_grpc_client::{Backoff, ClientTlsConfig, GeyserGrpcBuilder, ReconnectConfig};
 use yellowstone_grpc_proto::tonic::codec::CompressionEncoding;
 
 fn to_napi_cause(status: Status, source: &dyn std::error::Error) -> napi::Error {
@@ -36,27 +32,16 @@ fn reconnect_config_from_js(
     return Ok(None);
   };
 
-  if reconnect_config.enabled == Some(false) {
-    return Ok(None);
+  if reconnect_config.enabled.is_some()
+    || reconnect_config.policy.is_some()
+    || reconnect_config.slot_retention.is_some()
+  {
+    return Err(invalid_arg(
+      "reconnect.enabled, policy, and slotRetention are unsupported; use subscribeWithReconnect() with backoff options only",
+    ));
   }
 
   let mut native_config = ReconnectConfig::default();
-
-  if matches!(
-    reconnect_config.policy,
-    Some(JsReconnectPolicy::SkipMissedData)
-  ) {
-    native_config.policy = ReconnectionPolicy::SkipMissedData;
-  } else if let Some(slot_retention) = reconnect_config.slot_retention {
-    if slot_retention == 0 {
-      return Err(invalid_arg(
-        "invalid reconnect.slotRetention: expected a positive integer",
-      ));
-    }
-    native_config.policy = ReconnectionPolicy::RecoverMissedData {
-      slot_retention: slot_retention as usize,
-    };
-  }
 
   if let Some(backoff) = reconnect_config.backoff {
     let initial_interval = backoff
@@ -258,7 +243,6 @@ pub async fn get_client_builder(
 #[cfg(test)]
 mod tests {
   use super::get_client_builder;
-  use yellowstone_grpc_client::ReconnectionPolicy;
 
   #[tokio::test]
   async fn get_client_builder_invalid_endpoint_includes_cause() {
@@ -297,6 +281,27 @@ mod tests {
     );
   }
 
+  #[test]
+  fn rejects_obsolete_reconnect_options() {
+    use crate::bindings::{JsReconnectConfig, JsReconnectPolicy};
+    for (enabled, policy, slot_retention) in [
+      (Some(true), None, None),
+      (Some(false), None, None),
+      (None, Some(JsReconnectPolicy::SkipMissedData), None),
+      (None, Some(JsReconnectPolicy::RecoverMissedData), None),
+      (None, None, Some(300)),
+    ] {
+      let error = super::reconnect_config_from_js(Some(JsReconnectConfig {
+        enabled,
+        policy,
+        slot_retention,
+        backoff: None,
+      }))
+      .unwrap_err();
+      assert!(error.reason.contains("subscribeWithReconnect()"));
+    }
+  }
+
   #[tokio::test]
   async fn get_client_builder_applies_reconnect_config() {
     use crate::bindings::{JsReconnectBackoff, JsReconnectConfig};
@@ -307,13 +312,13 @@ mod tests {
       None,
       None,
       Some(JsReconnectConfig {
-        enabled: Some(true),
+        enabled: None,
         backoff: Some(JsReconnectBackoff {
           initial_interval_ms: Some(125),
           multiplier: Some(1.5),
           max_retries: Some(8),
         }),
-        slot_retention: Some(300),
+        slot_retention: None,
         policy: None,
       }),
     )
@@ -327,12 +332,6 @@ mod tests {
     assert_eq!(config.backoff.initial_interval, Duration::from_millis(125));
     assert_eq!(config.backoff.multiplier, 1.5);
     assert_eq!(config.backoff.max_retries, 8);
-    assert!(matches!(
-      config.policy,
-      ReconnectionPolicy::RecoverMissedData {
-        slot_retention: 300
-      }
-    ));
   }
 
   #[tokio::test]
@@ -344,7 +343,7 @@ mod tests {
       None,
       None,
       Some(JsReconnectConfig {
-        enabled: Some(true),
+        enabled: None,
         backoff: Some(JsReconnectBackoff {
           initial_interval_ms: None,
           multiplier: Some(0.5),

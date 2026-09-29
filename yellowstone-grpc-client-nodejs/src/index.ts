@@ -127,16 +127,31 @@ export const AUTORECONNECT_FILTER_KEY: string = napi.AUTORECONNECT_FILTER_KEY;
  */
 export type ChannelOptions = NonNullable<Parameters<typeof napi.GrpcClient.new>[2]>;
 
+/** Retry options for subscribeWithReconnect(). */
 export interface ReconnectOptions {
-  enabled?: boolean;
   backoff?: {
     initialIntervalMs?: number;
     multiplier?: number;
     maxRetries?: number;
   };
-  slotRetention?: number;
-  policy?: napi.JsReconnectPolicy;
 }
+
+/** Connection-scoped bank identity. All uint64 values are decimal strings. */
+export type BankRef = napi.JsBankRef;
+export type ReplacementReplay = napi.JsReplacementReplay;
+export type SlotWinner = napi.JsSlotWinner;
+export type DiscardReason = "IncompleteDelivery";
+
+/** DiscardBanks must be applied before subsequent replacement updates. */
+export type ReconnectEvent =
+  | { type: "Update"; generation: string; update: SubscribeUpdate }
+  | {
+      type: "DiscardBanks";
+      banks: BankRef[];
+      reason: DiscardReason;
+      replacement: ReplacementReplay;
+      winners: SlotWinner[];
+    };
 
 function isRecordObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -458,6 +473,26 @@ export default class Client {
     });
   }
 
+  /** Opens a processed subscription with explicit bank recovery events. */
+  async subscribeWithReconnect(
+    request?: SubscribeRequest,
+  ): Promise<ClientReconnectDuplexStream> {
+    const grpcClient = this._connectedGrpcClient();
+    const stream = await grpcClient.subscribeWithReconnect(
+      request === undefined
+        ? undefined
+        : Buffer.from(
+            SubscribeRequestMessage.encode(
+              SubscribeRequestMessage.fromPartial(request),
+            ).finish(),
+          ),
+    );
+    return new ClientReconnectDuplexStream(stream, {
+      objectMode: true,
+      decodeStrings: false,
+    });
+  }
+
   async subscribeDeshred(): Promise<ClientDeshredDuplexStream> {
     const grpcClient = this._connectedGrpcClient();
 
@@ -481,7 +516,14 @@ export default class Client {
   }
 }
 
-export class ClientDuplexStream extends Duplex {
+abstract class SubscriptionDuplexStream<NativeUpdate, Update> extends Duplex {
+  protected abstract decodeUpdate(update: NativeUpdate): Update;
+
+  on(event: "data", listener: (update: Update) => void): this;
+  on(event: string | symbol, listener: (...args: any[]) => void): this;
+  on(event: string | symbol, listener: (...args: any[]) => void): this {
+    return super.on(event, listener);
+  }
   private _napiDuplexStream: unknown;
   // Prevent overlapping native reads: a single pending read at a time.
   private _readInFlight: boolean;
@@ -513,7 +555,7 @@ export class ClientDuplexStream extends Duplex {
     this._readInFlight = true;
 
     (this._napiDuplexStream as {
-      read: () => Promise<Uint8Array | undefined | null>;
+      read: () => Promise<NativeUpdate | undefined | null>;
     })
       .read()
       .then((update) => {
@@ -530,7 +572,7 @@ export class ClientDuplexStream extends Duplex {
           return;
         }
 
-        const grpcUpdate = SubscribeUpdateMessage.decode(update);
+        const grpcUpdate = this.decodeUpdate(update);
 
         // Respect backpressure: only pull again if consumer accepted push.
         const canContinue = this.push(grpcUpdate);
@@ -621,6 +663,35 @@ export class ClientDuplexStream extends Duplex {
       );
     } catch (err) {
       callback(err as Error);
+    }
+  }
+}
+
+export class ClientDuplexStream extends SubscriptionDuplexStream<
+  Uint8Array,
+  SubscribeUpdate
+> {
+  protected decodeUpdate(update: Uint8Array): SubscribeUpdate {
+    return SubscribeUpdateMessage.decode(update);
+  }
+}
+
+export class ClientReconnectDuplexStream extends SubscriptionDuplexStream<
+  napi.JsReconnectEvent,
+  ReconnectEvent
+> {
+  protected decodeUpdate(event: napi.JsReconnectEvent): ReconnectEvent {
+    switch (event.type) {
+      case "Update":
+        return {
+          type: "Update",
+          generation: event.generation,
+          update: SubscribeUpdateMessage.decode(event.update),
+        };
+      case "DiscardBanks":
+        return event;
+      default:
+        throw new Error("Unknown native reconnect event; check SDK and native binding versions");
     }
   }
 }
