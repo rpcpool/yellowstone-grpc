@@ -102,15 +102,17 @@ vergen = "9.0.6"
 wincode = "0.6.1"
 notify = "8.2.0"
 
+# Agave SDK (crates moved out of the monorepo)
+agave-geyser-plugin-interface = "=5.0.0"
+
 # Agave Monorepo
-agave-geyser-plugin-interface = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-alpha.5" }
-agave-votor-messages = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-alpha.5" }
-solana-account-decoder = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-alpha.5" }
-solana-entry = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-alpha.5" }
+agave-votor-messages = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-beta.0" }
+solana-account-decoder = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-beta.0" }
+solana-entry = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-beta.0" }
 solana-logger = "3.0.0"
-solana-storage-proto = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-alpha.5" }
-solana-transaction-context = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-alpha.5" }
-solana-transaction-status = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-alpha.5" }
+solana-storage-proto = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-beta.0" }
+solana-transaction-context = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-beta.0" }
+solana-transaction-status = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-beta.0" }
 
 # Solana SDK
 solana-message = "5.1.0"
