@@ -26,7 +26,9 @@ use {
         },
         ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
         stream::{tokio::BatchStreamUnboundedReceiver, BatchStream, BatchStreamExt, Buffer},
-        util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
+        util::stream::{
+            load_aware_channel, LoadAwareReceiver, LoadAwareSender, SendError, TrySendError,
+        },
         version::GrpcVersionInfo,
     },
     anyhow::Context as _,
@@ -1639,7 +1641,7 @@ impl GrpcService {
                                         Ok(()) => {
                                             metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
                                         }
-                                        Err(mpsc::error::SendError(_)) => {
+                                        Err(SendError(_)) => {
                                             error!("client #{}: stream closed", session.subscriber_id);
                                             session.disconnect_reason = "client_closed";
                                             break 'outer;
@@ -1681,7 +1683,7 @@ impl GrpcService {
                                 Ok(()) => {
                                     metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
                                 }
-                                Err(mpsc::error::TrySendError::Full(_)) => {
+                                Err(TrySendError::Full(_)) => {
                                     error!("client #{}: lagged to send an update", session.subscriber_id);
                                     task_tracker.spawn(async move {
                                         let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
@@ -1689,7 +1691,7 @@ impl GrpcService {
                                     session.disconnect_reason = "client_channel_full";
                                     break 'outer;
                                 }
-                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                Err(TrySendError::Closed(_)) => {
                                     error!("client #{}: stream closed", session.subscriber_id);
                                     session.disconnect_reason = "client_closed";
                                     break 'outer;
@@ -2027,7 +2029,7 @@ impl GrpcService {
                             Ok(()) => {
                                 metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
                             }
-                            Err(mpsc::error::TrySendError::Full(_)) => {
+                            Err(TrySendError::Full(_)) => {
                                 error!("deshred client #{}/{}: lagged to send an update", session.subscriber_id, session.id);
                                 session.disconnect_reason = "client_channel_full";
                                 task_tracker.spawn(async move {
@@ -2035,7 +2037,7 @@ impl GrpcService {
                                 });
                                 break 'outer;
                             }
-                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                            Err(TrySendError::Closed(_)) => {
                                 error!("deshred client #{}/{}: stream closed", session.subscriber_id, session.id);
                                 session.disconnect_reason = "client_closed";
                                 break 'outer;

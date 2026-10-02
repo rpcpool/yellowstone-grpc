@@ -1,17 +1,79 @@
 use {
     futures::Stream,
     std::{
+        fmt,
         sync::Arc,
         task::{Context, Poll},
     },
+    thiserror::Error,
     tokio::sync::{
-        mpsc::{
-            error::{SendError, TrySendError},
-            UnboundedReceiver, UnboundedSender,
-        },
+        mpsc::{UnboundedReceiver, UnboundedSender},
         Semaphore, TryAcquireError,
     },
 };
+
+/// Largest capacity accepted by [`load_aware_channel`].
+pub const MAX_CAPACITY: usize = Semaphore::MAX_PERMITS;
+
+/// Error returned by [`LoadAwareSender::send`] when the [`LoadAwareReceiver`] is dropped.
+///
+/// It hands the item that could not be sent back to the caller.
+#[derive(Error)]
+#[error("load aware channel is closed")]
+pub struct SendError<T>(pub T);
+
+impl<T> SendError<T> {
+    /// Takes the item that could not be sent back out of the error.
+    ///
+    /// # Returns
+    ///
+    /// The item that was passed to [`LoadAwareSender::send`].
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> fmt::Debug for SendError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SendError").finish_non_exhaustive()
+    }
+}
+
+/// Error returned by [`LoadAwareSender::try_send`].
+///
+/// Both variants hand the item that could not be sent back to the caller.
+#[derive(Error)]
+pub enum TrySendError<T> {
+    /// There is not enough free weight for the item right now, or another sender is already
+    /// waiting for capacity.
+    #[error("load aware channel is full")]
+    Full(T),
+    /// The [`LoadAwareReceiver`] is dropped.
+    #[error("load aware channel is closed")]
+    Closed(T),
+}
+
+impl<T> TrySendError<T> {
+    /// Takes the item that could not be sent back out of the error.
+    ///
+    /// # Returns
+    ///
+    /// The item that was passed to [`LoadAwareSender::try_send`].
+    pub fn into_inner(self) -> T {
+        match self {
+            Self::Full(item) | Self::Closed(item) => item,
+        }
+    }
+}
+
+impl<T> fmt::Debug for TrySendError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Full(_) => f.write_str("Full(..)"),
+            Self::Closed(_) => f.write_str("Closed(..)"),
+        }
+    }
+}
 
 /// An item that carries an abstract "weight" used by a [`load_aware_channel`] for backpressure.
 ///
@@ -101,10 +163,9 @@ impl<T> Drop for LoadAwareReceiver<T> {
 
 /// Creates an mpsc channel whose capacity is a total weight instead of an item count.
 ///
-/// Items are queued in an unbounded channel while a [`Semaphore`] holds one permit per unit of
-/// weight. A send acquires the item weight before queueing it and the receiver releases it
-/// on dequeue, so the uncontended path is a single atomic compare-and-swap plus a lock-free push.
-/// The semaphore only takes its internal lock when a sender actually has to wait.
+/// Each item is accounted for by its [`Weighted::weight`] from the moment a sender admits it
+/// until the receiver dequeues it. The uncontended path is a single atomic operation plus a
+/// lock-free enqueue, and a lock is only taken when a sender actually has to wait.
 ///
 /// Semantics:
 ///
@@ -124,7 +185,7 @@ impl<T> Drop for LoadAwareReceiver<T> {
 ///
 /// # Panics
 ///
-/// Panics if `capacity` is `0` or exceeds [`Semaphore::MAX_PERMITS`].
+/// Panics if `capacity` is `0` or exceeds [`MAX_CAPACITY`].
 pub fn load_aware_channel<T: Weighted>(
     capacity: usize,
 ) -> (LoadAwareSender<T>, LoadAwareReceiver<T>) {
@@ -180,7 +241,7 @@ impl<T: Weighted> LoadAwareSender<T> {
         }
         self.inner
             .send((weight, item))
-            .map_err(|SendError((_weight, item))| SendError(item))
+            .map_err(|err| SendError(err.0 .1))
     }
 
     /// Sends an item without waiting.
@@ -210,7 +271,7 @@ impl<T: Weighted> LoadAwareSender<T> {
         }
         self.inner
             .send((weight, item))
-            .map_err(|SendError((_weight, item))| TrySendError::Closed(item))
+            .map_err(|err| TrySendError::Closed(err.0 .1))
     }
 
     /// Returns the weight currently held by the channel.
