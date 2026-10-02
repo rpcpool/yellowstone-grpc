@@ -1547,7 +1547,11 @@ impl GrpcService {
         let mut messages_rx = broadcast.subscribe(commitment);
 
         'outer: loop {
-            observe_subscriber_queue_size(&session.subscriber_id, stream_tx.queue_size(), "normal");
+            observe_subscriber_queue_size(
+                &session.subscriber_id,
+                stream_tx.current_weight() as u64,
+                "normal",
+            );
 
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -1958,7 +1962,7 @@ impl GrpcService {
         'outer: loop {
             observe_subscriber_queue_size(
                 &session.subscriber_id,
-                stream_tx.queue_size(),
+                stream_tx.current_weight() as u64,
                 "deshred",
             );
 

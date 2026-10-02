@@ -14,6 +14,7 @@ use {
                 MessageTransaction, MessageTransactionInfo,
             },
         },
+        util::stream::Weighted,
     },
     bytes::{
         buf::{Buf, BufMut},
@@ -70,6 +71,13 @@ macro_rules! prost_repeated_encoded_len_map {
                 .map(|len| encoded_len_varint(len as u64) + len)
                 .sum::<usize>()
     }};
+}
+
+/// Every update weighs `1`, so subscriber channels bound the number of queued updates.
+impl Weighted for FilteredUpdate {
+    fn weight(&self) -> u32 {
+        1
+    }
 }
 
 pub type FilteredUpdates = SmallVec<[FilteredUpdate; 2]>;
@@ -906,6 +914,13 @@ impl FilteredUpdateDeshredTransaction {
             } else {
                 0
             }
+    }
+}
+
+/// Every update weighs `1`, so subscriber channels bound the number of queued updates.
+impl Weighted for FilteredUpdateDeshred {
+    fn weight(&self) -> u32 {
+        1
     }
 }
 
