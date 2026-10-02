@@ -1,7 +1,9 @@
 use {
     futures::Stream,
-    std::sync::Arc,
-    std::task::{Context, Poll},
+    std::{
+        sync::Arc,
+        task::{Context, Poll},
+    },
     tokio::sync::{
         mpsc::{
             error::{SendError, TrySendError},
@@ -164,9 +166,17 @@ impl<T: Weighted> LoadAwareSender<T> {
     /// Returns the `item` back in a [`SendError`] if the [`LoadAwareReceiver`] is dropped.
     pub async fn send(&self, item: T) -> Result<(), SendError<T>> {
         let weight = self.shared.admitted_weight(&item);
-        match self.shared.semaphore.acquire_many(weight).await {
+        // Fast path: skip building the `Acquire` future when capacity is available. A failed try
+        // never takes capacity ahead of a waiting sender, so falling through keeps FIFO order.
+        match self.shared.semaphore.try_acquire_many(weight) {
             Ok(permit) => permit.forget(),
-            Err(_closed) => return Err(SendError(item)),
+            Err(TryAcquireError::Closed) => return Err(SendError(item)),
+            Err(TryAcquireError::NoPermits) => {
+                match self.shared.semaphore.acquire_many(weight).await {
+                    Ok(permit) => permit.forget(),
+                    Err(_closed) => return Err(SendError(item)),
+                }
+            }
         }
         self.inner
             .send((weight, item))
