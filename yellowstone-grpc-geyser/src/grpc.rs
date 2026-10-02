@@ -26,7 +26,7 @@ use {
         },
         ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
         stream::{tokio::BatchStreamUnboundedReceiver, BatchStream, BatchStreamExt, Buffer},
-        util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
+        util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender, Weighted},
         version::GrpcVersionInfo,
     },
     anyhow::Context as _,
@@ -318,6 +318,27 @@ pub enum BlockReconstructionMessage {
 }
 
 pub type BroadcastedMessage = Arc<Vec<Message>>;
+
+impl Weighted for TonicResult<FilteredUpdate> {
+    fn weight(&self) -> u64 {
+        // In this weight, we purposefully don't count entries. They make up half the weight but 2% of the memory requirement.
+        // Because of this, its better to simply not count them.
+        match self {
+            Ok(FilteredUpdate {
+                message: FilteredUpdateOneof::Block(block),
+                ..
+            }) => 1 + (block.transactions.len() + block.accounts.len()) as u64,
+            _ => 1,
+        }
+    }
+}
+/// The factor by which the weight capacity exceeds the item capacity for client channels.
+const SUBSCRIBER_WEIGHT_CAPACITY_FACTOR: u64 = 4;
+
+impl Weighted for TonicResult<FilteredUpdateDeshred> {}
+
+/// The factor by which the weight capacity exceeds the item capacity for deshred client channels.
+const DESHRED_SUBSCRIBER_WEIGHT_CAPACITY_FACTOR: u64 = 1;
 
 #[derive(Debug, Clone)]
 pub struct SubscriberChannels {
@@ -2100,11 +2121,14 @@ impl Geyser for GrpcService {
             None
         };
 
-        let (stream_tx, stream_rx) = load_aware_channel(if snapshot_rx.is_some() {
-            self.config_snapshot_client_channel_capacity
-        } else {
-            self.config_channel_capacity
-        });
+        let (stream_tx, stream_rx) = load_aware_channel(
+            if snapshot_rx.is_some() {
+                self.config_snapshot_client_channel_capacity
+            } else {
+                self.config_channel_capacity
+            },
+            SUBSCRIBER_WEIGHT_CAPACITY_FACTOR,
+        );
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
         let ping_stream_tx = stream_tx.clone();
@@ -2273,7 +2297,10 @@ impl Geyser for GrpcService {
             return Err(Status::unavailable("server is shutting down"));
         }
 
-        let (stream_tx, stream_rx) = load_aware_channel(self.config_channel_capacity);
+        let (stream_tx, stream_rx) = load_aware_channel(
+            self.config_channel_capacity,
+            DESHRED_SUBSCRIBER_WEIGHT_CAPACITY_FACTOR,
+        );
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
         let ping_stream_tx = stream_tx.clone();
@@ -2616,7 +2643,7 @@ mod tests {
 
     fn spawn_client_loop(broadcast: SubscriberChannels, ct: CancellationToken) -> ClientHandles {
         let (client_tx, client_rx) = mpsc::unbounded_channel();
-        let (stream_tx, stream_rx) = load_aware_channel(64);
+        let (stream_tx, stream_rx) = load_aware_channel(64, SUBSCRIBER_WEIGHT_CAPACITY_FACTOR);
         let session = ClientSession::new(0, Some("test".into()), "test".into(), ct, None);
         tokio::spawn(GrpcService::client_loop(
             session,
@@ -2725,7 +2752,7 @@ mod tests {
         let tt = TaskTracker::new();
         let broadcast = SubscriberChannels::new(16, 16, 16);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
-        let (stream_tx, stream_rx) = load_aware_channel(16);
+        let (stream_tx, stream_rx) = load_aware_channel(16, SUBSCRIBER_WEIGHT_CAPACITY_FACTOR);
         let (half_close_tx, half_close_rx) = oneshot::channel();
 
         // mirrors the incoming handler spawned in subscribe()
