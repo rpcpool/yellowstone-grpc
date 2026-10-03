@@ -14,6 +14,7 @@ use {
                 MessageTransaction, MessageTransactionInfo,
             },
         },
+        util::stream::Weighted,
     },
     bytes::{
         buf::{Buf, BufMut},
@@ -70,6 +71,97 @@ macro_rules! prost_repeated_encoded_len_map {
                 .map(|len| encoded_len_varint(len as u64) + len)
                 .sum::<usize>()
     }};
+}
+
+/// Bytes of account data that add one weight unit to an account by default.
+pub const DEFAULT_ACCOUNT_DATA_UNIT: usize = 4096;
+
+/// Weight of each update kind in a Subscribe queue. Scales below `1` count as `1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WeightScales {
+    /// Multiplies an account update's weight, which is the account's units.
+    pub account: u32,
+    pub transaction: u32,
+    pub entry: u32,
+    pub slot: u32,
+    pub block_footer: u32,
+    /// Multiplies a block's weight, which is `1` plus its transactions and its accounts' units.
+    pub block: u32,
+    /// An account counts `1` unit plus one per this many bytes of data. `0` counts it as `1`.
+    pub account_data_unit: usize,
+}
+
+impl Default for WeightScales {
+    fn default() -> Self {
+        Self {
+            account: 1,
+            transaction: 1,
+            entry: 1,
+            slot: 1,
+            block_footer: 1,
+            block: 1,
+            account_data_unit: DEFAULT_ACCOUNT_DATA_UNIT,
+        }
+    }
+}
+
+impl WeightScales {
+    /// Counts the full data, even under a data slice, because the queue holds the whole account.
+    fn account_units(&self, account: &MessageAccount) -> u32 {
+        let extra = account
+            .account
+            .data
+            .len()
+            .checked_div(self.account_data_unit)
+            .unwrap_or_default();
+        u32::try_from(extra).unwrap_or(u32::MAX).saturating_add(1)
+    }
+}
+
+impl FilteredUpdate {
+    /// Weight of this update in a Subscribe queue. Transaction status, block meta, ping and pong
+    /// updates always weigh `1`.
+    pub fn scaled_weight(&self, scales: &WeightScales) -> u32 {
+        let scale = match &self.message {
+            FilteredUpdateOneof::Account(update) => {
+                return scales
+                    .account
+                    .max(1)
+                    .saturating_mul(scales.account_units(&update.account));
+            }
+            FilteredUpdateOneof::Transaction(_) => scales.transaction,
+            FilteredUpdateOneof::Entry(_) | FilteredUpdateOneof::EntryUpdateParent(_) => {
+                scales.entry
+            }
+            FilteredUpdateOneof::Slot(_) => scales.slot,
+            FilteredUpdateOneof::BlockFooter(_) => scales.block_footer,
+            FilteredUpdateOneof::Block(block) => {
+                let accounts = block
+                    .accounts
+                    .iter()
+                    .map(|account| scales.account_units(account))
+                    .fold(0, u32::saturating_add);
+                return u32::try_from(block.transactions.len())
+                    .unwrap_or(u32::MAX)
+                    .saturating_add(1)
+                    .saturating_add(accounts)
+                    .saturating_mul(scales.block.max(1));
+            }
+            FilteredUpdateOneof::TransactionStatus(_)
+            | FilteredUpdateOneof::BlockMeta(_)
+            | FilteredUpdateOneof::Ping
+            | FilteredUpdateOneof::Pong(_) => 1,
+        };
+        scale.max(1)
+    }
+}
+
+/// The weight under [`WeightScales::default`]: an account counts `1` plus one per 4 KiB of data,
+/// a block counts `1` plus its transactions and accounts, and other updates count `1`.
+impl Weighted for FilteredUpdate {
+    fn weight(&self) -> u32 {
+        self.scaled_weight(&WeightScales::default())
+    }
 }
 
 pub type FilteredUpdates = SmallVec<[FilteredUpdate; 2]>;
@@ -906,6 +998,13 @@ impl FilteredUpdateDeshredTransaction {
             } else {
                 0
             }
+    }
+}
+
+/// Every update weighs `1`, so subscriber channels bound the number of queued updates.
+impl Weighted for FilteredUpdateDeshred {
+    fn weight(&self) -> u32 {
+        1
     }
 }
 
