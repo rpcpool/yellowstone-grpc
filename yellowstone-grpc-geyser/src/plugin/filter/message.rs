@@ -73,10 +73,16 @@ macro_rules! prost_repeated_encoded_len_map {
     }};
 }
 
-/// Every update weighs `1`, so subscriber channels bound the number of queued updates.
+/// Every update besides 'Block' weighs `1`, so subscriber channels bound the number of queued updates.
+/// 'Block' weighs according to the number of accounts and transactions it contains.
 impl Weighted for FilteredUpdate {
     fn weight(&self) -> u32 {
-        1
+        match &self.message {
+            FilteredUpdateOneof::Block(block) => {
+                (block.accounts.len() + block.transactions.len()) as u32 + 1
+            }
+            _ => 1,
+        }
     }
 }
 
