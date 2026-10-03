@@ -118,24 +118,35 @@ impl Shared {
     ///
     /// # Arguments
     ///
-    /// * `item` - The [`Weighted`] item about to be queued.
+    /// * `weight` - The weight of the item about to be queued.
     ///
     /// # Returns
     ///
-    /// The admitted weight, in `1..=capacity`. It always fits in a `u32` because
-    /// [`Weighted::weight`] does.
-    fn admitted_weight<T: Weighted>(&self, item: &T) -> u32 {
-        (item.weight().max(1) as usize).min(self.capacity) as u32
+    /// The admitted weight, in `1..=capacity`. It always fits in a `u32` because the weight
+    /// does.
+    fn admitted_weight(&self, weight: u32) -> u32 {
+        (weight.max(1) as usize).min(self.capacity) as u32
     }
 }
+
+/// Computes the weight of an item when a sender queues it.
+type Weigher<T> = Arc<dyn Fn(&T) -> u32 + Send + Sync>;
 
 /// Sender end of the channel created by [`load_aware_channel`].
 ///
 /// It can be cloned freely, every clone shares the same capacity.
-#[derive(Debug)]
 pub struct LoadAwareSender<T> {
     shared: Arc<Shared>,
     inner: UnboundedSender<(u32, T)>,
+    weigher: Weigher<T>,
+}
+
+impl<T> fmt::Debug for LoadAwareSender<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoadAwareSender")
+            .field("shared", &self.shared)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> Clone for LoadAwareSender<T> {
@@ -143,6 +154,7 @@ impl<T> Clone for LoadAwareSender<T> {
         Self {
             shared: Arc::clone(&self.shared),
             inner: self.inner.clone(),
+            weigher: Arc::clone(&self.weigher),
         }
     }
 }
@@ -186,8 +198,21 @@ impl<T> Drop for LoadAwareReceiver<T> {
 /// # Panics
 ///
 /// Panics if `capacity` is `0` or exceeds [`MAX_CAPACITY`].
-pub fn load_aware_channel<T: Weighted>(
+pub fn load_aware_channel<T: Weighted + 'static>(
     weighted_capacity: usize,
+) -> (LoadAwareSender<T>, LoadAwareReceiver<T>) {
+    load_aware_channel_with_weigher(weighted_capacity, T::weight)
+}
+
+/// Creates a [`load_aware_channel`] that weighs items with `weigher` instead of
+/// [`Weighted::weight`].
+///
+/// # Panics
+///
+/// Panics if `weighted_capacity` is `0` or exceeds [`MAX_CAPACITY`].
+pub fn load_aware_channel_with_weigher<T>(
+    weighted_capacity: usize,
+    weigher: impl Fn(&T) -> u32 + Send + Sync + 'static,
 ) -> (LoadAwareSender<T>, LoadAwareReceiver<T>) {
     assert!(
         weighted_capacity > 0,
@@ -201,6 +226,7 @@ pub fn load_aware_channel<T: Weighted>(
     let sender = LoadAwareSender {
         shared: Arc::clone(&shared),
         inner: inner_sender,
+        weigher: Arc::new(weigher),
     };
 
     let rx = LoadAwareReceiver {
@@ -211,7 +237,12 @@ pub fn load_aware_channel<T: Weighted>(
     (sender, rx)
 }
 
-impl<T: Weighted> LoadAwareSender<T> {
+impl<T> LoadAwareSender<T> {
+    /// Returns the weight `item` is accounted for while it sits in the channel.
+    fn admitted_weight(&self, item: &T) -> u32 {
+        self.shared.admitted_weight((self.weigher)(item))
+    }
+
     /// Sends an item, waiting until the channel has enough free weight for it and every sender
     /// ahead of it in line.
     ///
@@ -229,7 +260,7 @@ impl<T: Weighted> LoadAwareSender<T> {
     ///
     /// Returns the `item` back in a [`SendError`] if the [`LoadAwareReceiver`] is dropped.
     pub async fn send(&self, item: T) -> Result<(), SendError<T>> {
-        let weight = self.shared.admitted_weight(&item);
+        let weight = self.admitted_weight(&item);
         // Fast path: skip building the `Acquire` future when capacity is available. A failed try
         // never takes capacity ahead of a waiting sender, so falling through keeps FIFO order.
         match self.shared.semaphore.try_acquire_many(weight) {
@@ -266,7 +297,7 @@ impl<T: Weighted> LoadAwareSender<T> {
     /// capacity for it right now, [`TrySendError::Closed`] if the [`LoadAwareReceiver`] is
     /// dropped.
     pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
-        let weight = self.shared.admitted_weight(&item);
+        let weight = self.admitted_weight(&item);
         match self.shared.semaphore.try_acquire_many(weight) {
             Ok(permit) => permit.forget(),
             Err(TryAcquireError::NoPermits) => return Err(TrySendError::Full(item)),
@@ -492,6 +523,21 @@ mod tests {
         assert_eq!(receiver.recv().await, Some(TestItem(3)));
         assert!(matches!(poll!(&mut oversized), Poll::Ready(Ok(()))));
         assert_eq!(receiver.recv().await, Some(TestItem(100)));
+        assert_eq!(sender.current_weight(), 0);
+    }
+
+    #[tokio::test]
+    async fn custom_weigher_sets_the_weight() {
+        let (sender, mut receiver) =
+            load_aware_channel_with_weigher(10, |item: &TestItem| item.0 * 3);
+
+        sender.try_send(TestItem(2)).unwrap();
+        assert_eq!(sender.current_weight(), 6);
+        assert!(matches!(
+            sender.try_send(TestItem(2)),
+            Err(TrySendError::Full(TestItem(2)))
+        ));
+        assert_eq!(receiver.recv().await, Some(TestItem(2)));
         assert_eq!(sender.current_weight(), 0);
     }
 
