@@ -187,13 +187,16 @@ impl<T> Drop for LoadAwareReceiver<T> {
 ///
 /// Panics if `capacity` is `0` or exceeds [`MAX_CAPACITY`].
 pub fn load_aware_channel<T: Weighted>(
-    capacity: usize,
+    weighted_capacity: usize,
 ) -> (LoadAwareSender<T>, LoadAwareReceiver<T>) {
-    assert!(capacity > 0, "load aware channel capacity must be positive");
+    assert!(
+        weighted_capacity > 0,
+        "load aware channel weight capacity must be positive"
+    );
     let (inner_sender, inner_receiver) = tokio::sync::mpsc::unbounded_channel();
     let shared = Arc::new(Shared {
-        semaphore: Semaphore::new(capacity),
-        capacity,
+        semaphore: Semaphore::new(weighted_capacity),
+        capacity: weighted_capacity,
     });
     let sender = LoadAwareSender {
         shared: Arc::clone(&shared),
