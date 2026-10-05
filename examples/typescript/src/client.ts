@@ -48,6 +48,8 @@ type CliArgs = {
   transactionsCompressedCapacity?: number;
   transactionsAccountExclude: string[];
   transactionsAccountRequired: string[];
+  transactionsSignerInclude: string[];
+  transactionsSignerExclude: string[];
   transactionsParsed: boolean;
   transactionsDecodeErr: boolean;
   transactionsStatus: boolean;
@@ -60,6 +62,8 @@ type CliArgs = {
   transactionsStatusCompressedCapacity?: number;
   transactionsStatusAccountExclude: string[];
   transactionsStatusAccountRequired: string[];
+  transactionsStatusSignerInclude: string[];
+  transactionsStatusSignerExclude: string[];
   entry: boolean;
   blocks: boolean;
   blocksAccountInclude: string[];
@@ -75,6 +79,8 @@ type CliArgs = {
   deshredAccountInclude: string[];
   deshredAccountExclude: string[];
   deshredAccountRequired: string[];
+  deshredSignerInclude: string[];
+  deshredSignerExclude: string[];
 };
 
 async function main() {
@@ -382,6 +388,8 @@ function buildSubscribeRequest(args: CliArgs): BuiltSubscribeRequest {
         : args.transactionsAccountInclude,
       accountExclude: args.transactionsAccountExclude,
       accountRequired: args.transactionsAccountRequired,
+      signerInclude: args.transactionsSignerInclude,
+      signerExclude: args.transactionsSignerExclude,
       tokenAccounts: transactionTokenAccounts,
     };
   }
@@ -397,6 +405,8 @@ function buildSubscribeRequest(args: CliArgs): BuiltSubscribeRequest {
         : args.transactionsStatusAccountInclude,
       accountExclude: args.transactionsStatusAccountExclude,
       accountRequired: args.transactionsStatusAccountRequired,
+      signerInclude: args.transactionsStatusSignerInclude,
+      signerExclude: args.transactionsStatusSignerExclude,
       tokenAccounts: transactionStatusTokenAccounts,
     };
   }
@@ -587,6 +597,8 @@ async function subscribeDeshredCommand(client: Client, args: CliArgs) {
         accountInclude: args.deshredAccountInclude,
         accountExclude: args.deshredAccountExclude,
         accountRequired: args.deshredAccountRequired,
+        signerInclude: args.deshredSignerInclude,
+        signerExclude: args.deshredSignerExclude,
       },
     },
     ping: args.ping ? { id: args.ping } : undefined,
@@ -790,6 +802,17 @@ async function parseCommandLineArgs(): Promise<CliArgs> {
           description: "filter required account in transactions",
           type: "array",
         },
+        "transactions-signer-include": {
+          default: [],
+          description: "filter transactions signed by any of these accounts",
+          type: "array",
+        },
+        "transactions-signer-exclude": {
+          default: [],
+          description:
+            "filter out transactions signed by any of these accounts",
+          type: "array",
+        },
         "transactions-parsed": {
           default: false,
           describe: "parse transaction to json",
@@ -846,6 +869,17 @@ async function parseCommandLineArgs(): Promise<CliArgs> {
         "transactions-status-account-required": {
           default: [],
           description: "filter required account in transactions",
+          type: "array",
+        },
+        "transactions-status-signer-include": {
+          default: [],
+          description: "filter transactions signed by any of these accounts",
+          type: "array",
+        },
+        "transactions-status-signer-exclude": {
+          default: [],
+          description:
+            "filter out transactions signed by any of these accounts",
           type: "array",
         },
         entry: {
@@ -931,6 +965,18 @@ async function parseCommandLineArgs(): Promise<CliArgs> {
             default: [],
             description:
               "filter required accounts in deshred transactions (static + ALT)",
+            type: "array",
+          },
+          "deshred-signer-include": {
+            default: [],
+            description:
+              "filter deshred transactions signed by any of these accounts (static keys only)",
+            type: "array",
+          },
+          "deshred-signer-exclude": {
+            default: [],
+            description:
+              "filter out deshred transactions signed by any of these accounts",
             type: "array",
           },
           ping: {
