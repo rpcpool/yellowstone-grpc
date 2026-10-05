@@ -10,9 +10,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-proto 15.0.0
+- yellowstone-grpc-geyser 16.1.0
+- yellowstone-grpc-client 15.0.0
+
 ### Breaking
 
-- proto/plugin: block footer certificates are typed proto messages instead of wincode bytes. `block_final_cert`, `skip_reward_cert` and `notar_reward_cert` move to fields 9, 10 and 11.
+- proto/plugin: block footer certificates are typed proto messages instead of wincode bytes. `block_final_cert`, `skip_reward_cert` and `notar_reward_cert` move to fields 9, 10 and 11. 
+
+- proto/plugin: certificate signers are plain LSB-first bitsets (`validator_count`, `signers`, `fallback_signers`) instead of the agave signer-store bitmap.
 
 ### Features
 
