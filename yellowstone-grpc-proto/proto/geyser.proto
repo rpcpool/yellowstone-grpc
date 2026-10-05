@@ -310,28 +310,19 @@ enum BlockFooterSignatureKind {
   COMPRESSED_BLS12_381_G2 = 1;
 }
 
-// The vote the validators signed. Readers reject kinds they do not know.
-enum BlockFooterVoteKind {
-  VOTE_KIND_UNSPECIFIED = 0;
-  FINALIZE = 1;
-  FAST_FINALIZE = 2;
-  NOTARIZE = 3;
-  SKIP = 4;
-}
-
 // An aggregate signature over one vote, and the validators that signed it.
 message BlockFooterVotesAggregate {
-  BlockFooterVoteKind vote_kind = 1;
-  BlockFooterSignatureKind signature_kind = 2;
-  bytes signature = 3;
-  // Merkle root of the block's last data shred, not the PoH blockhash. Empty for FINALIZE and SKIP.
-  bytes block_id = 4;
+  BlockFooterSignatureKind signature_kind = 1;
+  bytes signature = 2;
+  // Merkle root of the block's last data shred, not the PoH blockhash. Empty for votes on a slot.
+  bytes block_id = 3;
   // solana-signer-store bitmap, verbatim: version byte, u16 LE bit count, payload. Bit i is the
   // validator at rank i in the cert slot's epoch, ordered by stake descending then BLS pubkey.
-  bytes signer_bitmap = 5;
+  bytes signer_bitmap = 4;
 }
 
-// Proves that the block is finalized. notar_aggregate is set only for FINALIZE.
+// Proves that the block is finalized. Slow finalization: final_aggregate signs a finalize vote on
+// the slot and notar_aggregate a notarize vote on the block. Fast: final_aggregate alone, on the block.
 message BlockFooterFinalCert {
   uint64 slot = 1;
   BlockFooterVotesAggregate final_aggregate = 2;

@@ -286,23 +286,11 @@ pub fn create_block_final_cert(
     let block_id = Some(&cert.block_id);
     let (final_aggregate, notar_aggregate) = match &cert.notar_aggregate {
         Some(notar_aggregate) => (
-            create_votes_aggregate(
-                proto::BlockFooterVoteKind::Finalize,
-                None,
-                &cert.final_aggregate,
-            )?,
-            Some(create_votes_aggregate(
-                proto::BlockFooterVoteKind::Notarize,
-                block_id,
-                notar_aggregate,
-            )?),
+            create_votes_aggregate(None, &cert.final_aggregate)?,
+            Some(create_votes_aggregate(block_id, notar_aggregate)?),
         ),
         None => (
-            create_votes_aggregate(
-                proto::BlockFooterVoteKind::FastFinalize,
-                block_id,
-                &cert.final_aggregate,
-            )?,
+            create_votes_aggregate(block_id, &cert.final_aggregate)?,
             None,
         ),
     };
@@ -315,13 +303,11 @@ pub fn create_block_final_cert(
 
 // VotesAggregate exposes its signature only uncompressed, so compress it back to 96 bytes.
 fn create_votes_aggregate(
-    vote_kind: proto::BlockFooterVoteKind,
     block_id: Option<&Hash>,
     aggregate: &VotesAggregate,
 ) -> Result<proto::BlockFooterVotesAggregate, BlsError> {
     let signature = BLSSignatureCompressed::try_from(&aggregate.uncompress_signature()?)?;
     Ok(create_aggregate(
-        vote_kind,
         block_id,
         &signature,
         aggregate.clone().into_bitmap(),
@@ -332,7 +318,6 @@ pub fn create_skip_reward_cert(cert: &SkipRewardCertificate) -> proto::BlockFoot
     proto::BlockFooterSkipRewardCert {
         slot: cert.slot,
         aggregate: Some(create_aggregate(
-            proto::BlockFooterVoteKind::Skip,
             None,
             &cert.signature,
             cert.to_bitmap().to_vec(),
@@ -346,7 +331,6 @@ pub fn create_notar_reward_cert(
     proto::BlockFooterNotarRewardCert {
         slot: cert.slot,
         aggregate: Some(create_aggregate(
-            proto::BlockFooterVoteKind::Notarize,
             Some(&cert.block_id),
             &cert.signature,
             cert.bitmap().to_vec(),
@@ -355,13 +339,11 @@ pub fn create_notar_reward_cert(
 }
 
 fn create_aggregate(
-    vote_kind: proto::BlockFooterVoteKind,
     block_id: Option<&Hash>,
     signature: &BLSSignatureCompressed,
     signer_bitmap: Vec<u8>,
 ) -> proto::BlockFooterVotesAggregate {
     proto::BlockFooterVotesAggregate {
-        vote_kind: vote_kind.into(),
         signature_kind: proto::BlockFooterSignatureKind::CompressedBls12381G2.into(),
         signature: signature.0.into(),
         block_id: block_id.map(|id| id.to_bytes().into()).unwrap_or_default(),

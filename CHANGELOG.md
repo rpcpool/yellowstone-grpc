@@ -17,7 +17,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Breaking
 
 - proto/plugin: block footer certificates are typed proto messages instead of wincode bytes. `block_final_cert`, `skip_reward_cert` and `notar_reward_cert` move to fields 9, 10 and 11. 
-- proto: each `BlockFooterVotesAggregate` carries `vote_kind`, `signature_kind`, `signature`, `block_id` and the signer-store `signer_bitmap` verbatim. The bitmap's header byte names its layout.
+- proto: each `BlockFooterVotesAggregate` carries `signature_kind`, `signature`, `block_id` and the signer-store `signer_bitmap` verbatim. The bitmap's header byte names its layout.
 
 ### Features
 

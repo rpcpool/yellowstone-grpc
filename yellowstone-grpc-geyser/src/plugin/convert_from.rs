@@ -395,7 +395,7 @@ pub fn create_account(
     Ok((pubkey, account))
 }
 
-// Slow finalization pairs FINALIZE with a NOTARIZE aggregate; fast finalization is FAST_FINALIZE alone.
+// The block_id sits on the notarize aggregate in a slow finalization, and on the final one in a fast one.
 pub fn create_block_final_cert(
     cert: &proto::BlockFooterFinalCert,
 ) -> CreateResult<BlockFinalizationCert> {
@@ -403,17 +403,7 @@ pub fn create_block_final_cert(
         .final_aggregate
         .as_ref()
         .ok_or("failed to get final_aggregate")?;
-    let block_aggregate = match &cert.notar_aggregate {
-        Some(notar_aggregate) => {
-            check_vote_kind(final_aggregate, proto::BlockFooterVoteKind::Finalize)?;
-            check_vote_kind(notar_aggregate, proto::BlockFooterVoteKind::Notarize)?;
-            notar_aggregate
-        }
-        None => {
-            check_vote_kind(final_aggregate, proto::BlockFooterVoteKind::FastFinalize)?;
-            final_aggregate
-        }
-    };
+    let block_aggregate = cert.notar_aggregate.as_ref().unwrap_or(final_aggregate);
     Ok(BlockFinalizationCert {
         slot: cert.slot,
         block_id: create_hash(&block_aggregate.block_id)?,
@@ -441,7 +431,6 @@ pub fn create_skip_reward_cert(
     cert: &proto::BlockFooterSkipRewardCert,
 ) -> CreateResult<SkipRewardCertificate> {
     let aggregate = cert.aggregate.as_ref().ok_or("failed to get aggregate")?;
-    check_vote_kind(aggregate, proto::BlockFooterVoteKind::Skip)?;
     SkipRewardCertificate::try_new(
         cert.slot,
         create_bls_signature(aggregate)?,
@@ -454,7 +443,6 @@ pub fn create_notar_reward_cert(
     cert: &proto::BlockFooterNotarRewardCert,
 ) -> CreateResult<NotarRewardCertificate> {
     let aggregate = cert.aggregate.as_ref().ok_or("failed to get aggregate")?;
-    check_vote_kind(aggregate, proto::BlockFooterVoteKind::Notarize)?;
     NotarRewardCertificate::try_new(
         cert.slot,
         create_hash(&aggregate.block_id)?,
@@ -462,16 +450,6 @@ pub fn create_notar_reward_cert(
         aggregate.signer_bitmap.clone(),
     )
     .map_err(|_| "failed to create notar reward cert")
-}
-
-fn check_vote_kind(
-    aggregate: &proto::BlockFooterVotesAggregate,
-    expected: proto::BlockFooterVoteKind,
-) -> CreateResult<()> {
-    if aggregate.vote_kind() != expected {
-        return Err("unexpected vote kind");
-    }
-    Ok(())
 }
 
 fn create_hash(hash: &[u8]) -> CreateResult<Hash> {
@@ -525,12 +503,6 @@ mod tests {
         })
     }
 
-    fn vote_kind(
-        aggregate: &Option<proto::BlockFooterVotesAggregate>,
-    ) -> proto::BlockFooterVoteKind {
-        aggregate.as_ref().unwrap().vote_kind()
-    }
-
     #[test]
     fn block_final_cert_round_trip() {
         let block_id = Hash::new_from_array([4; 32]);
@@ -547,24 +519,12 @@ mod tests {
             assert_eq!(final_aggregate.signature.len(), 96);
             assert_eq!(final_aggregate.signer_bitmap, vec![0, 10, 0, 0b1101, 0b11]);
             if slow {
-                assert_eq!(
-                    vote_kind(&proto.final_aggregate),
-                    proto::BlockFooterVoteKind::Finalize
-                );
                 assert!(final_aggregate.block_id.is_empty());
-                assert_eq!(
-                    vote_kind(&proto.notar_aggregate),
-                    proto::BlockFooterVoteKind::Notarize
-                );
                 assert_eq!(
                     proto.notar_aggregate.as_ref().unwrap().block_id,
                     block_id.to_bytes()
                 );
             } else {
-                assert_eq!(
-                    vote_kind(&proto.final_aggregate),
-                    proto::BlockFooterVoteKind::FastFinalize
-                );
                 assert_eq!(final_aggregate.block_id, block_id.to_bytes());
             }
             assert_eq!(create_block_final_cert(&proto).unwrap(), cert);
@@ -576,10 +536,6 @@ mod tests {
         let signature = BLSSignatureCompressed::try_from(&bls_signature(3)).unwrap();
         let skip = SkipRewardCertificate::try_new(42, signature, vec![1, 6, 0, 9]).unwrap();
         let proto = convert_to::create_skip_reward_cert(&skip);
-        assert_eq!(
-            vote_kind(&proto.aggregate),
-            proto::BlockFooterVoteKind::Skip
-        );
         assert!(proto.aggregate.as_ref().unwrap().block_id.is_empty());
         assert_eq!(create_skip_reward_cert(&proto).unwrap(), skip);
 
@@ -591,10 +547,6 @@ mod tests {
         )
         .unwrap();
         let proto = convert_to::create_notar_reward_cert(&notar);
-        assert_eq!(
-            vote_kind(&proto.aggregate),
-            proto::BlockFooterVoteKind::Notarize
-        );
         assert_eq!(proto.aggregate.as_ref().unwrap().block_id, vec![5; 32]);
         assert_eq!(create_notar_reward_cert(&proto).unwrap(), notar);
     }
@@ -617,14 +569,10 @@ mod tests {
         cert.final_aggregate = None;
         assert!(create_block_final_cert(&cert).is_err());
 
-        // A FINALIZE aggregate needs a NOTARIZE aggregate next to it.
+        // A slow finalization takes its block_id from the notarize aggregate.
         let mut cert = fast.clone();
-        cert.final_aggregate.as_mut().unwrap().vote_kind =
-            proto::BlockFooterVoteKind::Finalize.into();
-        assert!(create_block_final_cert(&cert).is_err());
-
-        let mut cert = fast.clone();
-        cert.final_aggregate.as_mut().unwrap().vote_kind = proto::BlockFooterVoteKind::Skip.into();
+        cert.notar_aggregate = cert.final_aggregate.clone();
+        cert.notar_aggregate.as_mut().unwrap().block_id.clear();
         assert!(create_block_final_cert(&cert).is_err());
 
         let mut cert = fast.clone();
