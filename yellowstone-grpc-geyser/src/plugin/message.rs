@@ -515,38 +515,26 @@ impl MessageBlockFooter {
                 bank_hash: footer.bank_hash.to_bytes().to_vec(),
                 block_producer_time_nanos: footer.block_producer_time_nanos,
                 block_user_agent: footer.block_user_agent.clone(),
+                // A final cert with an invalid signature is dropped, so the rest of the footer still goes out.
                 block_final_cert: footer.block_final_cert.as_ref().and_then(|cert| {
-                    ok_or_warn(
-                        info.slot,
-                        "block final",
-                        convert_to::create_block_final_cert(cert),
-                    )
+                    convert_to::create_block_final_cert(cert)
+                        .inspect_err(|error| {
+                            log::warn!("slot {}: invalid block final cert: {error}", info.slot)
+                        })
+                        .ok()
                 }),
-                skip_reward_cert: footer.skip_reward_cert.as_ref().and_then(|cert| {
-                    ok_or_warn(
-                        info.slot,
-                        "skip reward",
-                        convert_to::create_skip_reward_cert(cert),
-                    )
-                }),
-                notar_reward_cert: footer.notar_reward_cert.as_ref().and_then(|cert| {
-                    ok_or_warn(
-                        info.slot,
-                        "notar reward",
-                        convert_to::create_notar_reward_cert(cert),
-                    )
-                }),
+                skip_reward_cert: footer
+                    .skip_reward_cert
+                    .as_ref()
+                    .map(convert_to::create_skip_reward_cert),
+                notar_reward_cert: footer
+                    .notar_reward_cert
+                    .as_ref()
+                    .map(convert_to::create_notar_reward_cert),
             },
             created_at: Timestamp::from(SystemTime::now()),
         }
     }
-}
-
-// A cert that fails to convert is dropped, so the rest of the footer still goes out.
-fn ok_or_warn<T, E: std::fmt::Debug>(slot: Slot, cert: &str, result: Result<T, E>) -> Option<T> {
-    result
-        .inspect_err(|error| log::warn!("slot {slot}: invalid {cert} cert: {error:?}"))
-        .ok()
 }
 
 #[derive(Debug, Clone, PartialEq)]

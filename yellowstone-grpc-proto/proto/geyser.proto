@@ -303,24 +303,39 @@ message SubscribeUpdateBlockFooter {
   BlockFooterNotarRewardCert notar_reward_cert = 11;
 }
 
-// An aggregate BLS signature and the validators that signed it.
-// Bitsets are LSB first: bit i is set when the validator with rank i signed.
-message BlockFooterVotesAggregate {
-  // Compressed BLS12-381 G2 point, 96 bytes.
-  bytes signature = 1;
-  // Number of validator ranks. Each bitset holds this many bits.
-  uint32 validator_count = 2;
-  bytes signers = 3;
-  // Signers of the fallback vote. Present only when the aggregate includes fallback votes.
-  optional bytes fallback_signers = 4;
+// Encoding of BlockFooterVotesAggregate.signature. Readers reject kinds they do not know.
+enum BlockFooterSignatureKind {
+  SIGNATURE_KIND_UNSPECIFIED = 0;
+  // 96 bytes.
+  COMPRESSED_BLS12_381_G2 = 1;
 }
 
-// Proves that the block (slot, block_id) is finalized.
+// The vote the validators signed. Readers reject kinds they do not know.
+enum BlockFooterVoteKind {
+  VOTE_KIND_UNSPECIFIED = 0;
+  FINALIZE = 1;
+  FAST_FINALIZE = 2;
+  NOTARIZE = 3;
+  SKIP = 4;
+}
+
+// An aggregate signature over one vote, and the validators that signed it.
+message BlockFooterVotesAggregate {
+  BlockFooterVoteKind vote_kind = 1;
+  BlockFooterSignatureKind signature_kind = 2;
+  bytes signature = 3;
+  // Merkle root of the block's last data shred, not the PoH blockhash. Empty for FINALIZE and SKIP.
+  bytes block_id = 4;
+  // solana-signer-store bitmap, verbatim: version byte, u16 LE bit count, payload. Bit i is the
+  // validator at rank i in the cert slot's epoch, ordered by stake descending then BLS pubkey.
+  bytes signer_bitmap = 5;
+}
+
+// Proves that the block is finalized. notar_aggregate is set only for FINALIZE.
 message BlockFooterFinalCert {
   uint64 slot = 1;
-  bytes block_id = 2;
-  BlockFooterVotesAggregate final_aggregate = 3;
-  BlockFooterVotesAggregate notar_aggregate = 4;
+  BlockFooterVotesAggregate final_aggregate = 2;
+  BlockFooterVotesAggregate notar_aggregate = 3;
 }
 
 // Records the validators that voted skip on the slot.
@@ -329,11 +344,10 @@ message BlockFooterSkipRewardCert {
   BlockFooterVotesAggregate aggregate = 2;
 }
 
-// Records the validators that voted notar on the block (slot, block_id).
+// Records the validators that voted notarize on the slot's block.
 message BlockFooterNotarRewardCert {
   uint64 slot = 1;
-  bytes block_id = 2;
-  BlockFooterVotesAggregate aggregate = 3;
+  BlockFooterVotesAggregate aggregate = 2;
 }
 
 message SubscribeUpdateEntry {

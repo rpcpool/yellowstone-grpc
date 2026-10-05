@@ -20,8 +20,9 @@ use {
     },
     yellowstone_grpc_proto::{
         geyser::{
-            BlockFooterFinalCert, BlockFooterNotarRewardCert, BlockFooterSkipRewardCert,
-            BlockFooterVotesAggregate, SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta,
+            BlockFooterFinalCert, BlockFooterNotarRewardCert, BlockFooterSignatureKind,
+            BlockFooterSkipRewardCert, BlockFooterVoteKind, BlockFooterVotesAggregate,
+            SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta,
         },
         solana::storage::confirmed_block,
     },
@@ -147,32 +148,29 @@ pub fn block_footer_certificates() -> (
     BlockFooterSkipRewardCert,
     BlockFooterNotarRewardCert,
 ) {
-    let aggregate = |byte, fallback_signers| BlockFooterVotesAggregate {
+    let aggregate = |vote_kind: BlockFooterVoteKind, byte, block_id| BlockFooterVotesAggregate {
+        vote_kind: vote_kind.into(),
+        signature_kind: BlockFooterSignatureKind::CompressedBls12381G2.into(),
         signature: vec![byte; 96],
-        validator_count: 20,
-        signers: vec![byte; 3],
-        fallback_signers,
+        block_id,
+        signer_bitmap: vec![byte; 3],
     };
     (
         BlockFooterFinalCert {
             slot: 42,
-            block_id: vec![4; 32],
-            final_aggregate: Some(aggregate(1, None)),
-            notar_aggregate: None,
+            final_aggregate: Some(aggregate(BlockFooterVoteKind::Finalize, 1, Vec::new())),
+            notar_aggregate: Some(aggregate(BlockFooterVoteKind::Notarize, 2, vec![4; 32])),
         },
         BlockFooterSkipRewardCert {
             slot: 42,
             aggregate: Some(BlockFooterVotesAggregate {
-                signature: vec![2; 96],
-                validator_count: 0,
-                signers: Vec::new(),
-                fallback_signers: Some(Vec::new()),
+                signer_bitmap: Vec::new(),
+                ..aggregate(BlockFooterVoteKind::Skip, 3, Vec::new())
             }),
         },
         BlockFooterNotarRewardCert {
             slot: 42,
-            block_id: vec![5; 32],
-            aggregate: Some(aggregate(3, Some(vec![4; 3]))),
+            aggregate: Some(aggregate(BlockFooterVoteKind::Notarize, 4, vec![5; 32])),
         },
     )
 }

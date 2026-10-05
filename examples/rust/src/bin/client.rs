@@ -1001,7 +1001,6 @@ async fn geyser_subscribe(
                                 "blockUserAgent": String::from_utf8_lossy(&msg.block_user_agent),
                                 "blockFinalCert": msg.block_final_cert.map(|cert| json!({
                                     "slot": cert.slot,
-                                    "blockId": bs58::encode(cert.block_id).into_string(),
                                     "finalAggregate": cert.final_aggregate.map(votes_aggregate_json),
                                     "notarAggregate": cert.notar_aggregate.map(votes_aggregate_json),
                                 })),
@@ -1011,7 +1010,6 @@ async fn geyser_subscribe(
                                 })),
                                 "notarRewardCert": msg.notar_reward_cert.map(|cert| json!({
                                     "slot": cert.slot,
-                                    "blockId": bs58::encode(cert.block_id).into_string(),
                                     "aggregate": cert.aggregate.map(votes_aggregate_json),
                                 })),
                             }),
@@ -1289,10 +1287,11 @@ fn create_pretty_entry(msg: SubscribeUpdateEntry) -> anyhow::Result<Value> {
 
 fn votes_aggregate_json(aggregate: BlockFooterVotesAggregate) -> Value {
     json!({
-        "signature": bs58::encode(aggregate.signature).into_string(),
-        "validatorCount": aggregate.validator_count,
-        "signers": bs58::encode(aggregate.signers).into_string(),
-        "fallbackSigners": aggregate.fallback_signers.map(|signers| bs58::encode(signers).into_string()),
+        "voteKind": aggregate.vote_kind().as_str_name(),
+        "signatureKind": aggregate.signature_kind().as_str_name(),
+        "signature": bs58::encode(&aggregate.signature).into_string(),
+        "blockId": bs58::encode(&aggregate.block_id).into_string(),
+        "signerBitmap": bs58::encode(&aggregate.signer_bitmap).into_string(),
     })
 }
 
