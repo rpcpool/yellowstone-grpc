@@ -147,28 +147,32 @@ pub fn block_footer_certificates() -> (
     BlockFooterSkipRewardCert,
     BlockFooterNotarRewardCert,
 ) {
-    let aggregate = |byte| BlockFooterVotesAggregate {
+    let aggregate = |byte, fallback_signers| BlockFooterVotesAggregate {
         signature: vec![byte; 96],
-        bitmap: vec![byte; 3],
+        validator_count: 20,
+        signers: vec![byte; 3],
+        fallback_signers,
     };
     (
         BlockFooterFinalCert {
             slot: 42,
             block_id: vec![4; 32],
-            final_aggregate: Some(aggregate(1)),
+            final_aggregate: Some(aggregate(1, None)),
             notar_aggregate: None,
         },
         BlockFooterSkipRewardCert {
             slot: 42,
             aggregate: Some(BlockFooterVotesAggregate {
                 signature: vec![2; 96],
-                bitmap: Vec::new(),
+                validator_count: 0,
+                signers: Vec::new(),
+                fallback_signers: Some(Vec::new()),
             }),
         },
         BlockFooterNotarRewardCert {
             slot: 42,
             block_id: vec![5; 32],
-            aggregate: Some(aggregate(3)),
+            aggregate: Some(aggregate(3, Some(vec![4; 3]))),
         },
     )
 }

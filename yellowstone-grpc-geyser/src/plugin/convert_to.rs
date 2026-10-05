@@ -1,6 +1,7 @@
 use {
     crate::plugin::message::{ContactInfoMessage, MessageContactInfo},
     agave_votor_messages::reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+    bitvec::{order::Lsb0, vec::BitVec},
     prost_types::Timestamp,
     solana_bls_signatures::{error::BlsError, SignatureCompressed as BLSSignatureCompressed},
     solana_clock::UnixTimestamp,
@@ -11,6 +12,7 @@ use {
     },
     solana_pubkey::Pubkey,
     solana_signature::Signature,
+    solana_signer_store::{DecodeError, Decoded},
     solana_transaction::versioned::VersionedTransaction,
     solana_transaction_context::transaction::TransactionReturnData,
     solana_transaction_error::TransactionError,
@@ -278,9 +280,17 @@ pub const fn create_timestamp(timestamp: UnixTimestamp) -> proto::UnixTimestamp 
     proto::UnixTimestamp { timestamp }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum BlockFinalCertError {
+    #[error("invalid signature: {0}")]
+    Signature(#[from] BlsError),
+    #[error("invalid bitmap: {0:?}")]
+    Bitmap(DecodeError),
+}
+
 pub fn create_block_final_cert(
     cert: &BlockFinalizationCert,
-) -> Result<proto::BlockFooterFinalCert, BlsError> {
+) -> Result<proto::BlockFooterFinalCert, BlockFinalCertError> {
     Ok(proto::BlockFooterFinalCert {
         slot: cert.slot,
         block_id: cert.block_id.to_bytes().into(),
@@ -296,35 +306,51 @@ pub fn create_block_final_cert(
 // VotesAggregate exposes its signature only uncompressed, so compress it back to 96 bytes.
 pub fn create_votes_aggregate(
     aggregate: &VotesAggregate,
-) -> Result<proto::BlockFooterVotesAggregate, BlsError> {
+) -> Result<proto::BlockFooterVotesAggregate, BlockFinalCertError> {
     let signature = BLSSignatureCompressed::try_from(&aggregate.uncompress_signature()?)?;
-    Ok(proto::BlockFooterVotesAggregate {
-        signature: signature.0.into(),
-        bitmap: aggregate.clone().into_bitmap(),
-    })
+    create_signers(&signature, &aggregate.clone().into_bitmap())
+        .map_err(BlockFinalCertError::Bitmap)
 }
 
-pub fn create_skip_reward_cert(cert: &SkipRewardCertificate) -> proto::BlockFooterSkipRewardCert {
-    proto::BlockFooterSkipRewardCert {
+pub fn create_skip_reward_cert(
+    cert: &SkipRewardCertificate,
+) -> Result<proto::BlockFooterSkipRewardCert, DecodeError> {
+    Ok(proto::BlockFooterSkipRewardCert {
         slot: cert.slot,
-        aggregate: Some(proto::BlockFooterVotesAggregate {
-            signature: cert.signature.0.into(),
-            bitmap: cert.to_bitmap().to_vec(),
-        }),
-    }
+        aggregate: Some(create_signers(&cert.signature, cert.to_bitmap())?),
+    })
 }
 
 pub fn create_notar_reward_cert(
     cert: &NotarRewardCertificate,
-) -> proto::BlockFooterNotarRewardCert {
-    proto::BlockFooterNotarRewardCert {
+) -> Result<proto::BlockFooterNotarRewardCert, DecodeError> {
+    Ok(proto::BlockFooterNotarRewardCert {
         slot: cert.slot,
         block_id: cert.block_id.to_bytes().into(),
-        aggregate: Some(proto::BlockFooterVotesAggregate {
-            signature: cert.signature.0.into(),
-            bitmap: cert.bitmap().to_vec(),
-        }),
-    }
+        aggregate: Some(create_signers(&cert.signature, cert.bitmap())?),
+    })
+}
+
+// Decodes the solana-signer-store bitmap into plain LSB-first bitsets.
+fn create_signers(
+    signature: &BLSSignatureCompressed,
+    bitmap: &[u8],
+) -> Result<proto::BlockFooterVotesAggregate, DecodeError> {
+    let (signers, fallback_signers) = match solana_signer_store::decode(bitmap, u16::MAX.into())? {
+        Decoded::Base2(signers) => (signers, None),
+        Decoded::Base3(signers, fallback_signers) => (signers, Some(fallback_signers)),
+    };
+    Ok(proto::BlockFooterVotesAggregate {
+        signature: signature.0.into(),
+        validator_count: signers.len() as u32,
+        signers: create_bitset(signers),
+        fallback_signers: fallback_signers.map(create_bitset),
+    })
+}
+
+fn create_bitset(mut bits: BitVec<u8, Lsb0>) -> Vec<u8> {
+    bits.set_uninitialized(false);
+    bits.into_vec()
 }
 
 pub fn create_contact_info_node(

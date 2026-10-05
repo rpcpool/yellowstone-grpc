@@ -298,16 +298,21 @@ message SubscribeUpdateBlockFooter {
   reserved 6, 7, 8;
 
   // The Alpenglow certificates. Sent only when the filter sets include_certificates.
-  optional BlockFooterFinalCert block_final_cert = 9;
-  optional BlockFooterSkipRewardCert skip_reward_cert = 10;
-  optional BlockFooterNotarRewardCert notar_reward_cert = 11;
+  BlockFooterFinalCert block_final_cert = 9;
+  BlockFooterSkipRewardCert skip_reward_cert = 10;
+  BlockFooterNotarRewardCert notar_reward_cert = 11;
 }
 
-// An aggregate BLS signature and the bitmap of validators that signed it.
-// The signature is a compressed BLS12-381 G2 point of 96 bytes.
+// An aggregate BLS signature and the validators that signed it.
+// Bitsets are LSB first: bit i is set when the validator with rank i signed.
 message BlockFooterVotesAggregate {
+  // Compressed BLS12-381 G2 point, 96 bytes.
   bytes signature = 1;
-  bytes bitmap = 2;
+  // Number of validator ranks. Each bitset holds this many bits.
+  uint32 validator_count = 2;
+  bytes signers = 3;
+  // Signers of the fallback vote. Present only when the aggregate includes fallback votes.
+  optional bytes fallback_signers = 4;
 }
 
 // Proves that the block (slot, block_id) is finalized.
@@ -315,7 +320,7 @@ message BlockFooterFinalCert {
   uint64 slot = 1;
   bytes block_id = 2;
   BlockFooterVotesAggregate final_aggregate = 3;
-  optional BlockFooterVotesAggregate notar_aggregate = 4;
+  BlockFooterVotesAggregate notar_aggregate = 4;
 }
 
 // Records the validators that voted skip on the slot.

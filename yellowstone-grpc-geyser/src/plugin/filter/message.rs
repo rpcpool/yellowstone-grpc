@@ -1287,20 +1287,21 @@ pub mod tests {
     use crate::plugin::{
         filter::{
             encoder::{AccountEncoder, TransactionEncoder},
+            fixtures,
             message::{FilteredUpdateAccount, FilteredUpdateTransaction},
         },
-        message::{MessageSlot, SlotStatus},
+        message::{MessageBlockFooter, MessageSlot, SlotStatus},
     };
     #[cfg(test)]
-    use yellowstone_grpc_proto::geyser::SubscribeUpdate;
+    use yellowstone_grpc_proto::geyser::{SubscribeUpdate, SubscribeUpdateBlockFooter};
     use {
         super::{FilteredUpdateBlock, FilteredUpdateFilters},
         crate::plugin::{
             convert_to,
-            filter::{fixtures, name::FilterName, FilterAccountsDataSlice},
+            filter::{name::FilterName, FilterAccountsDataSlice},
             message::{
-                MessageAccount, MessageAccountInfo, MessageBlockFooter, MessageBlockMeta,
-                MessageEntry, MessageTransaction, MessageTransactionInfo,
+                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
+                MessageTransaction, MessageTransactionInfo,
             },
         },
         bytes::Bytes,
@@ -1320,7 +1321,7 @@ pub mod tests {
             sync::{Arc, OnceLock},
             time::SystemTime,
         },
-        yellowstone_grpc_proto::geyser::{SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta},
+        yellowstone_grpc_proto::geyser::SubscribeUpdateBlockMeta,
     };
 
     pub fn create_message_filters(names: &[&str]) -> FilteredUpdateFilters {
