@@ -117,6 +117,13 @@ message SubscribeRequestFilterTransactions {
   repeated string account_exclude = 4;
   repeated string account_required = 6;
   optional CuckooFilter cuckoo_account_include = 7;
+  // Signers are the first `num_required_signatures` static account keys,
+  // never ALT-loaded ones.
+  // signer_include matches a transaction signed by any listed account,
+  // signer_exclude drops one signed by any listed account. Token-account
+  // expansion does not apply to signers.
+  repeated string signer_include = 8;
+  repeated string signer_exclude = 9;
   // ATA / token-account expansion control. When set, account_include /
   // account_exclude / account_required also match against owners of
   // pre/post token balances on each transaction. Absent = no expansion.
@@ -163,6 +170,10 @@ message SubscribeRequestFilterDeshredTransactions {
   repeated string account_required = 4;
   // Include SubscribeUpdateDeshredUpdateParent updates. Omitted or false sends transactions only.
   optional bool include_update_parent = 5;
+  // Same as on SubscribeRequestFilterTransactions: signers are the first
+  // `num_required_signatures` static account keys, never ALT-loaded ones.
+  repeated string signer_include = 6;
+  repeated string signer_exclude = 7;
 }
 
 message SubscribeRequestAccountsDataSlice {

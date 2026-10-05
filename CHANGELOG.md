@@ -10,6 +10,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Features
+
+- proto/plugin: added `signer_include` and `signer_exclude` to transaction, transaction status and deshred transaction filters. They match the signers only, the first `num_required_signatures` static account keys; a key the transaction references without signing, or loads from a lookup table, does not match. Either list alone is a valid filter. New limits `signer_include_max` and `signer_exclude_max` for `transactions`, `transactions_status` and `deshred_transactions`. A server older than this release ignores the new fields, so the same request there matches without the signer conditions (or is refused as an empty filter when `any` is disabled).
+
 ## 2026-09-25
 
 - yellowstone-grpc-proto 14.0.0

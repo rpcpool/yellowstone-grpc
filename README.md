@@ -363,6 +363,10 @@ If all fields are empty, then all accounts are broadcast. Otherwise, fields work
 - `account_include` — filter transactions that use any account from the list
 - `account_exclude` — opposite to `account_include`
 - `account_required` — require all accounts from the list to be used in the transaction
+- `signer_include` — filter transactions signed by any account from the list. Signers are the first `num_required_signatures` static account keys, never ALT-loaded addresses
+- `signer_exclude` — drop transactions signed by any account from the list
+
+Servers older than the release that added `signer_include` and `signer_exclude` ignore them, so the filter matches without the signer conditions there.
 
 If all fields are empty, then all transactions are broadcast. Otherwise, fields work as logical `AND` and values in arrays as logical `OR`.
 
@@ -390,6 +394,8 @@ The deshred transaction filter supports:
    - `account_include` — match transactions that mention any listed account, including ALT-loaded addresses
    - `account_exclude` — exclude transactions that mention any listed account, including ALT-loaded addresses
    - `account_required` — require all listed accounts to be present, including ALT-loaded addresses
+   - `signer_include` — match transactions signed by any listed account (static keys only, ALT-loaded addresses never sign)
+   - `signer_exclude` — drop transactions signed by any listed account
 
 #### Entries
 
@@ -430,7 +436,9 @@ It's possible to add limits for filters in the config. If the `filters` field is
          "account_include_max": 10,
          "account_include_reject": ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"],
          "account_exclude_max": 10,
-         "account_required_max": 10
+         "account_required_max": 10,
+         "signer_include_max": 10,
+         "signer_exclude_max": 10
       },
       "blocks": {
          "max": 1,

@@ -61,6 +61,8 @@ describeLive("Client.subscribe", () => {
             accountInclude: [ACTIVE_ACCOUNT_PUBKEY],
             accountExclude: [],
             accountRequired: [],
+            signerInclude: [ACTIVE_ACCOUNT_PUBKEY],
+            signerExclude: [],
             tokenAccounts: TokenAccountExpansionControlFlag.ALL,
           },
           compressedTransactionsClient: {
@@ -75,6 +77,8 @@ describeLive("Client.subscribe", () => {
             accountInclude: [ACTIVE_ACCOUNT_PUBKEY],
             accountExclude: [],
             accountRequired: [],
+            signerInclude: [ACTIVE_ACCOUNT_PUBKEY],
+            signerExclude: [],
             tokenAccounts: TokenAccountExpansionControlFlag.ALL,
           },
           compressedTransactionsStatusClient: {

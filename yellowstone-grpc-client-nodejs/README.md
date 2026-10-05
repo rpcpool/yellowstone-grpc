@@ -160,6 +160,22 @@ request.transactionsStatus.trackedTransactionStatuses = {
 
 If you do not set `tokenAccounts`, filters only match transaction account keys.
 
+`signerInclude` and `signerExclude` match the accounts that signed a
+transaction: the first `numRequiredSignatures` static account keys. A key the
+transaction only references, or loads from a lookup table, does not match, and
+`tokenAccounts` does not apply to them. Deshred filters accept them too.
+
+```ts
+request.transactions.signedByWallet = {
+  vote: false,
+  accountInclude: [],
+  accountExclude: [],
+  accountRequired: [],
+  signerInclude: [walletPubkey],
+  signerExclude: [],
+};
+```
+
 A compressed filter can match an account that you did not add. Before using a
 full transaction update, check its account keys against your local set. If you
 set `tokenAccounts`, also check the token account owners:

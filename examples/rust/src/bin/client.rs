@@ -336,6 +336,14 @@ struct ActionSubscribe {
     #[clap(long)]
     transactions_account_required: Vec<String>,
 
+    /// Filter transactions signed by any of these accounts
+    #[clap(long)]
+    transactions_signer_include: Vec<String>,
+
+    /// Filter out transactions signed by any of these accounts
+    #[clap(long)]
+    transactions_signer_exclude: Vec<String>,
+
     /// Subscribe on transactions_status updates
     #[clap(long)]
     transactions_status: bool,
@@ -363,6 +371,14 @@ struct ActionSubscribe {
     /// Filter required account in transactions for transactions_status
     #[clap(long)]
     transactions_status_account_required: Vec<String>,
+
+    /// Filter transactions signed by any of these accounts for transactions_status
+    #[clap(long)]
+    transactions_status_signer_include: Vec<String>,
+
+    /// Filter out transactions signed by any of these accounts for transactions_status
+    #[clap(long)]
+    transactions_status_signer_exclude: Vec<String>,
 
     #[clap(long)]
     entries: bool,
@@ -438,6 +454,14 @@ struct ActionSubscribeDeshred {
     /// Filter by required account keys - all must be present (static or ALT-loaded)
     #[clap(long)]
     account_required: Vec<String>,
+
+    /// Filter transactions signed by any of these accounts (static keys only)
+    #[clap(long)]
+    signer_include: Vec<String>,
+
+    /// Filter out transactions signed by any of these accounts (static keys only)
+    #[clap(long)]
+    signer_exclude: Vec<String>,
 
     /// Include deshred update parent messages
     #[clap(long)]
@@ -564,6 +588,8 @@ impl Action {
                             account_include: args.transactions_account_include.clone(),
                             account_exclude: args.transactions_account_exclude.clone(),
                             account_required: args.transactions_account_required.clone(),
+                            signer_include: args.transactions_signer_include.clone(),
+                            signer_exclude: args.transactions_signer_exclude.clone(),
                             cuckoo_account_include: None,
                             token_accounts: None,
                         },
@@ -581,6 +607,8 @@ impl Action {
                             account_include: args.transactions_status_account_include.clone(),
                             account_exclude: args.transactions_status_account_exclude.clone(),
                             account_required: args.transactions_status_account_required.clone(),
+                            signer_include: args.transactions_status_signer_include.clone(),
+                            signer_exclude: args.transactions_status_signer_exclude.clone(),
                             cuckoo_account_include: None,
                             token_accounts: None,
                         },
@@ -676,6 +704,8 @@ impl Action {
                         account_include: args.account_include.clone(),
                         account_exclude: args.account_exclude.clone(),
                         account_required: args.account_required.clone(),
+                        signer_include: args.signer_include.clone(),
+                        signer_exclude: args.signer_exclude.clone(),
                         include_update_parent: args.include_update_parent,
                     },
                 );
