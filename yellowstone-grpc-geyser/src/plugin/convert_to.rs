@@ -1,7 +1,10 @@
 use {
     crate::plugin::message::{ContactInfoMessage, MessageContactInfo},
+    agave_votor_messages::reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
     prost_types::Timestamp,
+    solana_bls_signatures::{error::BlsError, SignatureCompressed as BLSSignatureCompressed},
     solana_clock::UnixTimestamp,
+    solana_entry::block_component::{BlockFinalizationCert, VotesAggregate},
     solana_message::{
         compiled_instruction::CompiledInstruction, v0::MessageAddressTableLookup, MessageHeader,
         VersionedMessage,
@@ -273,6 +276,55 @@ pub const fn create_block_height(block_height: u64) -> proto::BlockHeight {
 
 pub const fn create_timestamp(timestamp: UnixTimestamp) -> proto::UnixTimestamp {
     proto::UnixTimestamp { timestamp }
+}
+
+pub fn create_block_final_cert(
+    cert: &BlockFinalizationCert,
+) -> Result<proto::BlockFooterFinalCert, BlsError> {
+    Ok(proto::BlockFooterFinalCert {
+        slot: cert.slot,
+        block_id: cert.block_id.to_bytes().into(),
+        final_aggregate: Some(create_votes_aggregate(&cert.final_aggregate)?),
+        notar_aggregate: cert
+            .notar_aggregate
+            .as_ref()
+            .map(create_votes_aggregate)
+            .transpose()?,
+    })
+}
+
+// VotesAggregate exposes its signature only uncompressed, so compress it back to 96 bytes.
+pub fn create_votes_aggregate(
+    aggregate: &VotesAggregate,
+) -> Result<proto::BlockFooterVotesAggregate, BlsError> {
+    let signature = BLSSignatureCompressed::try_from(&aggregate.uncompress_signature()?)?;
+    Ok(proto::BlockFooterVotesAggregate {
+        signature: signature.0.into(),
+        bitmap: aggregate.clone().into_bitmap(),
+    })
+}
+
+pub fn create_skip_reward_cert(cert: &SkipRewardCertificate) -> proto::BlockFooterSkipRewardCert {
+    proto::BlockFooterSkipRewardCert {
+        slot: cert.slot,
+        aggregate: Some(proto::BlockFooterVotesAggregate {
+            signature: cert.signature.0.into(),
+            bitmap: cert.to_bitmap().to_vec(),
+        }),
+    }
+}
+
+pub fn create_notar_reward_cert(
+    cert: &NotarRewardCertificate,
+) -> proto::BlockFooterNotarRewardCert {
+    proto::BlockFooterNotarRewardCert {
+        slot: cert.slot,
+        block_id: cert.block_id.to_bytes().into(),
+        aggregate: Some(proto::BlockFooterVotesAggregate {
+            signature: cert.signature.0.into(),
+            bitmap: cert.bitmap().to_vec(),
+        }),
+    }
 }
 
 pub fn create_contact_info_node(

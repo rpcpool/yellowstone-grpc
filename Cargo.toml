@@ -104,6 +104,7 @@ notify = "8.2.0"
 
 # Agave Monorepo
 agave-geyser-plugin-interface = "4.3.0"
+agave-votor-messages = "4.3.0"
 solana-account-decoder = "4.3.0"
 solana-entry = "4.3.0"
 solana-logger = "3.0.0"
@@ -115,6 +116,7 @@ solana-transaction-status = "4.3.0"
 solana-message = "4.4.1"
 
 solana-account = "4.0.0"
+solana-bls-signatures = "3.4.0"
 solana-clock = "3.0.0"
 solana-commitment-config = "3.0.0"
 solana-hash = "4.3.0"

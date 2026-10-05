@@ -295,12 +295,40 @@ message SubscribeUpdateBlockFooter {
   bytes bank_hash = 3;
   uint64 block_producer_time_nanos = 4;
   bytes block_user_agent = 5;
+  reserved 6, 7, 8;
 
-  // The Alpenglow certificates, wincode-serialized verbatim from the footer.
-  // Decode them with the agave solana_entry::block_component types.
-  optional bytes block_final_cert = 6;
-  optional bytes skip_reward_cert = 7;
-  optional bytes notar_reward_cert = 8;
+  // The Alpenglow certificates. Sent only when the filter sets include_certificates.
+  optional BlockFooterFinalCert block_final_cert = 9;
+  optional BlockFooterSkipRewardCert skip_reward_cert = 10;
+  optional BlockFooterNotarRewardCert notar_reward_cert = 11;
+}
+
+// An aggregate BLS signature and the bitmap of validators that signed it.
+// The signature is a compressed BLS12-381 G2 point of 96 bytes.
+message BlockFooterVotesAggregate {
+  bytes signature = 1;
+  bytes bitmap = 2;
+}
+
+// Proves that the block (slot, block_id) is finalized.
+message BlockFooterFinalCert {
+  uint64 slot = 1;
+  bytes block_id = 2;
+  BlockFooterVotesAggregate final_aggregate = 3;
+  optional BlockFooterVotesAggregate notar_aggregate = 4;
+}
+
+// Records the validators that voted skip on the slot.
+message BlockFooterSkipRewardCert {
+  uint64 slot = 1;
+  BlockFooterVotesAggregate aggregate = 2;
+}
+
+// Records the validators that voted notar on the block (slot, block_id).
+message BlockFooterNotarRewardCert {
+  uint64 slot = 1;
+  bytes block_id = 2;
+  BlockFooterVotesAggregate aggregate = 3;
 }
 
 message SubscribeUpdateEntry {

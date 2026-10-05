@@ -1,6 +1,15 @@
 use {
+    agave_votor_messages::{
+        certificate::CertSignature,
+        reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+    },
     solana_account::Account,
     solana_account_decoder::parse_token::UiTokenAmount,
+    solana_bls_signatures::{
+        Signature as BLSSignature, SignatureCompressed as BLSSignatureCompressed,
+        BLS_SIGNATURE_COMPRESSED_SIZE,
+    },
+    solana_entry::block_component::{BlockFinalizationCert, VotesAggregate},
     solana_hash::{Hash, HASH_BYTES},
     solana_message::{
         compiled_instruction::CompiledInstruction,
@@ -386,13 +395,164 @@ pub fn create_account(
     Ok((pubkey, account))
 }
 
+pub fn create_block_final_cert(
+    cert: proto::BlockFooterFinalCert,
+) -> CreateResult<BlockFinalizationCert> {
+    Ok(BlockFinalizationCert {
+        slot: cert.slot,
+        block_id: create_hash(&cert.block_id)?,
+        final_aggregate: create_votes_aggregate(
+            cert.final_aggregate
+                .ok_or("failed to get final_aggregate")?,
+        )?,
+        notar_aggregate: cert
+            .notar_aggregate
+            .map(create_votes_aggregate)
+            .transpose()?,
+    })
+}
+
+pub fn create_votes_aggregate(
+    aggregate: proto::BlockFooterVotesAggregate,
+) -> CreateResult<VotesAggregate> {
+    let signature = BLSSignature::try_from(create_bls_signature(&aggregate.signature)?)
+        .map_err(|_| "failed to decompress BLS signature")?;
+    Ok(VotesAggregate::from_cert_signature(CertSignature {
+        signature,
+        bitmap: aggregate.bitmap,
+    }))
+}
+
+pub fn create_skip_reward_cert(
+    cert: proto::BlockFooterSkipRewardCert,
+) -> CreateResult<SkipRewardCertificate> {
+    let aggregate = cert.aggregate.ok_or("failed to get aggregate")?;
+    SkipRewardCertificate::try_new(
+        cert.slot,
+        create_bls_signature(&aggregate.signature)?,
+        aggregate.bitmap,
+    )
+    .map_err(|_| "failed to create skip reward cert")
+}
+
+pub fn create_notar_reward_cert(
+    cert: proto::BlockFooterNotarRewardCert,
+) -> CreateResult<NotarRewardCertificate> {
+    let aggregate = cert.aggregate.ok_or("failed to get aggregate")?;
+    NotarRewardCertificate::try_new(
+        cert.slot,
+        create_hash(&cert.block_id)?,
+        create_bls_signature(&aggregate.signature)?,
+        aggregate.bitmap,
+    )
+    .map_err(|_| "failed to create notar reward cert")
+}
+
+fn create_hash(hash: &[u8]) -> CreateResult<Hash> {
+    <[u8; HASH_BYTES]>::try_from(hash)
+        .map(Hash::new_from_array)
+        .map_err(|_| "failed to parse hash")
+}
+
+fn create_bls_signature(signature: &[u8]) -> CreateResult<BLSSignatureCompressed> {
+    <[u8; BLS_SIGNATURE_COMPRESSED_SIZE]>::try_from(signature)
+        .map(BLSSignatureCompressed)
+        .map_err(|_| "failed to parse BLS signature")
+}
+
 #[cfg(test)]
 mod tests {
     use {
-        super::{create_reward, create_tx_meta},
+        super::{
+            create_block_final_cert, create_notar_reward_cert, create_reward,
+            create_skip_reward_cert, create_tx_meta,
+        },
+        crate::plugin::convert_to,
+        agave_votor_messages::{
+            certificate::CertSignature,
+            reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+        },
+        solana_bls_signatures::{
+            keypair::Keypair, Signature as BLSSignature,
+            SignatureCompressed as BLSSignatureCompressed,
+        },
+        solana_entry::block_component::{BlockFinalizationCert, VotesAggregate},
+        solana_hash::Hash,
         solana_transaction_status::RewardType,
         yellowstone_grpc_proto::prelude as proto,
     };
+
+    fn bls_signature(seed: u8) -> BLSSignature {
+        let keypair = Keypair::derive(&[seed; 32]).unwrap();
+        BLSSignature::from(&keypair.sign(b"block footer"))
+    }
+
+    fn votes_aggregate(seed: u8, bitmap: Vec<u8>) -> VotesAggregate {
+        VotesAggregate::from_cert_signature(CertSignature {
+            signature: bls_signature(seed),
+            bitmap,
+        })
+    }
+
+    #[test]
+    fn block_final_cert_round_trip() {
+        for notar_aggregate in [None, Some(votes_aggregate(2, Vec::new()))] {
+            let cert = BlockFinalizationCert {
+                slot: 42,
+                block_id: Hash::new_from_array([4; 32]),
+                final_aggregate: votes_aggregate(1, vec![0b1011, 0xff]),
+                notar_aggregate,
+            };
+            let proto = convert_to::create_block_final_cert(&cert).unwrap();
+            let final_aggregate = proto.final_aggregate.as_ref().unwrap();
+            assert_eq!(final_aggregate.signature.len(), 96);
+            assert_eq!(final_aggregate.bitmap, vec![0b1011, 0xff]);
+            assert_eq!(create_block_final_cert(proto).unwrap(), cert);
+        }
+    }
+
+    #[test]
+    fn reward_certs_round_trip() {
+        let signature = BLSSignatureCompressed::try_from(&bls_signature(3)).unwrap();
+        let skip = SkipRewardCertificate::try_new(42, signature, vec![1, 2, 3]).unwrap();
+        let proto = convert_to::create_skip_reward_cert(&skip);
+        assert_eq!(proto.aggregate.as_ref().unwrap().signature, signature.0);
+        assert_eq!(create_skip_reward_cert(proto).unwrap(), skip);
+
+        let notar = NotarRewardCertificate::try_new(
+            43,
+            Hash::new_from_array([5; 32]),
+            signature,
+            Vec::new(),
+        )
+        .unwrap();
+        let proto = convert_to::create_notar_reward_cert(&notar);
+        assert_eq!(proto.block_id, vec![5; 32]);
+        assert_eq!(create_notar_reward_cert(proto).unwrap(), notar);
+    }
+
+    #[test]
+    fn block_final_cert_rejects_malformed_fields() {
+        let valid = convert_to::create_block_final_cert(&BlockFinalizationCert {
+            slot: 42,
+            block_id: Hash::new_from_array([4; 32]),
+            final_aggregate: votes_aggregate(1, Vec::new()),
+            notar_aggregate: None,
+        })
+        .unwrap();
+
+        let mut cert = valid.clone();
+        cert.block_id.pop();
+        assert!(create_block_final_cert(cert).is_err());
+
+        let mut cert = valid.clone();
+        cert.final_aggregate = None;
+        assert!(create_block_final_cert(cert).is_err());
+
+        let mut cert = valid;
+        cert.final_aggregate.as_mut().unwrap().signature = vec![0xff; 96];
+        assert!(create_block_final_cert(cert).is_err());
+    }
 
     fn base_proto_meta() -> proto::TransactionStatusMeta {
         proto::TransactionStatusMeta {

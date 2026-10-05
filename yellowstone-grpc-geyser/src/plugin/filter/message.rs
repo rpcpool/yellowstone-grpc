@@ -1297,7 +1297,7 @@ pub mod tests {
         super::{FilteredUpdateBlock, FilteredUpdateFilters},
         crate::plugin::{
             convert_to,
-            filter::{name::FilterName, FilterAccountsDataSlice},
+            filter::{fixtures, name::FilterName, FilterAccountsDataSlice},
             message::{
                 MessageAccount, MessageAccountInfo, MessageBlockFooter, MessageBlockMeta,
                 MessageEntry, MessageTransaction, MessageTransactionInfo,
@@ -1841,17 +1841,22 @@ pub mod tests {
     #[test]
     fn test_message_block_footer() {
         // An empty user agent, a maximal timestamp, absent certificates and an
-        // empty certificate are the interesting edges for the hand-rolled encoder.
-        for (bank_hash, nanos, user_agent, certs) in [
-            (vec![0u8; 32], 0u64, Vec::new(), [None, None, None]),
+        // empty bitmap are the interesting edges for the hand-rolled encoder.
+        let (final_cert, skip_cert, notar_cert) = fixtures::block_footer_certificates();
+        for (
+            bank_hash,
+            nanos,
+            user_agent,
+            (block_final_cert, skip_reward_cert, notar_reward_cert),
+        ) in [
+            (vec![0u8; 32], 0u64, Vec::new(), (None, None, None)),
             (
                 vec![7u8; 32],
                 u64::MAX,
                 b"agave/3.0.0".to_vec(),
-                [Some(vec![1u8; 96]), Some(Vec::new()), Some(vec![2u8; 48])],
+                (Some(final_cert), Some(skip_cert), Some(notar_cert)),
             ),
         ] {
-            let [block_final_cert, skip_reward_cert, notar_reward_cert] = certs;
             let message = Arc::new(MessageBlockFooter {
                 block_footer: SubscribeUpdateBlockFooter {
                     slot: 42,

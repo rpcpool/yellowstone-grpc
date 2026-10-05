@@ -19,7 +19,10 @@ use {
         time::Duration,
     },
     yellowstone_grpc_proto::{
-        geyser::{SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta},
+        geyser::{
+            BlockFooterFinalCert, BlockFooterNotarRewardCert, BlockFooterSkipRewardCert,
+            BlockFooterVotesAggregate, SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta,
+        },
         solana::storage::confirmed_block,
     },
 };
@@ -137,6 +140,37 @@ pub fn message_block_footer(slot: u64, bank_id: u64) -> Arc<MessageBlockFooter> 
         },
         created_at: Timestamp::default(),
     })
+}
+
+pub fn block_footer_certificates() -> (
+    BlockFooterFinalCert,
+    BlockFooterSkipRewardCert,
+    BlockFooterNotarRewardCert,
+) {
+    let aggregate = |byte| BlockFooterVotesAggregate {
+        signature: vec![byte; 96],
+        bitmap: vec![byte; 3],
+    };
+    (
+        BlockFooterFinalCert {
+            slot: 42,
+            block_id: vec![4; 32],
+            final_aggregate: Some(aggregate(1)),
+            notar_aggregate: None,
+        },
+        BlockFooterSkipRewardCert {
+            slot: 42,
+            aggregate: Some(BlockFooterVotesAggregate {
+                signature: vec![2; 96],
+                bitmap: Vec::new(),
+            }),
+        },
+        BlockFooterNotarRewardCert {
+            slot: 42,
+            block_id: vec![5; 32],
+            aggregate: Some(aggregate(3)),
+        },
+    )
 }
 
 pub fn message_block_meta(slot: u64) -> Arc<MessageBlockMeta> {

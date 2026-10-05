@@ -7396,6 +7396,7 @@ version = "16.0.0"
 dependencies = [
  "affinity",
  "agave-geyser-plugin-interface",
+ "agave-votor-messages",
  "anyhow",
  "arc-swap",
  "base64",
@@ -7433,6 +7434,7 @@ dependencies = [
  "smallvec",
  "solana-account 4.6.0",
  "solana-account-decoder",
+ "solana-bls-signatures",
  "solana-clock",
  "solana-commitment-config",
  "solana-entry",
