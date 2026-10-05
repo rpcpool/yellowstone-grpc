@@ -461,8 +461,10 @@ fn create_hash(hash: &[u8]) -> CreateResult<Hash> {
 fn create_bls_signature(
     aggregate: &proto::BlockFooterVotesAggregate,
 ) -> CreateResult<BLSSignatureCompressed> {
-    if aggregate.signature_kind() != proto::BlockFooterSignatureKind::CompressedBls12381G2 {
-        return Err("unsupported signature kind");
+    // try_from rejects unknown kinds; the signature_kind() getter would map them to BLS.
+    match proto::BlockFooterSignatureKind::try_from(aggregate.signature_kind) {
+        Ok(proto::BlockFooterSignatureKind::CompressedBls12381G2) => {}
+        Err(_) => return Err("unsupported signature kind"),
     }
     <[u8; BLS_SIGNATURE_COMPRESSED_SIZE]>::try_from(aggregate.signature.as_slice())
         .map(BLSSignatureCompressed)
@@ -576,8 +578,8 @@ mod tests {
         assert!(create_block_final_cert(&cert).is_err());
 
         let mut cert = fast.clone();
-        cert.final_aggregate.as_mut().unwrap().signature_kind =
-            proto::BlockFooterSignatureKind::SignatureKindUnspecified.into();
+        // A future kind this reader does not know.
+        cert.final_aggregate.as_mut().unwrap().signature_kind = 1;
         assert!(create_block_final_cert(&cert).is_err());
 
         let mut cert = fast;

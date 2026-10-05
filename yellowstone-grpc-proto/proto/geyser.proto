@@ -305,9 +305,8 @@ message SubscribeUpdateBlockFooter {
 
 // Encoding of BlockFooterVotesAggregate.signature. Readers reject kinds they do not know.
 enum BlockFooterSignatureKind {
-  SIGNATURE_KIND_UNSPECIFIED = 0;
   // 96 bytes.
-  COMPRESSED_BLS12_381_G2 = 1;
+  COMPRESSED_BLS12_381_G2 = 0;
 }
 
 // An aggregate signature over one vote, and the validators that signed it.

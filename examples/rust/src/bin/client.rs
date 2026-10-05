@@ -1287,7 +1287,7 @@ fn create_pretty_entry(msg: SubscribeUpdateEntry) -> anyhow::Result<Value> {
 
 fn votes_aggregate_json(aggregate: BlockFooterVotesAggregate) -> Value {
     json!({
-        "signatureKind": aggregate.signature_kind().as_str_name(),
+        "signatureKind": aggregate.signature_kind,
         "signature": bs58::encode(&aggregate.signature).into_string(),
         "blockId": bs58::encode(&aggregate.block_id).into_string(),
         "signerBitmap": bs58::encode(&aggregate.signer_bitmap).into_string(),
