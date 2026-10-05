@@ -203,6 +203,10 @@ pub struct TxnFilterStats {
     pub accounts_exclude_len: usize,
     /// Number of pubkeys in `account_required`.
     pub accounts_required_len: usize,
+    /// Number of pubkeys in `signer_include`.
+    pub signers_include_len: usize,
+    /// Number of pubkeys in `signer_exclude`.
+    pub signers_exclude_len: usize,
     /// Whether token-account expansion is enabled for this filter.
     pub token_accounts_enabled: bool,
 }
@@ -306,6 +310,8 @@ impl Filter {
                 accounts_include_len: inner.account_include.len(),
                 accounts_exclude_len: inner.account_exclude.len(),
                 accounts_required_len: inner.account_required.len(),
+                signers_include_len: inner.signer_include.len(),
+                signers_exclude_len: inner.signer_exclude.len(),
                 token_accounts_enabled: inner.token_accounts.is_some(),
             })
             .collect();
@@ -319,6 +325,8 @@ impl Filter {
                 accounts_include_len: inner.account_include.len(),
                 accounts_exclude_len: inner.account_exclude.len(),
                 accounts_required_len: inner.account_required.len(),
+                signers_include_len: inner.signer_include.len(),
+                signers_exclude_len: inner.signer_exclude.len(),
                 token_accounts_enabled: inner.token_accounts.is_some(),
             })
             .collect();
@@ -1565,6 +1573,8 @@ struct FilterTransactionsInner {
     account_exclude: HybridSet<Pubkey>,
     account_required: Vec<Pubkey>,
     account_cuckoo: Option<Arc<CuckooFilter<[u8; 32]>>>,
+    signer_include: FoldHashSet<Pubkey>,
+    signer_exclude: FoldHashSet<Pubkey>,
     /// `None` means no ATA expansion (the proto field is absent).
     token_accounts: Option<TokenAccountsMode>,
 }
@@ -1593,6 +1603,8 @@ impl FilterTransactions {
                     && filter.cuckoo_account_include.is_none()
                     && filter.account_exclude.is_empty()
                     && filter.account_required.is_empty()
+                    && filter.signer_include.is_empty()
+                    && filter.signer_exclude.is_empty()
                     && filter.token_accounts.is_none(),
                 limits.any,
             )?;
@@ -1608,6 +1620,8 @@ impl FilterTransactions {
                 filter.account_required.len(),
                 limits.account_required_max,
             )?;
+            FilterLimits::check_pubkey_max(filter.signer_include.len(), limits.signer_include_max)?;
+            FilterLimits::check_pubkey_max(filter.signer_exclude.len(), limits.signer_exclude_max)?;
 
             let account_cuckoo = if let Some(proto_cuckoo) = &filter.cuckoo_account_include {
                 FilterLimits::check_max(proto_cuckoo.data.len(), limits.cuckoo_max_size)?;
@@ -1643,6 +1657,14 @@ impl FilterTransactions {
                     .into_iter()
                     .collect(),
                     account_cuckoo,
+                    signer_include: Filter::decode_pubkeys_into_set(
+                        &filter.signer_include,
+                        &FoldHashSet::new(),
+                    )?,
+                    signer_exclude: Filter::decode_pubkeys_into_set(
+                        &filter.signer_exclude,
+                        &FoldHashSet::new(),
+                    )?,
                     token_accounts: filter
                         .token_accounts
                         .map(TokenAccountsMode::from_proto)
@@ -1678,6 +1700,22 @@ impl FilterTransactions {
                     if Some(signature.as_ref()) != tx_sig.map(|sig| sig.as_ref()) {
                         return None;
                     }
+                }
+
+                // Before the account checks: one or two signers to probe,
+                // and a miss skips the token-owner scan below.
+                if !inner.signer_include.is_empty()
+                    && !transaction_signers(&message.transaction.transaction)
+                        .any(|signer| inner.signer_include.contains(&signer))
+                {
+                    return None;
+                }
+
+                if !inner.signer_exclude.is_empty()
+                    && transaction_signers(&message.transaction.transaction)
+                        .any(|signer| inner.signer_exclude.contains(&signer))
+                {
+                    return None;
                 }
 
                 // Effective account set used by include/exclude/required.
@@ -1767,6 +1805,24 @@ impl FilterTransactions {
             message.created_at
         )
     }
+}
+
+/// Signers of a transaction: the first `num_required_signatures` static
+/// account keys. A header claiming more signers than keys yields the keys
+/// there are, and a key that is not 32 bytes is skipped.
+fn transaction_signers(
+    transaction: &confirmed_block::Transaction,
+) -> impl Iterator<Item = Pubkey> + '_ {
+    transaction
+        .message
+        .iter()
+        .flat_map(|message| {
+            let num_signers = message.header.as_ref().map_or(0, |header| {
+                usize::try_from(header.num_required_signatures).unwrap_or(usize::MAX)
+            });
+            message.account_keys.iter().take(num_signers)
+        })
+        .filter_map(|key| Pubkey::try_from(key.as_slice()).ok())
 }
 
 /// Owners of every parseable pre OR post token balance on the tx.
@@ -2602,9 +2658,17 @@ mod tests {
         keypair: &Keypair,
         account_keys: Vec<Pubkey>,
     ) -> Arc<MessageTransaction> {
+        create_signed_message_transaction(&[keypair], account_keys)
+    }
+
+    /// `account_keys` starts with the pubkeys of `signers`, in order.
+    fn create_signed_message_transaction(
+        signers: &[&Keypair],
+        account_keys: Vec<Pubkey>,
+    ) -> Arc<MessageTransaction> {
         let message = SolMessage {
             header: MessageHeader {
-                num_required_signatures: 1,
+                num_required_signatures: u8::try_from(signers.len()).expect("few signers"),
                 ..MessageHeader::default()
             },
             account_keys,
@@ -2612,7 +2676,7 @@ mod tests {
         };
         let recent_blockhash = Hash::default();
         let versioned_transaction =
-            VersionedTransaction::from(Transaction::new(&[keypair], message, recent_blockhash));
+            VersionedTransaction::from(Transaction::new(signers, message, recent_blockhash));
         let meta = convert_to::create_transaction_meta(&TransactionStatusMeta {
             status: Ok(()),
             fee: 0,
@@ -2740,6 +2804,158 @@ mod tests {
         assert!(filter.is_err());
     }
 
+    fn signer_request(
+        name: &str,
+        account_include: &[Pubkey],
+        signer_include: &[Pubkey],
+        signer_exclude: &[Pubkey],
+    ) -> SubscribeRequest {
+        let keys = |keys: &[Pubkey]| keys.iter().map(ToString::to_string).collect();
+        SubscribeRequest {
+            transactions: HashMap::from([(
+                name.to_string(),
+                SubscribeRequestFilterTransactions {
+                    account_include: keys(account_include),
+                    signer_include: keys(signer_include),
+                    signer_exclude: keys(signer_exclude),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        }
+    }
+
+    fn signer_matches(config: &SubscribeRequest, message: &Arc<MessageTransaction>) -> bool {
+        let filter =
+            Filter::new(config, &FilterLimits::default(), &mut create_filter_names()).unwrap();
+        !filter
+            .get_updates(&Message::Transaction(Arc::clone(message)), None)
+            .is_empty()
+    }
+
+    /// Only the leading `num_required_signatures` keys are signers: a key the
+    /// transaction references without signing does not match signer_include.
+    #[test]
+    fn test_filters_transaction_signer_include() {
+        let payer = Keypair::new();
+        let cosigner = Keypair::new();
+        let readonly = Pubkey::new_unique();
+        let single = create_message_transaction(&payer, vec![payer.pubkey(), readonly]);
+        let multisig = create_signed_message_transaction(
+            &[&payer, &cosigner],
+            vec![payer.pubkey(), cosigner.pubkey(), readonly],
+        );
+
+        let by_payer = signer_request("payer", &[], &[payer.pubkey()], &[]);
+        assert!(signer_matches(&by_payer, &single));
+        assert!(signer_matches(&by_payer, &multisig));
+
+        let by_cosigner = signer_request("cosigner", &[], &[cosigner.pubkey()], &[]);
+        assert!(!signer_matches(&by_cosigner, &single));
+        assert!(signer_matches(&by_cosigner, &multisig));
+
+        let by_readonly = signer_request("readonly", &[], &[readonly], &[]);
+        assert!(!signer_matches(&by_readonly, &single));
+        assert!(!signer_matches(&by_readonly, &multisig));
+    }
+
+    /// signer_exclude drops a transaction any listed account signed, and
+    /// composes with the account conditions.
+    #[test]
+    fn test_filters_transaction_signer_exclude() {
+        let bot = Keypair::new();
+        let spammer = Keypair::new();
+        let pool = Pubkey::new_unique();
+        let by_bot = create_message_transaction(&bot, vec![bot.pubkey(), pool]);
+        let with_spammer = create_signed_message_transaction(
+            &[&bot, &spammer],
+            vec![bot.pubkey(), spammer.pubkey(), pool],
+        );
+        let spammer_unsigned =
+            create_message_transaction(&bot, vec![bot.pubkey(), spammer.pubkey(), pool]);
+
+        let pool_without_spammer = signer_request("pool", &[pool], &[], &[spammer.pubkey()]);
+        assert!(signer_matches(&pool_without_spammer, &by_bot));
+        assert!(!signer_matches(&pool_without_spammer, &with_spammer));
+        // The spammer key is referenced but did not sign.
+        assert!(signer_matches(&pool_without_spammer, &spammer_unsigned));
+
+        let bot_without_spammer = signer_request("bot", &[], &[bot.pubkey()], &[spammer.pubkey()]);
+        assert!(signer_matches(&bot_without_spammer, &by_bot));
+        assert!(!signer_matches(&bot_without_spammer, &with_spammer));
+
+        // signer_exclude alone selects every transaction not signed by it.
+        let alone = signer_request("alone", &[], &[], &[spammer.pubkey()]);
+        assert!(signer_matches(&alone, &by_bot));
+        assert!(!signer_matches(&alone, &with_spammer));
+    }
+
+    /// A header claiming more signers than static keys yields the keys there
+    /// are, and a message without a header has no signers.
+    #[test]
+    fn test_filters_transaction_signer_header_bounds() {
+        let payer = Keypair::new();
+        let other = Pubkey::new_unique();
+        let message = create_message_transaction(&payer, vec![payer.pubkey(), other]);
+
+        let mut inflated = (*message).clone();
+        let tx_message = inflated.transaction.transaction.message.as_mut().unwrap();
+        tx_message.header.as_mut().unwrap().num_required_signatures = 200;
+        let inflated = Arc::new(inflated);
+        assert!(signer_matches(
+            &signer_request("other", &[], &[other], &[]),
+            &inflated
+        ));
+
+        let mut headerless = (*message).clone();
+        headerless
+            .transaction
+            .transaction
+            .message
+            .as_mut()
+            .unwrap()
+            .header = None;
+        let headerless = Arc::new(headerless);
+        assert!(!signer_matches(
+            &signer_request("payer", &[], &[payer.pubkey()], &[]),
+            &headerless
+        ));
+    }
+
+    #[test]
+    fn test_filters_transaction_signer_limits() {
+        let signer = Pubkey::new_unique();
+        let mut limit = FilterLimits::default();
+        limit.transactions.any = false;
+        limit.transactions.signer_include_max = 1;
+        limit.transactions.signer_exclude_max = 1;
+
+        // Either list alone is a filter, not an empty subscription.
+        for config in [
+            signer_request("include", &[], &[signer], &[]),
+            signer_request("exclude", &[], &[], &[signer]),
+        ] {
+            assert!(Filter::new(&config, &limit, &mut create_filter_names()).is_ok());
+        }
+
+        let two = [signer, Pubkey::new_unique()];
+        for config in [
+            signer_request("include", &[], &two, &[]),
+            signer_request("exclude", &[], &[], &two),
+        ] {
+            assert!(Filter::new(&config, &limit, &mut create_filter_names()).is_err());
+        }
+
+        let mut invalid = signer_request("invalid", &[], &[signer], &[]);
+        invalid
+            .transactions
+            .get_mut("invalid")
+            .unwrap()
+            .signer_include
+            .push("not-a-pubkey".to_string());
+        assert!(Filter::new(&invalid, &limit, &mut create_filter_names()).is_err());
+    }
+
     #[test]
     fn test_filters_transaction_empty() {
         let mut transactions = HashMap::new();
@@ -2753,6 +2969,8 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                signer_include: vec![],
+                signer_exclude: vec![],
                 cuckoo_account_include: None,
                 token_accounts: None,
             },
@@ -2791,6 +3009,8 @@ mod tests {
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
+                signer_include: vec![],
+                signer_exclude: vec![],
                 cuckoo_account_include: None,
                 token_accounts: None,
             },
@@ -2835,6 +3055,8 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required: vec![],
+                signer_include: vec![],
+                signer_exclude: vec![],
                 cuckoo_account_include: None,
                 token_accounts: None,
             },
@@ -2903,6 +3125,8 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required: vec![],
+                signer_include: vec![],
+                signer_exclude: vec![],
                 cuckoo_account_include: None,
                 token_accounts: None,
             },
@@ -2971,6 +3195,8 @@ mod tests {
                 account_include: vec![],
                 account_exclude,
                 account_required: vec![],
+                signer_include: vec![],
+                signer_exclude: vec![],
                 cuckoo_account_include: None,
                 token_accounts: None,
             },
@@ -3025,6 +3251,8 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required,
+                signer_include: vec![],
+                signer_exclude: vec![],
                 cuckoo_account_include: None,
                 token_accounts: None,
             },
@@ -3635,6 +3863,8 @@ mod tests {
                 account_include,
                 account_exclude: vec![],
                 account_required,
+                signer_include: vec![],
+                signer_exclude: vec![],
                 cuckoo_account_include: None,
                 token_accounts: None,
             },
@@ -5895,6 +6125,8 @@ mod cuckoo_tests {
                     .into_iter()
                     .map(|k| k.to_string())
                     .collect(),
+                signer_include: vec![],
+                signer_exclude: vec![],
                 cuckoo_account_include: None,
                 token_accounts: mode.map(|m| m as i32),
             }
@@ -6481,6 +6713,8 @@ mod cuckoo_tests {
                     account_include: vec![Pubkey::new_unique().to_string()],
                     account_exclude: vec![],
                     account_required: vec![],
+                    signer_include: vec![],
+                    signer_exclude: vec![],
                     cuckoo_account_include: None,
                     token_accounts: Some(99),
                 },

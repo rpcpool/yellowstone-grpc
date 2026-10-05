@@ -66,7 +66,9 @@
           "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         ],
         "account_exclude_max": 10,
-        "account_required_max": 10
+        "account_required_max": 10,
+        "signer_include_max": 10,
+        "signer_exclude_max": 10
       },
       "transactions_status": {
         "max": 1,
@@ -76,7 +78,9 @@
           "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         ],
         "account_exclude_max": 10,
-        "account_required_max": 10
+        "account_required_max": 10,
+        "signer_include_max": 10,
+        "signer_exclude_max": 10
       },
       "blocks": {
         "max": 1,

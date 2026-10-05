@@ -363,6 +363,8 @@ If all fields are empty, then all accounts are broadcast. Otherwise, fields work
 - `account_include` — filter transactions that use any account from the list
 - `account_exclude` — opposite to `account_include`
 - `account_required` — require all accounts from the list to be used in the transaction
+- `signer_include` — filter transactions signed by any account from the list (the first `num_required_signatures` static account keys)
+- `signer_exclude` — opposite to `signer_include`
 
 If all fields are empty, then all transactions are broadcast. Otherwise, fields work as logical `AND` and values in arrays as logical `OR`.
 
@@ -430,7 +432,9 @@ It's possible to add limits for filters in the config. If the `filters` field is
          "account_include_max": 10,
          "account_include_reject": ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"],
          "account_exclude_max": 10,
-         "account_required_max": 10
+         "account_required_max": 10,
+         "signer_include_max": 10,
+         "signer_exclude_max": 10
       },
       "blocks": {
          "max": 1,

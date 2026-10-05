@@ -354,6 +354,8 @@ impl CompressedAccountFilterSet {
             account_include: vec![],
             account_exclude: vec![],
             account_required: vec![],
+            signer_include: vec![],
+            signer_exclude: vec![],
             cuckoo_account_include: Some(self.to_proto()),
             token_accounts: None,
         }

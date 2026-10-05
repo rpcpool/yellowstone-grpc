@@ -208,6 +208,51 @@ fn transaction_account_include(c: &mut Criterion) {
     group.finish();
 }
 
+/// The fixture transaction has one signer, `keys[0]`, among 30 keys.
+fn transaction_signer_include(c: &mut Criterion) {
+    let keys = transaction_keys();
+    let message = Message::Transaction(fixtures::message_transaction(
+        Signature::default(),
+        keys.clone(),
+        false,
+        Default::default(),
+    ));
+    let pool = fixtures::deterministic_pubkeys(5, 10_000);
+
+    let mut group = c.benchmark_group("transactions/signer_include");
+    for n in [1usize, 100, 10_000] {
+        for (label, include) in [
+            (
+                "miss",
+                pool[..n].iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+            ),
+            (
+                "hit",
+                pool[..n - 1]
+                    .iter()
+                    .map(|k| k.to_string())
+                    .chain(std::iter::once(keys[0].to_string()))
+                    .collect::<Vec<_>>(),
+            ),
+        ] {
+            let filter = build_filter(SubscribeRequest {
+                transactions: HashMap::from([(
+                    "t".to_owned(),
+                    SubscribeRequestFilterTransactions {
+                        signer_include: include,
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            });
+            group.bench_with_input(BenchmarkId::new(label, n), &n, |b, _| {
+                b.iter(|| black_box(filter.get_updates(black_box(&message), None)))
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default()
@@ -219,5 +264,6 @@ criterion_group! {
         subscribe_filter_new,
         slots_only_client,
         transaction_account_include,
+        transaction_signer_include,
 }
 criterion_main!(benches);

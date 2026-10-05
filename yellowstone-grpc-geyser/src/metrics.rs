@@ -385,6 +385,12 @@ pub fn observe_filter_complexity(subscriber_id: &str, observation: &FilterStats)
             .with_label_values(&[subscriber_id, "transactions", "accounts_required_len"])
             .observe(score.accounts_required_len as f64);
         FILTER_STATS
+            .with_label_values(&[subscriber_id, "transactions", "signers_include_len"])
+            .observe(score.signers_include_len as f64);
+        FILTER_STATS
+            .with_label_values(&[subscriber_id, "transactions", "signers_exclude_len"])
+            .observe(score.signers_exclude_len as f64);
+        FILTER_STATS
             .with_label_values(&[subscriber_id, "transactions", "token_accounts_enabled"])
             .observe(if score.token_accounts_enabled {
                 1.0
@@ -406,6 +412,12 @@ pub fn observe_filter_complexity(subscriber_id: &str, observation: &FilterStats)
         FILTER_STATS
             .with_label_values(&[subscriber_id, "transaction_status", "accounts_required_len"])
             .observe(score.accounts_required_len as f64);
+        FILTER_STATS
+            .with_label_values(&[subscriber_id, "transaction_status", "signers_include_len"])
+            .observe(score.signers_include_len as f64);
+        FILTER_STATS
+            .with_label_values(&[subscriber_id, "transaction_status", "signers_exclude_len"])
+            .observe(score.signers_exclude_len as f64);
         FILTER_STATS
             .with_label_values(&[
                 subscriber_id,
