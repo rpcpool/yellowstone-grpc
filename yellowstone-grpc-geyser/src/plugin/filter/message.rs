@@ -14,7 +14,6 @@ use {
                 MessageTransaction, MessageTransactionInfo,
             },
         },
-        util::stream::Weighted,
     },
     bytes::{
         buf::{Buf, BufMut},
@@ -116,36 +115,40 @@ impl WeightScales {
             .unwrap_or_default();
         u32::try_from(extra).unwrap_or(u32::MAX).saturating_add(1)
     }
-}
 
-impl FilteredUpdate {
-    /// Weight of this update in a Subscribe queue. Transaction status, block meta, ping and pong
-    /// updates always weigh `1`.
-    pub fn scaled_weight(&self, scales: &WeightScales) -> u32 {
-        let scale = match &self.message {
+    /// Weighs a [`FilteredUpdate`] with these scales.
+    ///
+    /// # Arguments
+    ///
+    /// * `update` - The [`FilteredUpdate`] to weigh.
+    ///
+    /// # Returns
+    ///
+    /// The weight of `update`. Transaction status, block meta, ping and pong updates always
+    /// weigh `1`.
+    pub(crate) fn update_weight(&self, update: &FilteredUpdate) -> u32 {
+        let scale = match &update.message {
             FilteredUpdateOneof::Account(update) => {
-                return scales
+                return self
                     .account
                     .max(1)
-                    .saturating_mul(scales.account_units(&update.account));
+                    .saturating_mul(self.account_units(&update.account));
             }
-            FilteredUpdateOneof::Transaction(_) => scales.transaction,
-            FilteredUpdateOneof::Entry(_) | FilteredUpdateOneof::EntryUpdateParent(_) => {
-                scales.entry
-            }
-            FilteredUpdateOneof::Slot(_) => scales.slot,
-            FilteredUpdateOneof::BlockFooter(_) => scales.block_footer,
+            FilteredUpdateOneof::Transaction(_) => self.transaction,
+            FilteredUpdateOneof::Entry(_) | FilteredUpdateOneof::EntryUpdateParent(_) => self.entry,
+            FilteredUpdateOneof::Slot(_) => self.slot,
+            FilteredUpdateOneof::BlockFooter(_) => self.block_footer,
             FilteredUpdateOneof::Block(block) => {
                 let accounts = block
                     .accounts
                     .iter()
-                    .map(|account| scales.account_units(account))
+                    .map(|account| self.account_units(account))
                     .fold(0, u32::saturating_add);
                 return u32::try_from(block.transactions.len())
                     .unwrap_or(u32::MAX)
                     .saturating_add(1)
                     .saturating_add(accounts)
-                    .saturating_mul(scales.block.max(1));
+                    .saturating_mul(self.block.max(1));
             }
             FilteredUpdateOneof::TransactionStatus(_)
             | FilteredUpdateOneof::BlockMeta(_)
@@ -153,14 +156,6 @@ impl FilteredUpdate {
             | FilteredUpdateOneof::Pong(_) => 1,
         };
         scale.max(1)
-    }
-}
-
-/// The weight under [`WeightScales::default`]: an account counts `1` plus one per 4 KiB of data,
-/// a block counts `1` plus its transactions and accounts, and other updates count `1`.
-impl Weighted for FilteredUpdate {
-    fn weight(&self) -> u32 {
-        self.scaled_weight(&WeightScales::default())
     }
 }
 
@@ -998,13 +993,6 @@ impl FilteredUpdateDeshredTransaction {
             } else {
                 0
             }
-    }
-}
-
-/// Every update weighs `1`, so subscriber channels bound the number of queued updates.
-impl Weighted for FilteredUpdateDeshred {
-    fn weight(&self) -> u32 {
-        1
     }
 }
 

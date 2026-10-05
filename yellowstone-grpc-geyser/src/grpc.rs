@@ -29,8 +29,8 @@ use {
         ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
         stream::{tokio::BatchStreamUnboundedReceiver, BatchStream, BatchStreamExt, Buffer},
         util::stream::{
-            load_aware_channel, load_aware_channel_with_weigher, LoadAwareReceiver,
-            LoadAwareSender, SendError, TrySendError,
+            load_aware_channel, LoadAwareReceiver, LoadAwareSender, SendError, TrySendError,
+            UnitWeigher, Weigher,
         },
         version::GrpcVersionInfo,
     },
@@ -324,16 +324,28 @@ pub enum BlockReconstructionMessage {
 
 pub type BroadcastedMessage = Arc<Vec<Message>>;
 
-/// Weighs a Subscribe queue update with the configured scales. Errors weigh `1`.
-fn subscribe_update_weight(
-    scales: WeightScales,
-) -> impl Fn(&TonicResult<FilteredUpdate>) -> u32 + Send + Sync + 'static {
-    move |update| {
+/// Weighs a Subscribe queue update. Errors weigh `1`.
+///
+/// Under [`WeightScales::default`] an account counts `1` plus one per 4 KiB of data, a block
+/// counts `1` plus its transactions and accounts, and other updates count `1`.
+impl Weigher for WeightScales {
+    type Item = TonicResult<FilteredUpdate>;
+
+    fn weight(&self, update: &Self::Item) -> u32 {
         update
             .as_ref()
-            .map_or(1, |update| update.scaled_weight(&scales))
+            .map_or(1, |update| self.update_weight(update))
     }
 }
+
+/// Sender half of a Subscribe queue.
+type SubscribeSender = LoadAwareSender<TonicResult<FilteredUpdate>, WeightScales>;
+
+/// Sender half of a SubscribeDeshred queue, which bounds the number of queued updates.
+type DeshredSubscribeSender = LoadAwareSender<
+    TonicResult<FilteredUpdateDeshred>,
+    UnitWeigher<TonicResult<FilteredUpdateDeshred>>,
+>;
 
 #[derive(Debug, Clone)]
 pub struct SubscriberChannels {
@@ -1522,7 +1534,7 @@ impl GrpcService {
     #[allow(clippy::too_many_arguments)]
     async fn client_loop(
         mut session: ClientSession,
-        stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
+        stream_tx: SubscribeSender,
         mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
         broadcast: SubscriberChannels,
@@ -1737,7 +1749,7 @@ impl GrpcService {
 
     async fn client_loop_snapshot(
         session: &mut ClientSession,
-        stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
+        stream_tx: SubscribeSender,
         client_rx: &mut mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
         snapshot_rx: crossbeam_channel::Receiver<Box<Message>>,
         cancellation_token: CancellationToken,
@@ -1986,7 +1998,7 @@ impl GrpcService {
     #[allow(clippy::too_many_arguments)]
     async fn deshred_client_loop(
         mut session: DeshredClientSession,
-        stream_tx: LoadAwareSender<TonicResult<FilteredUpdateDeshred>>,
+        stream_tx: DeshredSubscribeSender,
         mut client_rx: mpsc::UnboundedReceiver<Option<DeshredFilter>>,
         mut messages_rx: broadcast::Receiver<DeshredBroadcastedMessage>,
         cancellation_token: CancellationToken,
@@ -2142,8 +2154,7 @@ impl Geyser for GrpcService {
         } else {
             self.geyser_subscriber_weight_capacity
         };
-        let (stream_tx, stream_rx) =
-            load_aware_channel_with_weigher(capacity, subscribe_update_weight(self.weight_scales));
+        let (stream_tx, stream_rx) = load_aware_channel(capacity, self.weight_scales);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
         let ping_stream_tx = stream_tx.clone();
@@ -2313,7 +2324,8 @@ impl Geyser for GrpcService {
             return Err(Status::unavailable("server is shutting down"));
         }
 
-        let (stream_tx, stream_rx) = load_aware_channel(self.deshred_subscriber_channel_capacity);
+        let (stream_tx, stream_rx) =
+            load_aware_channel(self.deshred_subscriber_channel_capacity, UnitWeigher::new());
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
         let ping_stream_tx = stream_tx.clone();
@@ -2648,8 +2660,7 @@ mod tests {
             block: 2,
             ..WeightScales::default()
         };
-        let weigh = subscribe_update_weight(scales);
-        let weigh_default = subscribe_update_weight(WeightScales::default());
+        let default_scales = WeightScales::default();
         let account =
             fixtures::simple_message_account(Pubkey::new_from_array([1; 32]), Pubkey::default());
 
@@ -2657,32 +2668,35 @@ mod tests {
             Arc::clone(&account),
             FilterAccountsDataSlice::default(),
         ));
-        assert_eq!(weigh(&account_update), 4);
-        assert_eq!(weigh_default(&account_update), 1);
+        assert_eq!(scales.weight(&account_update), 4);
+        assert_eq!(default_scales.weight(&account_update), 1);
         assert_eq!(
-            weigh(&update(
+            scales.weight(&update(
                 FilteredUpdateOneof::transaction(test_transaction())
             )),
             5
         );
         assert_eq!(
-            weigh(&update(FilteredUpdateOneof::entry(
+            scales.weight(&update(FilteredUpdateOneof::entry(
                 fixtures::message_entry(1, 0)
             ))),
             6
         );
         let slot = fixtures::message_slot(1, SlotStatus::Processed);
-        assert_eq!(weigh(&update(FilteredUpdateOneof::slot(slot))), 7);
+        assert_eq!(scales.weight(&update(FilteredUpdateOneof::slot(slot))), 7);
         let footer = fixtures::message_block_footer(1, 1);
-        assert_eq!(weigh(&update(FilteredUpdateOneof::block_footer(footer))), 8);
+        assert_eq!(
+            scales.weight(&update(FilteredUpdateOneof::block_footer(footer))),
+            8
+        );
 
         // Kinds without a scale and errors always weigh 1.
         let status = FilteredUpdateOneof::transaction_status(test_transaction());
-        assert_eq!(weigh(&update(status)), 1);
+        assert_eq!(scales.weight(&update(status)), 1);
         let meta = FilteredUpdateOneof::block_meta(fixtures::message_block_meta(1));
-        assert_eq!(weigh(&update(meta)), 1);
-        assert_eq!(weigh(&update(FilteredUpdateOneof::ping())), 1);
-        assert_eq!(weigh(&Err(Status::internal("lagged"))), 1);
+        assert_eq!(scales.weight(&update(meta)), 1);
+        assert_eq!(scales.weight(&update(FilteredUpdateOneof::ping())), 1);
+        assert_eq!(scales.weight(&Err(Status::internal("lagged"))), 1);
 
         // A block weighs 1 + transactions + accounts, times the block scale only.
         let block = Message::Block(fixtures::message_block(
@@ -2696,8 +2710,8 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        assert_eq!(weigh(&Ok(block_update.clone())), (1 + 3 + 2) * 2);
-        assert_eq!(weigh_default(&Ok(block_update)), 1 + 3 + 2);
+        assert_eq!(scales.weight(&Ok(block_update.clone())), (1 + 3 + 2) * 2);
+        assert_eq!(default_scales.weight(&Ok(block_update)), 1 + 3 + 2);
     }
 
     #[test]
@@ -2706,11 +2720,10 @@ mod tests {
             account: 4,
             ..WeightScales::default()
         };
-        let weigh = subscribe_update_weight(scales);
-        let count_only = subscribe_update_weight(WeightScales {
+        let count_only = WeightScales {
             account_data_unit: 0,
             ..scales
-        });
+        };
         let account = |len: usize| {
             fixtures::message_account(fixtures::account_info(
                 Pubkey::default(),
@@ -2726,10 +2739,10 @@ mod tests {
 
         // One unit plus one per 4096 bytes of data, times the account scale.
         let whole = FilterAccountsDataSlice::default;
-        assert_eq!(weigh(&account_update(4095, whole())), 4);
-        assert_eq!(weigh(&account_update(4096, whole())), 8);
-        assert_eq!(weigh(&account_update(10 << 20, whole())), 4 * 2561);
-        assert_eq!(count_only(&account_update(10 << 20, whole())), 4);
+        assert_eq!(scales.weight(&account_update(4095, whole())), 4);
+        assert_eq!(scales.weight(&account_update(4096, whole())), 8);
+        assert_eq!(scales.weight(&account_update(10 << 20, whole())), 4 * 2561);
+        assert_eq!(count_only.weight(&account_update(10 << 20, whole())), 4);
 
         // A data slice sends less, but the queue still holds the whole account.
         let slice = FilterAccountsDataSlice::new(
@@ -2740,7 +2753,7 @@ mod tests {
             usize::MAX,
         )
         .unwrap();
-        assert_eq!(weigh(&account_update(10 << 20, slice)), 4 * 2561);
+        assert_eq!(scales.weight(&account_update(10 << 20, slice)), 4 * 2561);
 
         // Accounts in a block count the same units, times the block scale only.
         let block = Message::Block(fixtures::message_block(
@@ -2754,8 +2767,8 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        assert_eq!(weigh(&Ok(block_update.clone())), 1 + 2 + 1 + 3);
-        assert_eq!(count_only(&Ok(block_update)), 1 + 2 + 2);
+        assert_eq!(scales.weight(&Ok(block_update.clone())), 1 + 2 + 1 + 3);
+        assert_eq!(count_only.weight(&Ok(block_update)), 1 + 2 + 2);
     }
 
     #[tokio::test]
@@ -2764,8 +2777,7 @@ mod tests {
             account: 4,
             ..WeightScales::default()
         };
-        let (stream_tx, mut stream_rx) =
-            load_aware_channel_with_weigher(10, subscribe_update_weight(scales));
+        let (stream_tx, mut stream_rx) = load_aware_channel(10, scales);
         let account = || {
             update(FilteredUpdateOneof::account(
                 fixtures::simple_message_account(Pubkey::default(), Pubkey::default()),
@@ -2818,7 +2830,7 @@ mod tests {
     /// Starts a client that asks for a replay of 20 blocks weighing 10 each into a queue of 50.
     fn spawn_replaying_client(timeout: Duration) -> (ClientHandles, tokio::task::JoinHandle<()>) {
         let (client_tx, client_rx) = mpsc::unbounded_channel();
-        let (stream_tx, stream_rx) = load_aware_channel(50);
+        let (stream_tx, stream_rx) = load_aware_channel(50, WeightScales::default());
         let (replay_tx, replay_rx) = mpsc::channel(1);
         tokio::spawn(answer_replay(replay_rx, 20, 9));
         let session = ClientSession::new(
@@ -2946,7 +2958,7 @@ mod tests {
 
     fn spawn_client_loop(broadcast: SubscriberChannels, ct: CancellationToken) -> ClientHandles {
         let (client_tx, client_rx) = mpsc::unbounded_channel();
-        let (stream_tx, stream_rx) = load_aware_channel(64);
+        let (stream_tx, stream_rx) = load_aware_channel(64, WeightScales::default());
         let session = ClientSession::new(0, Some("test".into()), "test".into(), ct, None);
         tokio::spawn(GrpcService::client_loop(
             session,
@@ -3056,7 +3068,7 @@ mod tests {
         let tt = TaskTracker::new();
         let broadcast = SubscriberChannels::new(16, 16, 16);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
-        let (stream_tx, stream_rx) = load_aware_channel(16);
+        let (stream_tx, stream_rx) = load_aware_channel(16, WeightScales::default());
         let (half_close_tx, half_close_rx) = oneshot::channel();
 
         // mirrors the incoming handler spawned in subscribe()

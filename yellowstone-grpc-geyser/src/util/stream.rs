@@ -2,6 +2,7 @@ use {
     futures::Stream,
     std::{
         fmt,
+        marker::PhantomData,
         sync::Arc,
         task::{Context, Poll},
     },
@@ -75,27 +76,68 @@ impl<T> fmt::Debug for TrySendError<T> {
     }
 }
 
-/// An item that carries an abstract "weight" used by a [`load_aware_channel`] for backpressure.
+/// Assigns the abstract "weight" a [`load_aware_channel`] uses for backpressure to each item.
 ///
 /// The weight is an opaque score: the channel never interprets it, it only sums the weights of
-/// the items currently queued and compares that sum against the channel capacity.
-pub trait Weighted {
-    /// Returns the weight of this item.
+/// the items currently queued and compares that sum against the channel capacity. Every
+/// [`LoadAwareSender`] owns a copy of the weigher, so a weigher can carry configuration such as
+/// per-kind scales.
+pub trait Weigher {
+    /// The type of item this weigher weighs.
+    type Item;
+
+    /// Returns the weight of `item`.
+    ///
+    /// # Arguments
+    ///
+    /// * `item` - The item about to be queued.
     ///
     /// # Returns
     ///
     /// The weight of the item. A weight of `0` is treated as `1` by the channel, and a weight
     /// above the channel capacity is treated as the full capacity.
-    fn weight(&self) -> u32;
+    fn weight(&self, item: &Self::Item) -> u32;
 }
 
-impl<T: Weighted, E> Weighted for Result<T, E> {
-    /// Returns the weight of the `Ok` value, or `1` for an `Err`.
-    fn weight(&self) -> u32 {
-        match self {
-            Ok(value) => value.weight(),
-            Err(_) => 1,
-        }
+/// A [`Weigher`] that weighs every item `1`, so the channel capacity bounds the item count.
+pub struct UnitWeigher<T>(PhantomData<fn(&T)>);
+
+impl<T> UnitWeigher<T> {
+    /// Creates a [`UnitWeigher`].
+    ///
+    /// # Returns
+    ///
+    /// A [`UnitWeigher`] for items of type `T`.
+    pub const fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T> Default for UnitWeigher<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Clone for UnitWeigher<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for UnitWeigher<T> {}
+
+impl<T> fmt::Debug for UnitWeigher<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("UnitWeigher")
+    }
+}
+
+impl<T> Weigher for UnitWeigher<T> {
+    type Item = T;
+
+    fn weight(&self, _item: &T) -> u32 {
+        1
     }
 }
 
@@ -129,19 +171,17 @@ impl Shared {
     }
 }
 
-/// Computes the weight of an item when a sender queues it.
-type Weigher<T> = Arc<dyn Fn(&T) -> u32 + Send + Sync>;
-
 /// Sender end of the channel created by [`load_aware_channel`].
 ///
-/// It can be cloned freely, every clone shares the same capacity.
-pub struct LoadAwareSender<T> {
+/// It can be cloned freely, every clone shares the same capacity and weighs items with its own
+/// clone of the [`Weigher`] `W`.
+pub struct LoadAwareSender<T, W> {
     shared: Arc<Shared>,
     inner: UnboundedSender<(u32, T)>,
-    weigher: Weigher<T>,
+    weigher: W,
 }
 
-impl<T> fmt::Debug for LoadAwareSender<T> {
+impl<T, W> fmt::Debug for LoadAwareSender<T, W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoadAwareSender")
             .field("shared", &self.shared)
@@ -149,12 +189,12 @@ impl<T> fmt::Debug for LoadAwareSender<T> {
     }
 }
 
-impl<T> Clone for LoadAwareSender<T> {
+impl<T, W: Clone> Clone for LoadAwareSender<T, W> {
     fn clone(&self) -> Self {
         Self {
             shared: Arc::clone(&self.shared),
             inner: self.inner.clone(),
-            weigher: Arc::clone(&self.weigher),
+            weigher: self.weigher.clone(),
         }
     }
 }
@@ -175,7 +215,7 @@ impl<T> Drop for LoadAwareReceiver<T> {
 
 /// Creates an mpsc channel whose capacity is a total weight instead of an item count.
 ///
-/// Each item is accounted for by its [`Weighted::weight`] from the moment a sender admits it
+/// Each item is accounted for by the [`Weigher::weight`] of `weigher` from the moment a sender admits it
 /// until the receiver dequeues it. The uncontended path is a single atomic operation plus a
 /// lock-free enqueue, and a lock is only taken when a sender actually has to wait.
 ///
@@ -189,7 +229,8 @@ impl<T> Drop for LoadAwareReceiver<T> {
 ///
 /// # Arguments
 ///
-/// * `capacity` - The total weight the channel can hold.
+/// * `weighted_capacity` - The total weight the channel can hold.
+/// * `weigher` - The [`Weigher`] that weighs each item as a sender queues it.
 ///
 /// # Returns
 ///
@@ -197,23 +238,14 @@ impl<T> Drop for LoadAwareReceiver<T> {
 ///
 /// # Panics
 ///
-/// Panics if `capacity` is `0` or exceeds [`MAX_CAPACITY`].
-pub fn load_aware_channel<T: Weighted + 'static>(
-    weighted_capacity: usize,
-) -> (LoadAwareSender<T>, LoadAwareReceiver<T>) {
-    load_aware_channel_with_weigher(weighted_capacity, T::weight)
-}
-
-/// Creates a [`load_aware_channel`] that weighs items with `weigher` instead of
-/// [`Weighted::weight`].
-///
-/// # Panics
-///
 /// Panics if `weighted_capacity` is `0` or exceeds [`MAX_CAPACITY`].
-pub fn load_aware_channel_with_weigher<T>(
+pub fn load_aware_channel<T, W>(
     weighted_capacity: usize,
-    weigher: impl Fn(&T) -> u32 + Send + Sync + 'static,
-) -> (LoadAwareSender<T>, LoadAwareReceiver<T>) {
+    weigher: W,
+) -> (LoadAwareSender<T, W>, LoadAwareReceiver<T>)
+where
+    W: Weigher<Item = T>,
+{
     assert!(
         weighted_capacity > 0,
         "load aware channel weight capacity must be positive"
@@ -226,7 +258,7 @@ pub fn load_aware_channel_with_weigher<T>(
     let sender = LoadAwareSender {
         shared: Arc::clone(&shared),
         inner: inner_sender,
-        weigher: Arc::new(weigher),
+        weigher,
     };
 
     let rx = LoadAwareReceiver {
@@ -237,10 +269,13 @@ pub fn load_aware_channel_with_weigher<T>(
     (sender, rx)
 }
 
-impl<T> LoadAwareSender<T> {
+impl<T, W> LoadAwareSender<T, W>
+where
+    W: Weigher<Item = T>,
+{
     /// Returns the weight `item` is accounted for while it sits in the channel.
     fn admitted_weight(&self, item: &T) -> u32 {
-        self.shared.admitted_weight((self.weigher)(item))
+        self.shared.admitted_weight(self.weigher.weight(item))
     }
 
     /// Sends an item, waiting until the channel has enough free weight for it and every sender
@@ -250,7 +285,7 @@ impl<T> LoadAwareSender<T> {
     ///
     /// # Arguments
     ///
-    /// * `item` - The [`Weighted`] item to queue.
+    /// * `item` - The item to queue, weighed by the sender's [`Weigher`].
     ///
     /// # Returns
     ///
@@ -285,7 +320,7 @@ impl<T> LoadAwareSender<T> {
     ///
     /// # Arguments
     ///
-    /// * `item` - The [`Weighted`] item to queue.
+    /// * `item` - The item to queue, weighed by the sender's [`Weigher`].
     ///
     /// # Returns
     ///
@@ -378,15 +413,33 @@ mod tests {
     #[derive(Debug, PartialEq, Eq)]
     struct TestItem(u32);
 
-    impl Weighted for TestItem {
-        fn weight(&self) -> u32 {
-            self.0
+    /// Weighs a [`TestItem`] by the value it holds.
+    #[derive(Debug, Clone, Copy)]
+    struct TestWeigher;
+
+    impl Weigher for TestWeigher {
+        type Item = TestItem;
+
+        fn weight(&self, item: &TestItem) -> u32 {
+            item.0
+        }
+    }
+
+    /// Weighs a [`TestItem`] by the value it holds times a configured factor.
+    #[derive(Debug, Clone, Copy)]
+    struct ScaledWeigher(u32);
+
+    impl Weigher for ScaledWeigher {
+        type Item = TestItem;
+
+        fn weight(&self, item: &TestItem) -> u32 {
+            item.0 * self.0
         }
     }
 
     #[tokio::test]
     async fn test_basic_send_and_receive() {
-        let (sender, mut receiver) = load_aware_channel(10);
+        let (sender, mut receiver) = load_aware_channel(10, TestWeigher);
 
         sender.send(TestItem(5)).await.unwrap();
         assert_eq!(sender.current_weight(), 5);
@@ -397,7 +450,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_behavior() {
-        let (sender, receiver) = load_aware_channel(10);
+        let (sender, receiver) = load_aware_channel(10, TestWeigher);
 
         sender.send(TestItem(1)).await.unwrap();
         sender.send(TestItem(2)).await.unwrap();
@@ -417,7 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn waiting_senders_are_served_in_fifo_order() {
-        let (sender, mut receiver) = load_aware_channel(10);
+        let (sender, mut receiver) = load_aware_channel(10, TestWeigher);
         sender.send(TestItem(3)).await.unwrap();
         sender.send(TestItem(3)).await.unwrap();
 
@@ -444,7 +497,7 @@ mod tests {
 
     #[tokio::test]
     async fn try_send_does_not_jump_ahead_of_a_waiting_send() {
-        let (sender, mut receiver) = load_aware_channel(10);
+        let (sender, mut receiver) = load_aware_channel(10, TestWeigher);
         sender.send(TestItem(6)).await.unwrap();
 
         let mut heavy = pin!(sender.send(TestItem(8)));
@@ -464,7 +517,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_a_waiting_send_gives_its_capacity_back() {
-        let (sender, mut receiver) = load_aware_channel(10);
+        let (sender, mut receiver) = load_aware_channel(10, TestWeigher);
         sender.send(TestItem(6)).await.unwrap();
 
         {
@@ -483,7 +536,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_the_receiver_wakes_waiting_senders() {
-        let (sender, receiver) = load_aware_channel(2);
+        let (sender, receiver) = load_aware_channel(2, TestWeigher);
         sender.send(TestItem(2)).await.unwrap();
 
         let mut waiting = pin!(sender.send(TestItem(1)));
@@ -504,7 +557,7 @@ mod tests {
 
     #[tokio::test]
     async fn oversized_item_is_admitted_only_into_an_empty_channel() {
-        let (sender, mut receiver) = load_aware_channel(10);
+        let (sender, mut receiver) = load_aware_channel(10, TestWeigher);
 
         // Empty channel: admitted immediately and accounted as the full capacity.
         sender.send(TestItem(100)).await.unwrap();
@@ -527,14 +580,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn custom_weigher_sets_the_weight() {
-        let (sender, mut receiver) =
-            load_aware_channel_with_weigher(10, |item: &TestItem| item.0 * 3);
+    async fn weigher_state_sets_the_weight() {
+        let (sender, mut receiver) = load_aware_channel(10, ScaledWeigher(3));
+        let clone = sender.clone();
 
         sender.try_send(TestItem(2)).unwrap();
         assert_eq!(sender.current_weight(), 6);
+        // A cloned sender weighs with the same scale.
         assert!(matches!(
-            sender.try_send(TestItem(2)),
+            clone.try_send(TestItem(2)),
             Err(TrySendError::Full(TestItem(2)))
         ));
         assert_eq!(receiver.recv().await, Some(TestItem(2)));
@@ -543,7 +597,7 @@ mod tests {
 
     #[tokio::test]
     async fn zero_weight_items_still_consume_capacity() {
-        let (sender, mut receiver) = load_aware_channel(2);
+        let (sender, mut receiver) = load_aware_channel(2, TestWeigher);
         sender.try_send(TestItem(0)).unwrap();
         sender.try_send(TestItem(0)).unwrap();
         assert_eq!(sender.current_weight(), 2);
@@ -563,9 +617,15 @@ mod tests {
         weight: u32,
     }
 
-    impl Weighted for StressItem {
-        fn weight(&self) -> u32 {
-            self.weight
+    /// Weighs a [`StressItem`] by its `weight` field.
+    #[derive(Debug, Clone, Copy)]
+    struct StressWeigher;
+
+    impl Weigher for StressWeigher {
+        type Item = StressItem;
+
+        fn weight(&self, item: &StressItem) -> u32 {
+            item.weight
         }
     }
 
@@ -575,7 +635,7 @@ mod tests {
         const SENDERS: usize = 4;
         const ITEMS_PER_SENDER: usize = 5_000;
 
-        let (sender, mut receiver) = load_aware_channel(CAPACITY);
+        let (sender, mut receiver) = load_aware_channel(CAPACITY, StressWeigher);
         let probe = sender.clone();
 
         let mut tasks = Vec::new();
