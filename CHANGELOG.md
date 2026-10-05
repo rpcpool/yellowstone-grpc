@@ -10,7 +10,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
-- yellowstone-grpc-proto 15.0.0
+- yellowstone-grpc-proto 14.0.1
 - yellowstone-grpc-geyser 16.1.0
 - yellowstone-grpc-client 15.0.0
 
