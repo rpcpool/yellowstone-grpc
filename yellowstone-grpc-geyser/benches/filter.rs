@@ -253,6 +253,44 @@ fn transaction_signer_include(c: &mut Criterion) {
     group.finish();
 }
 
+/// Many filters with one signer each, none of them the fixture's signer:
+/// what each additional signer filter costs per message.
+fn transaction_signer_include_filters(c: &mut Criterion) {
+    let keys = transaction_keys();
+    let message = Message::Transaction(fixtures::message_transaction(
+        Signature::default(),
+        keys,
+        false,
+        Default::default(),
+    ));
+    let pool = fixtures::deterministic_pubkeys(6, 256);
+
+    let mut group = c.benchmark_group("transactions/signer_include_filters");
+    for n in [1usize, 64, 256] {
+        let transactions = pool[..n]
+            .iter()
+            .enumerate()
+            .map(|(i, signer)| {
+                (
+                    format!("filter-{i}"),
+                    SubscribeRequestFilterTransactions {
+                        signer_include: vec![signer.to_string()],
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let filter = build_filter(SubscribeRequest {
+            transactions,
+            ..Default::default()
+        });
+        group.bench_with_input(BenchmarkId::new("miss", n), &n, |b, _| {
+            b.iter(|| black_box(filter.get_updates(black_box(&message), None)))
+        });
+    }
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default()
@@ -265,5 +303,6 @@ criterion_group! {
         slots_only_client,
         transaction_account_include,
         transaction_signer_include,
+        transaction_signer_include_filters,
 }
 criterion_main!(benches);

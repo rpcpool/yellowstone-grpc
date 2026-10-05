@@ -1405,6 +1405,8 @@ mod tests {
         account_include: vec!["acc1".to_string()],
         account_exclude: vec!["acc2".to_string()],
         account_required: vec!["acc3".to_string()],
+        signer_include: vec!["signer1".to_string()],
+        signer_exclude: vec!["signer2".to_string()],
         include_update_parent: None,
       },
     );
@@ -1466,6 +1468,22 @@ mod tests {
         .unwrap()
         .account_required,
       vec!["acc3".to_string()]
+    );
+    assert_eq!(
+      received
+        .deshred_transactions
+        .get("client")
+        .unwrap()
+        .signer_include,
+      vec!["signer1".to_string()]
+    );
+    assert_eq!(
+      received
+        .deshred_transactions
+        .get("client")
+        .unwrap()
+        .signer_exclude,
+      vec!["signer2".to_string()]
     );
     assert_eq!(received.ping.unwrap().id, 99);
   }

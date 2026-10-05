@@ -455,6 +455,14 @@ struct ActionSubscribeDeshred {
     #[clap(long)]
     account_required: Vec<String>,
 
+    /// Filter transactions signed by any of these accounts (static keys only)
+    #[clap(long)]
+    signer_include: Vec<String>,
+
+    /// Filter out transactions signed by any of these accounts (static keys only)
+    #[clap(long)]
+    signer_exclude: Vec<String>,
+
     /// Include deshred update parent messages
     #[clap(long)]
     include_update_parent: Option<bool>,
@@ -696,6 +704,8 @@ impl Action {
                         account_include: args.account_include.clone(),
                         account_exclude: args.account_exclude.clone(),
                         account_required: args.account_required.clone(),
+                        signer_include: args.signer_include.clone(),
+                        signer_exclude: args.signer_exclude.clone(),
                         include_update_parent: args.include_update_parent,
                     },
                 );
