@@ -64,6 +64,7 @@ url = { workspace = true, features = ["serde"] }
 notify = { workspace = true }
 
 # Agave Monorepo
+agave-feature-set = { workspace = true }
 agave-geyser-plugin-interface = { workspace = true }
 solana-entry = { workspace = true }
 solana-logger = { workspace = true }

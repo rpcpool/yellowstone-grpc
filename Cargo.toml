@@ -103,6 +103,7 @@ wincode = "0.6.1"
 notify = "8.2.0"
 
 # Agave Monorepo
+agave-feature-set = "4.3.0"
 agave-geyser-plugin-interface = "4.3.0"
 solana-account-decoder = "4.3.0"
 solana-entry = "4.3.0"
