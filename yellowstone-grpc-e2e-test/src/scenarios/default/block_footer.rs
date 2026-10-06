@@ -48,17 +48,11 @@ fn check_footer_fields(footer: &SubscribeUpdateBlockFooter) -> Result<()> {
     Ok(())
 }
 
-/// Verifies block footers stream on their own filter and each one matches the block meta of the same bank.
-#[test_helper(name = "block-footer", tags = ["block-footer", "alpenglow"])]
-pub async fn block_footer_should_match_block_meta(config: &RunConfig) -> Result<()> {
-    const TARGET_MATCHED: usize = 5;
-    // Only Alpenglow blocks carry a footer. Give up after this many block metas.
-    const MAX_BLOCK_META: usize = 150;
-
-    let mut client = crate::grpc::new_client(config).await?;
-
-    // Footers go out at processed only; they never join the block machine.
-    let subscription = SubscribeRequest {
+fn footer_and_block_meta_request(
+    commitment: CommitmentLevel,
+    from_slot: Option<u64>,
+) -> SubscribeRequest {
+    SubscribeRequest {
         block_footer: HashMap::from([(
             FILTER_NAME.to_string(),
             SubscribeRequestFilterBlockFooter::default(),
@@ -67,9 +61,34 @@ pub async fn block_footer_should_match_block_meta(config: &RunConfig) -> Result<
             FILTER_NAME.to_string(),
             SubscribeRequestFilterBlocksMeta {},
         )]),
-        commitment: Some(CommitmentLevel::Processed as i32),
+        commitment: Some(commitment as i32),
+        from_slot,
         ..Default::default()
-    };
+    }
+}
+
+/// Verifies block footers stream on their own filter and each one comes before the block meta of the same bank.
+#[test_helper(name = "block-footer", tags = ["block-footer", "alpenglow"])]
+pub async fn block_footer_should_match_block_meta(config: &RunConfig) -> Result<()> {
+    footers_should_precede_block_meta(config, CommitmentLevel::Processed).await
+}
+
+/// Verifies confirmed subscribers receive block footers, each before the block meta of the same bank.
+#[test_helper(name = "block-footer-confirmed", tags = ["block-footer", "alpenglow"])]
+pub async fn block_footer_should_match_block_meta_at_confirmed(config: &RunConfig) -> Result<()> {
+    footers_should_precede_block_meta(config, CommitmentLevel::Confirmed).await
+}
+
+async fn footers_should_precede_block_meta(
+    config: &RunConfig,
+    commitment: CommitmentLevel,
+) -> Result<()> {
+    const TARGET_MATCHED: usize = 5;
+    // Only Alpenglow blocks carry a footer. Give up after this many block metas.
+    const MAX_BLOCK_META: usize = 150;
+
+    let mut client = crate::grpc::new_client(config).await?;
+    let subscription = footer_and_block_meta_request(commitment, None);
 
     let mut stream = client
         .subscribe_once(subscription)
@@ -105,14 +124,12 @@ pub async fn block_footer_should_match_block_meta(config: &RunConfig) -> Result<
                     footer.slot,
                     footer.bank_id
                 );
-                if block_metas.contains(&key) {
-                    matched += 1;
-                    log::info!(
-                        "slot {} bank_id {}: footer matched {matched}/{TARGET_MATCHED}",
-                        footer.slot,
-                        footer.bank_id
-                    );
-                }
+                ensure!(
+                    !block_metas.contains(&key),
+                    "slot {} bank_id {}: footer arrived after its block meta",
+                    footer.slot,
+                    footer.bank_id
+                );
             }
             Some(UpdateOneof::BlockMeta(block_meta)) => {
                 let key = (block_meta.slot, block_meta.bank_id);
@@ -140,6 +157,73 @@ pub async fn block_footer_should_match_block_meta(config: &RunConfig) -> Result<
         }
     }
 
+    Ok(())
+}
+
+/// Verifies `from_slot` replay sends each bank's block footer before its block meta.
+#[test_helper(name = "block-footer-replay", tags = ["block-footer", "alpenglow", "replay"])]
+pub async fn block_footer_should_replay_before_block_meta(config: &RunConfig) -> Result<()> {
+    const REPLAY_DEPTH: u64 = 10;
+    // Slots skipped by their leader have no block, so require only some replayed banks.
+    const MIN_REPLAYED_BANKS: usize = 3;
+
+    let mut client = crate::grpc::new_client(config).await?;
+    let tip = client.get_slot(None).await.context("get_slot")?.slot;
+    let from_slot = tip.saturating_sub(REPLAY_DEPTH);
+    log::info!("current tip slot is {tip}, replaying from slot {from_slot}");
+
+    let mut stream = client
+        .subscribe_once(footer_and_block_meta_request(
+            CommitmentLevel::Processed,
+            Some(from_slot),
+        ))
+        .await
+        .context("subscription should succeed")?;
+
+    let mut footers: HashSet<(u64, u64)> = HashSet::new();
+    let mut replayed_banks = 0usize;
+    loop {
+        let update = timeout(UPDATE_TIMEOUT, stream.next())
+            .await
+            .with_context(|| format!("no update within {UPDATE_TIMEOUT:?}"))?
+            .context("stream ended before replay caught up with the tip")?
+            .context("stream should yield updates without error")?;
+
+        match update.update_oneof {
+            Some(UpdateOneof::BlockFooter(footer)) => {
+                check_footer_fields(&footer)?;
+                ensure!(
+                    footers.insert((footer.slot, footer.bank_id)),
+                    "received duplicate footer for slot {} bank_id {}",
+                    footer.slot,
+                    footer.bank_id
+                );
+            }
+            Some(UpdateOneof::BlockMeta(block_meta)) => {
+                if block_meta.slot >= tip {
+                    break;
+                }
+                ensure!(
+                    block_meta.slot >= from_slot,
+                    "slot {}: replay sent a block meta before from_slot {from_slot}",
+                    block_meta.slot
+                );
+                ensure!(
+                    footers.contains(&(block_meta.slot, block_meta.bank_id)),
+                    "slot {} bank_id {}: replayed block meta arrived without a footer before it",
+                    block_meta.slot,
+                    block_meta.bank_id
+                );
+                replayed_banks += 1;
+            }
+            _ => {}
+        }
+    }
+
+    ensure!(
+        replayed_banks >= MIN_REPLAYED_BANKS,
+        "only {replayed_banks} banks replayed between slot {from_slot} and tip {tip}, expected at least {MIN_REPLAYED_BANKS}"
+    );
     Ok(())
 }
 
