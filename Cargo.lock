@@ -7395,6 +7395,7 @@ name = "yellowstone-grpc-geyser"
 version = "16.1.0"
 dependencies = [
  "affinity",
+ "agave-feature-set",
  "agave-geyser-plugin-interface",
  "agave-votor-messages",
  "anyhow",
