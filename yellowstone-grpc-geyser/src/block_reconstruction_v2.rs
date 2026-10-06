@@ -2,8 +2,8 @@ use {
     crate::{
         metrics,
         plugin::message::{
-            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry, MessageSlot,
-            MessageTransaction, SlotStatus,
+            Message, MessageAccount, MessageBlock, MessageBlockFooter, MessageBlockMeta,
+            MessageEntry, MessageSlot, MessageTransaction, SlotStatus,
         },
     },
     foldhash::{HashMap as FoldHashMap, HashMapExt},
@@ -12,7 +12,7 @@ use {
     solana_pubkey::Pubkey,
     std::{
         collections::{btree_map::Range, BTreeMap, VecDeque},
-        sync::Arc,
+        sync::{Arc, LazyLock},
     },
 };
 
@@ -35,6 +35,12 @@ const MUST_HAVE_SYSVAR_ACCOUNTS: [Pubkey; 4] = [
     Pubkey::from_str_const("SysvarS1otHistory11111111111111111111111111"),
     Pubkey::from_str_const("SysvarRecentB1ockHashes11111111111111111111"),
 ];
+
+// Agave writes this account only on Alpenglow, while it applies the footer and before
+// BlockMeta. A bank that writes it waits for its footer before it seals.
+static ALPENGLOW_CLOCK_ACCOUNT: LazyLock<Pubkey> = LazyLock::new(|| {
+    Pubkey::find_program_address(&[b"alpenclock"], &agave_feature_set::alpenglow::id()).0
+});
 
 const fn commitment_rank(level: CommitmentLevel) -> u8 {
     match level {
@@ -64,7 +70,7 @@ enum TrySealError {
     AlreadySealed,
 }
 
-/// Accumulates block content (Account/Transaction/Entry/BlockMeta) for a single bank
+/// Accumulates block content (Account/Transaction/Entry/BlockMeta/BlockFooter) for a single bank
 /// instance, keyed by `bank_id` rather than by slot. Unlike a slot number, a `bank_id` is
 /// unique per bank instance, so there is no ambiguity to resolve when a slot ends up with
 /// more than one bank (e.g. after a dump-and-repair replay) -- each gets its own buffer,
@@ -80,9 +86,12 @@ struct BankBuffer {
     created_bank_seen: bool,
     // Bit `i` set means `MUST_HAVE_SYSVAR_ACCOUNTS[i]` has been observed for this bank.
     musthave_sysvar_accounts_bitmask: u8,
+    // Set when the bank writes `ALPENGLOW_CLOCK_ACCOUNT`; the footer is then required to seal.
+    footer_expected: bool,
     original_messages: Vec<Message>,
     account_write_version_map: FoldHashMap<Pubkey, u64>,
     blockmeta: Option<Arc<MessageBlockMeta>>,
+    footer: Option<Arc<MessageBlockFooter>>,
     transactions: Vec<Arc<MessageTransaction>>,
     accounts: Vec<Arc<MessageAccount>>,
     entries: Vec<Arc<MessageEntry>>,
@@ -97,9 +106,11 @@ impl BankBuffer {
             parent_slot: None,
             created_bank_seen: false,
             musthave_sysvar_accounts_bitmask: 0,
+            footer_expected: false,
             original_messages: Vec::with_capacity(4096),
             account_write_version_map: FoldHashMap::with_capacity(4096),
             blockmeta: None,
+            footer: None,
             transactions: Vec::with_capacity(4096),
             accounts: Vec::with_capacity(4096),
             entries: Vec::with_capacity(64),
@@ -124,6 +135,9 @@ impl BankBuffer {
                     .position(|pubkey| pubkey == &message_account.account.pubkey)
                 {
                     self.musthave_sysvar_accounts_bitmask |= 1 << position;
+                }
+                if message_account.account.pubkey == *ALPENGLOW_CLOCK_ACCOUNT {
+                    self.footer_expected = true;
                 }
                 self.accounts.push(Arc::clone(message_account));
             }
@@ -159,6 +173,9 @@ impl BankBuffer {
 
         let expected_entry_count = blockmeta.entries_count as usize;
         if self.entries.len() < expected_entry_count {
+            return Err(TrySealError::NotSealable);
+        }
+        if self.footer_expected && self.footer.is_none() {
             return Err(TrySealError::NotSealable);
         }
         self.is_sealed = true;
@@ -214,6 +231,7 @@ impl BankBuffer {
             slot: self.slot,
             original_messages: Arc::new(dedup_messages),
             block_meta,
+            block_footer: self.footer,
             pre_computed_message_block,
         }
     }
@@ -224,6 +242,7 @@ pub struct FrozenBank {
     slot: Slot,
     original_messages: Arc<Vec<Message>>,
     block_meta: Arc<MessageBlockMeta>,
+    block_footer: Option<Arc<MessageBlockFooter>>,
     pre_computed_message_block: Arc<MessageBlock>,
 }
 
@@ -238,6 +257,10 @@ impl FrozenBank {
 
     pub fn get_block_meta(&self) -> Arc<MessageBlockMeta> {
         Arc::clone(&self.block_meta)
+    }
+
+    pub fn get_block_footer(&self) -> Option<Arc<MessageBlockFooter>> {
+        self.block_footer.clone()
     }
 }
 
@@ -385,14 +408,14 @@ impl BlockMachineStorage {
                 self.handle_block_data(message);
             }
             Message::BlockMeta(block_meta) => self.handle_block_meta(block_meta),
+            Message::BlockFooter(block_footer) => self.handle_block_footer(block_footer),
             Message::EntryUpdateParent(message) => self.handle_cleared_bank(
                 message.update_parent.slot,
                 message.update_parent.cleared_bank_id,
             ),
             _ => {
                 // Message::Block is synthesized internally and never fed back in;
-                // Message::DeshredTransaction goes through a separate pipeline entirely;
-                // Message::BlockFooter is streamed on its own and joins no block.
+                // Message::DeshredTransaction goes through a separate pipeline entirely.
             }
         }
     }
@@ -876,6 +899,26 @@ impl BlockMachineStorage {
             bank.parent_slot = Some(block_meta.parent_slot);
         }
         bank.blockmeta = Some(Arc::clone(&block_meta));
+        self.try_seal_bank(bank_id);
+    }
+
+    fn handle_block_footer(&mut self, block_footer: Arc<MessageBlockFooter>) {
+        let bank_id = block_footer.bank_id;
+        let slot = block_footer.slot;
+        if self.discarded_bank_ids.contains_key(&bank_id) {
+            return;
+        }
+        // Only a bank that never wrote `ALPENGLOW_CLOCK_ACCOUNT` can seal before its footer.
+        if self.replay_candidate(slot, bank_id).is_some() {
+            log::warn!("block footer for bank {bank_id} (slot {slot}) arrived after the bank sealed; dropping");
+            return;
+        }
+        self.register_bank_for_slot(slot, bank_id);
+        let bank = self
+            .banks
+            .entry(bank_id)
+            .or_insert_with(|| BankBuffer::new(bank_id, slot));
+        bank.footer = Some(block_footer);
         self.try_seal_bank(bank_id);
     }
 
@@ -1784,5 +1827,86 @@ mod tests {
         assert_eq!(storage.min_replayable_slot(), Some(5));
         drive_bank_to_processed(&mut storage, 3, 2, None);
         assert_eq!(storage.min_replayable_slot(), Some(3));
+    }
+
+    fn make_footer_msg(slot: u64, bank_id: BankId) -> Message {
+        Message::BlockFooter(crate::plugin::filter::fixtures::message_block_footer(
+            slot, bank_id,
+        ))
+    }
+
+    // Everything an Alpenglow bank needs to seal except its footer.
+    fn drive_alpenglow_bank_without_footer(
+        storage: &mut BlockMachineStorage,
+        slot: u64,
+        bank_id: BankId,
+    ) {
+        storage.add(make_created_bank_msg(slot, None, bank_id));
+        add_musthave_sysvars(storage, slot, bank_id);
+        storage.add(make_account_msg(slot, bank_id, *ALPENGLOW_CLOCK_ACCOUNT, 1));
+        storage.add(make_entry_msg(slot, 0, bank_id));
+        storage.add(make_block_meta_msg(slot, 0, bank_id));
+        storage.add(make_commitment_msg(
+            slot,
+            None,
+            SlotStatus::Processed,
+            bank_id,
+        ));
+    }
+
+    #[test]
+    fn bank_without_alpenglow_clock_seals_without_footer() {
+        let mut storage = BlockMachineStorage::new(10);
+        drive_bank_to_processed(&mut storage, 1, 1, None);
+        let (_, frozen) = storage.pop_ready_block().expect("block should be ready");
+        assert!(frozen.get_block_footer().is_none());
+    }
+
+    #[test]
+    fn alpenglow_bank_waits_for_late_footer() {
+        let mut storage = BlockMachineStorage::new(10);
+        drive_alpenglow_bank_without_footer(&mut storage, 1, 1);
+        assert!(
+            storage.pop_ready_block().is_none(),
+            "must not seal before the footer"
+        );
+
+        storage.add(make_footer_msg(1, 1));
+        let (update, frozen) = storage.pop_ready_block().expect("block should be ready");
+        assert_eq!(update.commitment, CommitmentLevel::Processed);
+        let footer = frozen
+            .get_block_footer()
+            .expect("footer should be attached");
+        assert_eq!((footer.slot, footer.bank_id), (1, 1));
+    }
+
+    #[test]
+    fn alpenglow_bank_seals_with_early_footer() {
+        let mut storage = BlockMachineStorage::new(10);
+        storage.add(make_footer_msg(1, 1));
+        drive_alpenglow_bank_without_footer(&mut storage, 1, 1);
+        let (_, frozen) = storage.pop_ready_block().expect("block should be ready");
+        assert!(frozen.get_block_footer().is_some());
+    }
+
+    #[test]
+    fn footer_for_discarded_bank_is_ignored() {
+        let mut storage = BlockMachineStorage::new(10);
+        storage.add(make_created_bank_msg(10, Some(9), 1));
+        storage.add(make_update_parent_msg(10, 1, 8));
+        storage.add(make_footer_msg(10, 1));
+        assert!(!storage.banks.contains_key(&1));
+    }
+
+    #[test]
+    fn replay_carries_the_footer() {
+        let mut storage = BlockMachineStorage::new(10);
+        drive_alpenglow_bank_without_footer(&mut storage, 1, 1);
+        storage.add(make_footer_msg(1, 1));
+        let replayed: Vec<_> = storage
+            .replay_from_slot(1, CommitmentLevel::Processed)
+            .collect();
+        assert_eq!(replayed.len(), 1);
+        assert!(replayed[0].frozen_block.get_block_footer().is_some());
     }
 }

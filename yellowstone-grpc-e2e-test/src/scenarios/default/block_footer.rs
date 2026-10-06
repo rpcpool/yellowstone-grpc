@@ -48,7 +48,7 @@ fn check_footer_fields(footer: &SubscribeUpdateBlockFooter) -> Result<()> {
     Ok(())
 }
 
-/// Verifies block footers stream on their own filter and each one matches the block meta of the same bank.
+/// Verifies block footers stream on their own filter and each one comes before the block meta of the same bank.
 #[test_helper(name = "block-footer", tags = ["block-footer", "alpenglow"])]
 pub async fn block_footer_should_match_block_meta(config: &RunConfig) -> Result<()> {
     const TARGET_MATCHED: usize = 5;
@@ -57,7 +57,6 @@ pub async fn block_footer_should_match_block_meta(config: &RunConfig) -> Result<
 
     let mut client = crate::grpc::new_client(config).await?;
 
-    // Footers go out at processed only; they never join the block machine.
     let subscription = SubscribeRequest {
         block_footer: HashMap::from([(
             FILTER_NAME.to_string(),
@@ -105,14 +104,12 @@ pub async fn block_footer_should_match_block_meta(config: &RunConfig) -> Result<
                     footer.slot,
                     footer.bank_id
                 );
-                if block_metas.contains(&key) {
-                    matched += 1;
-                    log::info!(
-                        "slot {} bank_id {}: footer matched {matched}/{TARGET_MATCHED}",
-                        footer.slot,
-                        footer.bank_id
-                    );
-                }
+                ensure!(
+                    !block_metas.contains(&key),
+                    "slot {} bank_id {}: footer arrived after its block meta",
+                    footer.slot,
+                    footer.bank_id
+                );
             }
             Some(UpdateOneof::BlockMeta(block_meta)) => {
                 let key = (block_meta.slot, block_meta.bank_id);
