@@ -2175,7 +2175,7 @@ impl FilterBlocks {
             if !(matches!(filter.include_accounts, None | Some(false)) || limits.include_accounts) {
                 return Err(FilterError::CreateBlocksNotAllowed("accounts"));
             }
-            if !(matches!(filter.include_entries, None | Some(false)) || limits.include_accounts) {
+            if !(matches!(filter.include_entries, None | Some(false)) || limits.include_entries) {
                 return Err(FilterError::CreateBlocksNotAllowed("entries"));
             }
 
