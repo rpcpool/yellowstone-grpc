@@ -515,23 +515,26 @@ impl MessageBlockFooter {
                 bank_hash: footer.bank_hash.to_bytes().to_vec(),
                 block_producer_time_nanos: footer.block_producer_time_nanos,
                 block_user_agent: footer.block_user_agent.clone(),
-                block_final_cert: serialize_cert(&footer.block_final_cert),
-                skip_reward_cert: serialize_cert(&footer.skip_reward_cert),
-                notar_reward_cert: serialize_cert(&footer.notar_reward_cert),
+                // A final cert with an invalid signature is dropped, so the rest of the footer still goes out.
+                block_final_cert: footer.block_final_cert.as_ref().and_then(|cert| {
+                    convert_to::create_block_final_cert(cert)
+                        .inspect_err(|error| {
+                            log::warn!("slot {}: invalid block final cert: {error}", info.slot)
+                        })
+                        .ok()
+                }),
+                skip_reward_cert: footer
+                    .skip_reward_cert
+                    .as_ref()
+                    .map(convert_to::create_skip_reward_cert),
+                notar_reward_cert: footer
+                    .notar_reward_cert
+                    .as_ref()
+                    .map(convert_to::create_notar_reward_cert),
             },
             created_at: Timestamp::from(SystemTime::now()),
         }
     }
-}
-
-// The Alpenglow certificates travel as opaque wincode bytes, as the footer holds them.
-fn serialize_cert<T>(cert: &Option<T>) -> Option<Vec<u8>>
-where
-    T: wincode::SchemaWrite<wincode::config::DefaultConfig, Src = T>,
-{
-    cert.as_ref().map(|cert| {
-        wincode::serialize(cert).expect("block footer certificate to serialize to bytes")
-    })
 }
 
 #[derive(Debug, Clone, PartialEq)]

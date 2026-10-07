@@ -1265,12 +1265,14 @@ impl GrpcService {
     ///    set of Account/Transaction/Entry messages for that slot) is sent at level C first.
     ///    This is omitted at Processed because those messages were already delivered individually
     ///    as they arrived.
-    /// 2. `Message::Block` (the precomputed block summary) is sent at level C.
+    /// 2. `Message::Block`, then the Alpenglow `Message::BlockFooter` if the bank has one, then
+    ///    `Message::BlockMeta` are sent at level C.
     /// 3. The synthetic Processed/Confirmed/Finalized slot status message is sent to all three
     ///    commitment levels.
     ///
-    /// This ordering guarantee — block content before `Message::Block` before slot status — must
-    /// be preserved so that subscribers always observe a complete block before the commitment signal.
+    /// This ordering guarantee — block content before `Message::Block` before the footer before
+    /// `Message::BlockMeta` before slot status — must be preserved so that subscribers always
+    /// observe a complete block before the commitment signal.
     ///
     /// # Account deduplication
     ///
@@ -1316,9 +1318,11 @@ impl GrpcService {
     {
         const MESSAGE_BATCH_SIZE: usize = 1024;
         // let mut message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
+        // BlockMeta and BlockFooter close the batch and go to block reconstruction only,
+        // which emits them once the block seals.
         struct PartitionedBuffer {
             message_batch: Vec<Message>,
-            blockmeta_batch: Option<Message>,
+            seal_gated: Option<Message>,
         }
         impl Buffer<Message> for PartitionedBuffer {
             fn accumulate(&mut self, item: Message) -> Result<(), Message> {
@@ -1326,7 +1330,7 @@ impl GrpcService {
                     return Err(item);
                 }
                 match item {
-                    Message::BlockMeta(_) => self.blockmeta_batch = Some(item),
+                    Message::BlockMeta(_) | Message::BlockFooter(_) => self.seal_gated = Some(item),
                     _ => self.message_batch.push(item),
                 }
                 Ok(())
@@ -1334,12 +1338,12 @@ impl GrpcService {
 
             fn ready(&self) -> bool {
                 self.message_batch.len() < self.message_batch.capacity()
-                    && self.blockmeta_batch.is_none()
+                    && self.seal_gated.is_none()
             }
         }
         let mut buffer = PartitionedBuffer {
             message_batch: Vec::with_capacity(MESSAGE_BATCH_SIZE),
-            blockmeta_batch: None,
+            seal_gated: None,
         };
         loop {
             let batch_size_maybe = messages_rx.next_batch(&mut buffer).await;
@@ -1361,11 +1365,11 @@ impl GrpcService {
                 }
             }
 
-            if let Some(blockmeta_message) = buffer.blockmeta_batch.take() {
+            if let Some(message) = buffer.seal_gated.take() {
                 metrics::message_queue_size_dec();
 
                 if block_reconstruction_tx
-                    .send(BlockReconstructionMessage::Single(blockmeta_message))
+                    .send(BlockReconstructionMessage::Single(message))
                     .is_ok()
                 {
                     metrics::block_reconstruction_queue_size_inc();
@@ -1440,9 +1444,13 @@ impl GrpcService {
                             broadcast.send(commitment_level, frozen_block.messages());
                         }
 
-                        let block_meta = Message::BlockMeta(frozen_block.get_block_meta());
-                        let msg_block = Message::Block(frozen_block.get_message_block());
-                        broadcast.send(commitment_level, Arc::new(vec![msg_block, block_meta]));
+                        let mut block_messages = Vec::with_capacity(3);
+                        block_messages.push(Message::Block(frozen_block.get_message_block()));
+                        if let Some(block_footer) = frozen_block.get_block_footer() {
+                            block_messages.push(Message::BlockFooter(block_footer));
+                        }
+                        block_messages.push(Message::BlockMeta(frozen_block.get_block_meta()));
+                        broadcast.send(commitment_level, Arc::new(block_messages));
 
                         let slot_message = Message::Slot(Arc::new(MessageSlot {
                             slot: slot_update.slot,
@@ -1482,8 +1490,8 @@ impl GrpcService {
                         CommitmentLevel::Finalized => solana_commitment_config::CommitmentLevel::Finalized,
                     };
 
-                    // Elaboration on 5 * replay_stored_slots: Each slot can have up to 5 messages (1 for messages, 1 for block meta, 3 for slot status). So we allocate enough space for the worst case scenario.
-                    let mut replayed_messages = Vec::with_capacity(replay_stored_slots as usize + (5 * replay_stored_slots as usize));
+                    // Each slot has up to 7 entries: data batch, block, footer, block meta and 3 slot statuses.
+                    let mut replayed_messages = Vec::with_capacity(7 * replay_stored_slots as usize);
                     let replayed_slot_iter = block_machine.replay_from_slot(replay_slot, min_solana_commitment);
 
                     // We need only an estimated timestamp for the replayed slot messages, so we can use the same timestamp for all of them.
@@ -1497,10 +1505,15 @@ impl GrpcService {
                         // live broadcast path so `blocks` subscribers can resume via `from_slot`
                         replayed_messages.push(ReplayResponseMessageType::Single(Message::Block(replayed_slot.frozen_block.get_message_block())));
 
-                        // 3rd Put block summary
+                        // 3rd Put block footer, which must come before the block summary
+                        if let Some(block_footer) = replayed_slot.frozen_block.get_block_footer() {
+                            replayed_messages.push(ReplayResponseMessageType::Single(Message::BlockFooter(block_footer)));
+                        }
+
+                        // 4th Put block summary
                         replayed_messages.push(ReplayResponseMessageType::Single(Message::BlockMeta(replayed_slot.frozen_block.get_block_meta())));
 
-                        // 4th Put slot status
+                        // 5th Put slot status
                         for slot_update in replayed_slot.slot_status_messages.iter() {
                             let slot_message = Message::Slot(Arc::new(MessageSlot {
                                 slot: slot_update.slot,

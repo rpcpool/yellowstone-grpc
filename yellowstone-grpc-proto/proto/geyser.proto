@@ -295,12 +295,49 @@ message SubscribeUpdateBlockFooter {
   bytes bank_hash = 3;
   uint64 block_producer_time_nanos = 4;
   bytes block_user_agent = 5;
+  reserved 6, 7, 8;
 
-  // The Alpenglow certificates, wincode-serialized verbatim from the footer.
-  // Decode them with the agave solana_entry::block_component types.
-  optional bytes block_final_cert = 6;
-  optional bytes skip_reward_cert = 7;
-  optional bytes notar_reward_cert = 8;
+  // The Alpenglow certificates. Sent only when the filter sets include_certificates.
+  BlockFooterFinalCert block_final_cert = 9;
+  BlockFooterSkipRewardCert skip_reward_cert = 10;
+  BlockFooterNotarRewardCert notar_reward_cert = 11;
+}
+
+// Encoding of BlockFooterVotesAggregate.signature. Readers reject kinds they do not know.
+enum BlockFooterSignatureKind {
+  // 96 bytes.
+  COMPRESSED_BLS12_381_G2 = 0;
+}
+
+// An aggregate signature over one vote, and the validators that signed it.
+message BlockFooterVotesAggregate {
+  BlockFooterSignatureKind signature_kind = 1;
+  bytes signature = 2;
+  // Merkle root of the block's last data shred, not the PoH blockhash. Empty for votes on a slot.
+  bytes block_id = 3;
+  // solana-signer-store bitmap, verbatim: version byte, u16 LE bit count, payload. Bit i is the
+  // validator at rank i in the cert slot's epoch, ordered by stake descending then BLS pubkey.
+  bytes signer_bitmap = 4;
+}
+
+// Proves that the block is finalized. Slow finalization: final_aggregate signs a finalize vote on
+// the slot and notar_aggregate a notarize vote on the block. Fast: final_aggregate alone, on the block.
+message BlockFooterFinalCert {
+  uint64 slot = 1;
+  BlockFooterVotesAggregate final_aggregate = 2;
+  BlockFooterVotesAggregate notar_aggregate = 3;
+}
+
+// Records the validators that voted skip on the slot.
+message BlockFooterSkipRewardCert {
+  uint64 slot = 1;
+  BlockFooterVotesAggregate aggregate = 2;
+}
+
+// Records the validators that voted notarize on the slot's block.
+message BlockFooterNotarRewardCert {
+  uint64 slot = 1;
+  BlockFooterVotesAggregate aggregate = 2;
 }
 
 message SubscribeUpdateEntry {

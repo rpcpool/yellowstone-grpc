@@ -61,7 +61,7 @@ cargo run --bin client -- -e "https://api.rpcpool.com" \
 
 ### subscribe to block footer updates with certificates
 
-Certificates are omitted by default. Set `--block-footer-include-certificates true` to include available certificates as opaque wincode bytes.
+Certificates are omitted by default. Set `--block-footer-include-certificates true` to include available certificates. Each certificate prints its slot, block id and BLS aggregates, with bytes in base58.
 
 ```shell
 cargo run --bin client -- -e "https://api.rpcpool.com" \

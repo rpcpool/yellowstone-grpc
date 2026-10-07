@@ -5121,17 +5121,18 @@ mod filter_kind_coverage {
             yellowstone_grpc_proto::geyser::{subscribe_update::UpdateOneof, SubscribeUpdate},
         };
 
+        let (final_cert, skip_cert, notar_cert) = fixtures::block_footer_certificates();
         for certificates in [
-            [None, None, None],
-            [Some(vec![1; 96]), Some(Vec::new()), Some(vec![2; 48])],
+            (None, None, None),
+            (Some(final_cert), Some(skip_cert), Some(notar_cert)),
         ] {
             let mut source = fixtures::message_block_footer(42, 7);
             let footer = &mut Arc::make_mut(&mut source).block_footer;
-            [
+            (
                 footer.block_final_cert,
                 footer.skip_reward_cert,
                 footer.notar_reward_cert,
-            ] = certificates;
+            ) = certificates;
             let original = source.block_footer.clone();
 
             for settings in [
