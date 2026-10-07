@@ -1,5 +1,11 @@
 use {
-    crate::{billing::REPORT_INTERVAL, plugin::filter::limits::FilterLimits},
+    crate::{
+        billing::REPORT_INTERVAL,
+        plugin::filter::{
+            limits::FilterLimits,
+            message::{WeightScales, DEFAULT_ACCOUNT_DATA_UNIT, DEFAULT_TRANSACTION_DATA_UNIT},
+        },
+    },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPluginError, Result as PluginResult,
     },
@@ -316,6 +322,16 @@ pub struct ConfigGrpc {
     pub finalized_broadcast_capacity: Option<usize>,
     #[serde(default = "ConfigGrpc::default_contact_info_channel_capacity")]
     pub contact_info_channel_capacity: usize,
+    /// Per-queue capacities and update weights. Unset fields fall back to the settings above.
+    #[serde(default)]
+    pub capacities: ConfigGrpcCapacities,
+    /// How long a `from_slot` replay waits for the client to free queue room before it is
+    /// disconnected. `null` waits forever.
+    #[serde(
+        default = "ConfigGrpc::default_client_unresponsive_timeout",
+        with = "humantime_serde"
+    )]
+    pub client_unresponsive_timeout: Option<Duration>,
     /// Concurrency limit for unary requests
     #[serde(
         default = "ConfigGrpc::unary_concurrency_limit_default",
@@ -639,6 +655,119 @@ impl ConfigGrpc {
     const fn default_contact_info_channel_capacity() -> usize {
         100_000
     }
+
+    const fn default_client_unresponsive_timeout() -> Option<Duration> {
+        Some(Duration::from_secs(60))
+    }
+
+    /// Resolves every queue capacity and update weight, applying the fallbacks.
+    pub fn resolved_capacities(&self) -> GrpcCapacities {
+        let capacities = &self.capacities;
+        let channel_capacity = self.channel_capacity;
+        let scale = |value: Option<u32>| value.unwrap_or(1).max(1);
+        GrpcCapacities {
+            geyser_subscriber_weight: capacities
+                .geyser_subscriber_weight_capacity
+                .unwrap_or(channel_capacity),
+            deshred_subscriber: capacities
+                .deshred_channel_capacity
+                .unwrap_or(channel_capacity),
+            contact_info_subscriber: capacities
+                .contact_info_channel_capacity
+                .unwrap_or(channel_capacity),
+            processed_broadcast: capacities
+                .internal_processed_channel_capacity
+                .or(self.processed_broadcast_capacity)
+                .unwrap_or(channel_capacity),
+            confirmed_broadcast: capacities
+                .internal_confirmed_channel_capacity
+                .or(self.confirmed_broadcast_capacity)
+                .unwrap_or(channel_capacity),
+            finalized_broadcast: capacities
+                .internal_finalized_channel_capacity
+                .or(self.finalized_broadcast_capacity)
+                .unwrap_or(channel_capacity),
+            weight_scales: WeightScales {
+                account: scale(capacities.weight_scale_account),
+                transaction: scale(capacities.weight_scale_transaction),
+                entry: scale(capacities.weight_scale_entry),
+                slot: scale(capacities.weight_scale_slot),
+                block_footer: scale(capacities.weight_scale_block_footer),
+                block: scale(capacities.weight_scale_block),
+                account_data_unit: capacities
+                    .weight_account_data_unit
+                    .unwrap_or(DEFAULT_ACCOUNT_DATA_UNIT),
+                transaction_data_unit: capacities
+                    .weight_transaction_data_unit
+                    .unwrap_or(DEFAULT_TRANSACTION_DATA_UNIT),
+            },
+        }
+    }
+}
+
+/// Per-queue capacities and update weights. Every field is optional.
+#[derive(Debug, Default, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigGrpcCapacities {
+    /// Weight budget of a Subscribe client queue. Defaults to `channel_capacity`.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub geyser_subscriber_weight_capacity: Option<usize>,
+    /// Capacity of a SubscribeDeshred client queue, in updates. Defaults to `channel_capacity`.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub deshred_channel_capacity: Option<usize>,
+    /// Capacity of a contact info (gossip) client queue, in updates. Defaults to
+    /// `channel_capacity`. The shared gossip ring stays `grpc.contact_info_channel_capacity`.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub contact_info_channel_capacity: Option<usize>,
+    /// Capacity of the processed broadcast ring. Defaults to `processed_broadcast_capacity`,
+    /// then `channel_capacity`.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub internal_processed_channel_capacity: Option<usize>,
+    /// Capacity of the confirmed broadcast ring. Defaults to `confirmed_broadcast_capacity`,
+    /// then `channel_capacity`.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub internal_confirmed_channel_capacity: Option<usize>,
+    /// Capacity of the finalized broadcast ring. Defaults to `finalized_broadcast_capacity`,
+    /// then `channel_capacity`.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub internal_finalized_channel_capacity: Option<usize>,
+    /// Weight of an account update in a Subscribe queue. Defaults to `1`.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub weight_scale_account: Option<u32>,
+    /// Weight of a transaction update in a Subscribe queue. Defaults to `1`.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub weight_scale_transaction: Option<u32>,
+    /// Weight of an entry update in a Subscribe queue. Defaults to `1`.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub weight_scale_entry: Option<u32>,
+    /// Weight of a slot update in a Subscribe queue. Defaults to `1`.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub weight_scale_slot: Option<u32>,
+    /// Weight of a block footer update in a Subscribe queue. Defaults to `1`.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub weight_scale_block_footer: Option<u32>,
+    /// Multiplier on a block's weight of `1` plus its transactions and accounts. Defaults to `1`.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub weight_scale_block: Option<u32>,
+    /// Bytes of account data that add one weight unit to an account, in account updates and in
+    /// blocks. Defaults to `4096`; `0` counts every account as one unit.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub weight_account_data_unit: Option<usize>,
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub weight_transaction_data_unit: Option<usize>,
+}
+
+/// Queue capacities and update weights after [`ConfigGrpc::resolved_capacities`] applies the
+/// fallbacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GrpcCapacities {
+    pub geyser_subscriber_weight: usize,
+    pub deshred_subscriber: usize,
+    pub contact_info_subscriber: usize,
+    pub processed_broadcast: usize,
+    pub confirmed_broadcast: usize,
+    pub finalized_broadcast: usize,
+    pub weight_scales: WeightScales,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -745,9 +874,113 @@ where
 #[cfg(test)]
 mod tests {
     use {
-        crate::config::{GrpcAddress, GrpcAddresses},
-        std::path::Path,
+        crate::{
+            config::{ConfigGrpc, GrpcAddress, GrpcAddresses, GrpcCapacities},
+            plugin::filter::message::WeightScales,
+        },
+        std::{path::Path, time::Duration},
     };
+
+    #[test]
+    fn capacities_fall_back_to_channel_capacity() {
+        let config: ConfigGrpc = serde_json::from_str(r#"{"channel_capacity": "1_000_000"}"#)
+            .expect("valid grpc config");
+        assert_eq!(
+            config.resolved_capacities(),
+            GrpcCapacities {
+                geyser_subscriber_weight: 1_000_000,
+                deshred_subscriber: 1_000_000,
+                contact_info_subscriber: 1_000_000,
+                processed_broadcast: 1_000_000,
+                confirmed_broadcast: 1_000_000,
+                finalized_broadcast: 1_000_000,
+                weight_scales: WeightScales::default(),
+            }
+        );
+        assert_eq!(
+            config.client_unresponsive_timeout,
+            Some(Duration::from_secs(60))
+        );
+    }
+
+    #[test]
+    fn capacities_override_channel_capacity_and_older_ring_settings() {
+        let config: ConfigGrpc = serde_json::from_str(
+            r#"{
+                "channel_capacity": 1000000,
+                "processed_broadcast_capacity": 2048,
+                "confirmed_broadcast_capacity": 4096,
+                "client_unresponsive_timeout": "30s",
+                "capacities": {
+                    "geyser_subscriber_weight_capacity": "4_000_000",
+                    "deshred_channel_capacity": 50000,
+                    "internal_confirmed_channel_capacity": 512,
+                    "weight_scale_account": 4,
+                    "weight_scale_transaction": "4",
+                    "weight_scale_block": 0,
+                    "weight_account_data_unit": "8_192",
+                    "weight_transaction_data_unit": 2048
+                }
+            }"#,
+        )
+        .expect("valid grpc config");
+        assert_eq!(
+            config.resolved_capacities(),
+            GrpcCapacities {
+                geyser_subscriber_weight: 4_000_000,
+                deshred_subscriber: 50_000,
+                contact_info_subscriber: 1_000_000,
+                processed_broadcast: 2048,
+                confirmed_broadcast: 512,
+                finalized_broadcast: 1_000_000,
+                weight_scales: WeightScales {
+                    account: 4,
+                    transaction: 4,
+                    account_data_unit: 8192,
+                    transaction_data_unit: 2048,
+                    ..WeightScales::default()
+                },
+            }
+        );
+        assert_eq!(
+            config.client_unresponsive_timeout,
+            Some(Duration::from_secs(30))
+        );
+    }
+
+    #[test]
+    fn data_units_default_to_4096_and_zero_turns_them_off() {
+        let scales = |json: &str| {
+            serde_json::from_str::<ConfigGrpc>(json)
+                .expect("valid grpc config")
+                .resolved_capacities()
+                .weight_scales
+        };
+        let defaults = scales(r#"{}"#);
+        assert_eq!(defaults.account_data_unit, 4096);
+        assert_eq!(defaults.transaction_data_unit, 4096);
+        let off = scales(
+            r#"{"capacities": {"weight_account_data_unit": 0, "weight_transaction_data_unit": 0}}"#,
+        );
+        assert_eq!(off.account_data_unit, 0);
+        assert_eq!(off.transaction_data_unit, 0);
+    }
+
+    #[test]
+    fn capacities_reject_unknown_fields() {
+        let error = serde_json::from_str::<ConfigGrpc>(
+            r#"{"capacities": {"geyser_subscriber_channel_capacity": 1}}"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown field"), "{error}");
+    }
+
+    #[test]
+    fn client_unresponsive_timeout_null_disables_it() {
+        let config: ConfigGrpc = serde_json::from_str(r#"{"client_unresponsive_timeout": null}"#)
+            .expect("valid grpc config");
+        assert_eq!(config.client_unresponsive_timeout, None);
+    }
 
     #[test]
     fn test_deser_config_tokio() {
