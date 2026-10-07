@@ -1,9 +1,12 @@
 use {
     crate::{
         metrics,
-        plugin::message::{
-            Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry, MessageSlot,
-            MessageTransaction, SlotStatus,
+        plugin::{
+            filter::encoder::TransactionEncoder,
+            message::{
+                Message, MessageAccount, MessageBlock, MessageBlockMeta, MessageEntry, MessageSlot,
+                MessageTransaction, SlotStatus,
+            },
         },
     },
     foldhash::{HashMap as FoldHashMap, HashMapExt},
@@ -128,6 +131,9 @@ impl BankBuffer {
                 self.accounts.push(Arc::clone(message_account));
             }
             Message::Transaction(message_transaction) => {
+                if message_transaction.transaction.get_pre_encoded().is_none() {
+                    TransactionEncoder::pre_encode(&message_transaction.transaction);
+                }
                 self.transactions.push(Arc::clone(message_transaction));
             }
             Message::Entry(message_entry) => {
@@ -954,14 +960,18 @@ impl BlockMachineStorage {
 mod tests {
     use {
         super::*,
-        crate::plugin::message::{
-            MessageAccount, MessageAccountInfo, MessageEntry, MessageEntryUpdateParent,
-            MessageSlot, SlotStatus,
+        crate::plugin::{
+            filter::fixtures,
+            message::{
+                MessageAccount, MessageAccountInfo, MessageEntry, MessageEntryUpdateParent,
+                MessageSlot, SlotStatus,
+            },
         },
         bytes::Bytes,
         prost_types::Timestamp,
         solana_hash::Hash,
         solana_pubkey::Pubkey,
+        solana_signature::Signature,
         std::{sync::OnceLock, time::SystemTime},
         yellowstone_grpc_proto::geyser::{
             SubscribeUpdateBlockMeta, SubscribeUpdateEntryUpdateParent,
@@ -1200,6 +1210,31 @@ mod tests {
             1 + MUST_HAVE_SYSVAR_ACCOUNTS.len(),
             "the bank-scoped account plus the sysvars, and nothing else (not the startup one)"
         );
+    }
+
+    #[test]
+    fn collecting_a_block_pre_encodes_its_transactions() {
+        let mut storage = BlockMachineStorage::new(10);
+        let bank_id = 7;
+        let transaction = fixtures::message_transaction(
+            Signature::default(),
+            vec![Pubkey::default()],
+            false,
+            Default::default(),
+        );
+        storage.add(Message::Transaction(Arc::new(MessageTransaction {
+            slot: 1,
+            bank_id,
+            ..MessageTransaction::clone(&transaction)
+        })));
+        drive_bank_to_processed(&mut storage, 1, bank_id, None);
+
+        let (_, frozen) = storage.pop_ready_block().expect("block should be ready");
+        let block = frozen.get_message_block();
+        assert!(block.transactions[0]
+            .transaction
+            .get_pre_encoded()
+            .is_some());
     }
 
     #[test]

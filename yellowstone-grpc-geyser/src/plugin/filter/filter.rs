@@ -2210,6 +2210,7 @@ impl FilterBlocks {
     ) -> FilteredUpdates {
         let mut updates = FilteredUpdates::new();
         for (filter, inner) in self.filters.iter() {
+            let mut transactions_data_len = 0;
             #[allow(clippy::unnecessary_filter_map)]
             let transactions = if matches!(inner.include_transactions, None | Some(true)) {
                 message
@@ -2217,6 +2218,8 @@ impl FilterBlocks {
                     .iter()
                     .filter_map(|tx| {
                         if inner.matches_any_in_set(&tx.transaction.account_keys) {
+                            transactions_data_len +=
+                                tx.transaction.get_pre_encoded().map_or(0, Vec::len);
                             Some(Arc::clone(tx))
                         } else {
                             None
@@ -2227,6 +2230,7 @@ impl FilterBlocks {
                 vec![]
             };
 
+            let mut accounts_data_len = 0;
             #[allow(clippy::unnecessary_filter_map)]
             let accounts = if inner.include_accounts == Some(true) {
                 message
@@ -2234,6 +2238,7 @@ impl FilterBlocks {
                     .iter()
                     .filter_map(|account| {
                         if inner.matches_account(&account.account.pubkey) {
+                            accounts_data_len += account.account.data.len();
                             Some(Arc::clone(account))
                         } else {
                             None
@@ -2261,6 +2266,8 @@ impl FilterBlocks {
                     accounts_data_slice: accounts_data_slice.clone(),
                     accounts,
                     entries,
+                    accounts_data_len,
+                    transactions_data_len,
                 })),
                 message.created_at,
             ));

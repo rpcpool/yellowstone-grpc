@@ -3,7 +3,7 @@ use {
         billing::REPORT_INTERVAL,
         plugin::filter::{
             limits::FilterLimits,
-            message::{WeightScales, DEFAULT_ACCOUNT_DATA_UNIT},
+            message::{WeightScales, DEFAULT_ACCOUNT_DATA_UNIT, DEFAULT_TRANSACTION_DATA_UNIT},
         },
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
@@ -697,6 +697,9 @@ impl ConfigGrpc {
                 account_data_unit: capacities
                     .weight_account_data_unit
                     .unwrap_or(DEFAULT_ACCOUNT_DATA_UNIT),
+                transaction_data_unit: capacities
+                    .weight_transaction_data_unit
+                    .unwrap_or(DEFAULT_TRANSACTION_DATA_UNIT),
             },
         }
     }
@@ -750,6 +753,8 @@ pub struct ConfigGrpcCapacities {
     /// blocks. Defaults to `4096`; `0` counts every account as one unit.
     #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
     pub weight_account_data_unit: Option<usize>,
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub weight_transaction_data_unit: Option<usize>,
 }
 
 /// Queue capacities and update weights after [`ConfigGrpc::resolved_capacities`] applies the
@@ -913,7 +918,8 @@ mod tests {
                     "weight_scale_account": 4,
                     "weight_scale_transaction": "4",
                     "weight_scale_block": 0,
-                    "weight_account_data_unit": "8_192"
+                    "weight_account_data_unit": "8_192",
+                    "weight_transaction_data_unit": 2048
                 }
             }"#,
         )
@@ -931,6 +937,7 @@ mod tests {
                     account: 4,
                     transaction: 4,
                     account_data_unit: 8192,
+                    transaction_data_unit: 2048,
                     ..WeightScales::default()
                 },
             }
@@ -942,19 +949,21 @@ mod tests {
     }
 
     #[test]
-    fn account_data_unit_defaults_to_4096_and_zero_turns_it_off() {
-        let unit = |json: &str| {
+    fn data_units_default_to_4096_and_zero_turns_them_off() {
+        let scales = |json: &str| {
             serde_json::from_str::<ConfigGrpc>(json)
                 .expect("valid grpc config")
                 .resolved_capacities()
                 .weight_scales
-                .account_data_unit
         };
-        assert_eq!(unit(r#"{}"#), 4096);
-        assert_eq!(
-            unit(r#"{"capacities": {"weight_account_data_unit": 0}}"#),
-            0
+        let defaults = scales(r#"{}"#);
+        assert_eq!(defaults.account_data_unit, 4096);
+        assert_eq!(defaults.transaction_data_unit, 4096);
+        let off = scales(
+            r#"{"capacities": {"weight_account_data_unit": 0, "weight_transaction_data_unit": 0}}"#,
         );
+        assert_eq!(off.account_data_unit, 0);
+        assert_eq!(off.transaction_data_unit, 0);
     }
 
     #[test]

@@ -75,6 +75,8 @@ macro_rules! prost_repeated_encoded_len_map {
 /// Bytes of account data that add one weight unit to an account by default.
 pub const DEFAULT_ACCOUNT_DATA_UNIT: usize = 4096;
 
+pub const DEFAULT_TRANSACTION_DATA_UNIT: usize = 4096;
+
 /// Weight of each update kind in a Subscribe queue. Scales below `1` count as `1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WeightScales {
@@ -88,6 +90,7 @@ pub struct WeightScales {
     pub block: u32,
     /// An account counts `1` unit plus one per this many bytes of data. `0` counts it as `1`.
     pub account_data_unit: usize,
+    pub transaction_data_unit: usize,
 }
 
 impl Default for WeightScales {
@@ -100,8 +103,18 @@ impl Default for WeightScales {
             block_footer: 1,
             block: 1,
             account_data_unit: DEFAULT_ACCOUNT_DATA_UNIT,
+            transaction_data_unit: DEFAULT_TRANSACTION_DATA_UNIT,
         }
     }
+}
+
+fn data_units(count: usize, len: usize, unit: usize) -> u32 {
+    let units = if count == 0 {
+        0
+    } else {
+        len.checked_div(unit).map_or(count, |units| units.max(1))
+    };
+    u32::try_from(units).unwrap_or(u32::MAX)
 }
 
 impl WeightScales {
@@ -134,20 +147,33 @@ impl WeightScales {
                     .max(1)
                     .saturating_mul(self.account_units(&update.account));
             }
-            FilteredUpdateOneof::Transaction(_) => self.transaction,
+            FilteredUpdateOneof::Transaction(update) => {
+                let units = update
+                    .transaction
+                    .transaction
+                    .get_pre_encoded()
+                    .map_or(1, |encoded| {
+                        data_units(1, encoded.len(), self.transaction_data_unit)
+                    });
+                return self.transaction.max(1).saturating_mul(units);
+            }
             FilteredUpdateOneof::Entry(_) | FilteredUpdateOneof::EntryUpdateParent(_) => self.entry,
             FilteredUpdateOneof::Slot(_) => self.slot,
             FilteredUpdateOneof::BlockFooter(_) => self.block_footer,
             FilteredUpdateOneof::Block(block) => {
-                let accounts = block
-                    .accounts
-                    .iter()
-                    .map(|account| self.account_units(account))
-                    .fold(0, u32::saturating_add);
-                return u32::try_from(block.transactions.len())
-                    .unwrap_or(u32::MAX)
-                    .saturating_add(1)
+                let transactions = self.transaction.max(1).saturating_mul(data_units(
+                    block.transactions.len(),
+                    block.transactions_data_len,
+                    self.transaction_data_unit,
+                ));
+                let accounts = self.account.max(1).saturating_mul(data_units(
+                    block.accounts.len(),
+                    block.accounts_data_len,
+                    self.account_data_unit,
+                ));
+                return transactions
                     .saturating_add(accounts)
+                    .saturating_add(1)
                     .saturating_mul(self.block.max(1));
             }
             FilteredUpdateOneof::TransactionStatus(_)
@@ -1139,6 +1165,8 @@ pub struct FilteredUpdateBlock {
     pub accounts: Vec<Arc<MessageAccount>>,
     pub accounts_data_slice: FilterAccountsDataSlice,
     pub entries: Vec<Arc<MessageEntry>>,
+    pub accounts_data_len: usize,
+    pub transactions_data_len: usize,
 }
 
 impl prost::Message for FilteredUpdateBlock {
@@ -1638,6 +1666,8 @@ pub mod tests {
                                 accounts: accounts.clone(),
                                 accounts_data_slice: data_slice.clone(),
                                 entries: entries.clone(),
+                                accounts_data_len: 0,
+                                transactions_data_len: 0,
                             },
                             FilteredUpdateBlock {
                                 meta: Arc::clone(&block_meta2),
@@ -1646,6 +1676,8 @@ pub mod tests {
                                 accounts: accounts.clone(),
                                 accounts_data_slice: data_slice,
                                 entries: entries.clone(),
+                                accounts_data_len: 0,
+                                transactions_data_len: 0,
                             },
                         ]
                     })

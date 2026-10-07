@@ -2604,8 +2604,8 @@ mod tests {
         crate::{
             plugin::{
                 filter::{
-                    fixtures, limits::FilterLimits, name::FilterNames, Filter,
-                    FilterAccountsDataSlice,
+                    encoder::TransactionEncoder, fixtures, limits::FilterLimits, name::FilterNames,
+                    Filter, FilterAccountsDataSlice,
                 },
                 message::MessageTransaction,
             },
@@ -2620,20 +2620,21 @@ mod tests {
         },
     };
 
-    fn create_filter_with_blocks(include_accounts: bool) -> Filter {
+    fn create_filter_for_blocks(blocks: SubscribeRequestFilterBlocks) -> Filter {
         let config = SubscribeRequest {
-            blocks: HashMap::from([(
-                "test".into(),
-                SubscribeRequestFilterBlocks {
-                    include_transactions: Some(true),
-                    include_accounts: Some(include_accounts),
-                    ..Default::default()
-                },
-            )]),
+            blocks: HashMap::from([("test".into(), blocks)]),
             ..Default::default()
         };
         let mut names = FilterNames::new(64, 1024, Duration::from_secs(1));
         Filter::new(&config, &FilterLimits::default(), &mut names).unwrap()
+    }
+
+    fn create_filter_with_blocks(include_accounts: bool) -> Filter {
+        create_filter_for_blocks(SubscribeRequestFilterBlocks {
+            include_transactions: Some(true),
+            include_accounts: Some(include_accounts),
+            ..Default::default()
+        })
     }
 
     fn test_transaction() -> Arc<MessageTransaction> {
@@ -2710,8 +2711,15 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        assert_eq!(scales.weight(&Ok(block_update.clone())), (1 + 3 + 2) * 2);
-        assert_eq!(default_scales.weight(&Ok(block_update)), 1 + 3 + 2);
+        assert_eq!(scales.weight(&Ok(block_update.clone())), (1 + 5 + 4) * 2);
+        assert_eq!(default_scales.weight(&Ok(block_update)), 1 + 1 + 1);
+
+        let block_update = create_filter_with_blocks(false)
+            .get_updates(&block, None)
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(scales.weight(&Ok(block_update)), (1 + 5) * 2);
     }
 
     #[test]
@@ -2759,7 +2767,7 @@ mod tests {
         let block = Message::Block(fixtures::message_block(
             1,
             vec![test_transaction(); 2],
-            vec![account(100), account(8192)],
+            vec![account(100), account(20_000)],
             Vec::new(),
         ));
         let block_update = create_filter_with_blocks(true)
@@ -2767,8 +2775,81 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        assert_eq!(scales.weight(&Ok(block_update.clone())), 1 + 2 + 1 + 3);
-        assert_eq!(count_only.weight(&Ok(block_update)), 1 + 2 + 2);
+        assert_eq!(scales.weight(&Ok(block_update.clone())), 1 + 1 + 4 * 4);
+        assert_eq!(count_only.weight(&Ok(block_update)), 1 + 1 + 4 * 2);
+
+        let big = Pubkey::new_unique();
+        let block = Message::Block(fixtures::message_block(
+            1,
+            vec![test_transaction(); 2],
+            vec![
+                account(100),
+                fixtures::message_account(fixtures::account_info(
+                    big,
+                    Pubkey::default(),
+                    vec![0; 20_000],
+                    1000,
+                    None,
+                )),
+            ],
+            Vec::new(),
+        ));
+        let block_update = create_filter_for_blocks(SubscribeRequestFilterBlocks {
+            account_include: vec![big.to_string()],
+            include_transactions: Some(true),
+            include_accounts: Some(true),
+            ..Default::default()
+        })
+        .get_updates(&block, None)
+        .into_iter()
+        .next()
+        .unwrap();
+        assert_eq!(scales.weight(&Ok(block_update)), 1 + 4 * 4);
+    }
+
+    #[test]
+    fn transaction_data_adds_weight() {
+        let scales = WeightScales {
+            transaction: 4,
+            transaction_data_unit: 64,
+            ..WeightScales::default()
+        };
+        let count_only = WeightScales {
+            transaction_data_unit: 0,
+            ..scales
+        };
+        let units = |len: usize| u32::try_from((len / 64).max(1)).unwrap();
+        let transaction = test_transaction();
+        let transaction_update =
+            || update(FilteredUpdateOneof::transaction(Arc::clone(&transaction)));
+
+        assert_eq!(scales.weight(&transaction_update()), 4);
+
+        TransactionEncoder::pre_encode(&transaction.transaction);
+        let len = transaction
+            .transaction
+            .get_pre_encoded()
+            .map_or(0, Vec::len);
+        assert!(units(len) > 1, "the test transaction spans several units");
+        assert_eq!(scales.weight(&transaction_update()), 4 * units(len));
+        assert_eq!(count_only.weight(&transaction_update()), 4);
+
+        let block = Message::Block(fixtures::message_block(
+            1,
+            vec![Arc::clone(&transaction); 10],
+            Vec::new(),
+            Vec::new(),
+        ));
+        let block_update = create_filter_with_blocks(false)
+            .get_updates(&block, None)
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(
+            scales.weight(&Ok(block_update.clone())),
+            1 + 4 * units(10 * len)
+        );
+        assert_eq!(count_only.weight(&Ok(block_update)), 1 + 4 * 10);
     }
 
     #[tokio::test]
@@ -2830,7 +2911,11 @@ mod tests {
     /// Starts a client that asks for a replay of 20 blocks weighing 10 each into a queue of 50.
     fn spawn_replaying_client(timeout: Duration) -> (ClientHandles, tokio::task::JoinHandle<()>) {
         let (client_tx, client_rx) = mpsc::unbounded_channel();
-        let (stream_tx, stream_rx) = load_aware_channel(50, WeightScales::default());
+        let scales = WeightScales {
+            transaction_data_unit: 0,
+            ..WeightScales::default()
+        };
+        let (stream_tx, stream_rx) = load_aware_channel(50, scales);
         let (replay_tx, replay_rx) = mpsc::channel(1);
         tokio::spawn(answer_replay(replay_rx, 20, 9));
         let session = ClientSession::new(
