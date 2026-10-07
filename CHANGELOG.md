@@ -10,6 +10,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-10-07
+
+- yellowstone-grpc-geyser 16.1.1
+
+### Features
+- plugin: tracking of data load for clients, per message weights, configurable scales and weights per type of message
+
+## 2026-09-29
+
 - yellowstone-grpc-proto 14.0.1
 - yellowstone-grpc-geyser 16.1.0
 - yellowstone-grpc-client 15.0.0
