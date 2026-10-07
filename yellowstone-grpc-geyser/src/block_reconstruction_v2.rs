@@ -965,6 +965,21 @@ impl BlockMachineStorage {
         }
     }
 
+    /// What every bank from `slot` on that has not sealed yet has received so far, in slot
+    /// order. These banks are not in [`Self::replay_from_slot`] yet.
+    pub fn unsealed_from_slot(&self, slot: Slot) -> Vec<Message> {
+        let mut banks: Vec<&BankBuffer> = self
+            .banks
+            .values()
+            .filter(|bank| bank.slot >= slot)
+            .collect();
+        banks.sort_unstable_by_key(|bank| (bank.slot, bank.bank_id));
+        banks
+            .into_iter()
+            .flat_map(|bank| bank.original_messages.iter().cloned())
+            .collect()
+    }
+
     pub const fn min_replayable_slot(&self) -> Option<Slot> {
         self.min_slot
     }
