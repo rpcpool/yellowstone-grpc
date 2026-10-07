@@ -29,7 +29,7 @@ use {
 // there's no equivalent failure mode -- and if a bank genuinely never sees one of these for
 // some other reason, the blast radius is just that one bank never sealing (eventually swept
 // by `sweep_stale_slots`), not every slot in the pipeline.
-const MUST_HAVE_SYSVAR_ACCOUNTS: [Pubkey; 4] = [
+pub(crate) const MUST_HAVE_SYSVAR_ACCOUNTS: [Pubkey; 4] = [
     Pubkey::from_str_const("SysvarC1ock11111111111111111111111111111111"),
     Pubkey::from_str_const("SysvarS1otHashes111111111111111111111111111"),
     Pubkey::from_str_const("SysvarS1otHistory11111111111111111111111111"),
@@ -963,6 +963,21 @@ impl BlockMachineStorage {
             min_commitment,
             current: [].iter(),
         }
+    }
+
+    /// What every bank from `slot` on that has not sealed yet has received so far, in slot
+    /// order. These banks are not in [`Self::replay_from_slot`] yet.
+    pub fn unsealed_from_slot(&self, slot: Slot) -> Vec<Message> {
+        let mut banks: Vec<&BankBuffer> = self
+            .banks
+            .values()
+            .filter(|bank| bank.slot >= slot)
+            .collect();
+        banks.sort_unstable_by_key(|bank| (bank.slot, bank.bank_id));
+        banks
+            .into_iter()
+            .flat_map(|bank| bank.original_messages.iter().cloned())
+            .collect()
     }
 
     pub const fn min_replayable_slot(&self) -> Option<Slot> {

@@ -26,6 +26,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 - plugin: added block footers to confirmed and finalized subscriptions and `from_slot` replay.
 
+### Fixes
+
+- plugin: a `from_slot` replay at processed delivers what was broadcast before the client subscribed: the transactions of a bank still in progress, and of banks block reconstruction had not taken in yet. A replay with nothing to return answers with an empty batch instead of ending the subscription.
+
 ## 2026-09-25
 
 - yellowstone-grpc-proto 14.0.0
