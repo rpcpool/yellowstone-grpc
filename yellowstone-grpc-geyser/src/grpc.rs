@@ -3030,4 +3030,6 @@ mod tests {
             let _session = ClientSession::new(0, None, "".into(), CancellationToken::new(), None);
         }
     }
+
+    mod processed_replay_loses_transactions;
 }

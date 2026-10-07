@@ -29,7 +29,7 @@ use {
 // there's no equivalent failure mode -- and if a bank genuinely never sees one of these for
 // some other reason, the blast radius is just that one bank never sealing (eventually swept
 // by `sweep_stale_slots`), not every slot in the pipeline.
-const MUST_HAVE_SYSVAR_ACCOUNTS: [Pubkey; 4] = [
+pub(crate) const MUST_HAVE_SYSVAR_ACCOUNTS: [Pubkey; 4] = [
     Pubkey::from_str_const("SysvarC1ock11111111111111111111111111111111"),
     Pubkey::from_str_const("SysvarS1otHashes111111111111111111111111111"),
     Pubkey::from_str_const("SysvarS1otHistory11111111111111111111111111"),
