@@ -620,9 +620,8 @@ pub fn set_grpc_concurrent_subscribe_per_subscriber_id<S: AsRef<str>>(subscriber
 }
 
 pub fn remove_grpc_concurrent_subscribe_per_subscriber_id<S: AsRef<str>>(subscriber_id: S) {
-    GRPC_CONCURRENT_SUBSCRIBE_PER_SUBSCRIBER_ID
-        .remove_label_values(&[subscriber_id.as_ref()])
-        .expect("remove_label_values");
+    let _ = GRPC_CONCURRENT_SUBSCRIBE_PER_SUBSCRIBER_ID.remove_label_values(&[subscriber_id.as_ref()]);
+    // note: will result in a double-free if more than one plugin was instantiated in a single OS process
 }
 
 /// Reset all metrics on plugin unload to prevent metric accumulation across plugin lifecycle
