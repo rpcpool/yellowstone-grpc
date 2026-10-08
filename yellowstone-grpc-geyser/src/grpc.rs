@@ -17,7 +17,9 @@ use {
         plugin::{
             filter::{
                 limits::FilterLimits,
-                message::{FilteredUpdate, FilteredUpdateDeshred, FilteredUpdateOneof},
+                message::{
+                    FilteredUpdate, FilteredUpdateDeshred, FilteredUpdateOneof, WeightScales,
+                },
                 name::FilterNames,
                 DeshredFilter, Filter,
             },
@@ -26,7 +28,10 @@ use {
         },
         ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
         stream::{tokio::BatchStreamUnboundedReceiver, BatchStream, BatchStreamExt, Buffer},
-        util::stream::{load_aware_channel, LoadAwareReceiver, LoadAwareSender},
+        util::stream::{
+            load_aware_channel, LoadAwareReceiver, LoadAwareSender, SendError, TrySendError,
+            UnitWeigher, Weigher,
+        },
         version::GrpcVersionInfo,
     },
     anyhow::Context as _,
@@ -318,6 +323,29 @@ pub enum BlockReconstructionMessage {
 }
 
 pub type BroadcastedMessage = Arc<Vec<Message>>;
+
+/// Weighs a Subscribe queue update. Errors weigh `1`.
+///
+/// Under [`WeightScales::default`] an account counts `1` plus one per 4 KiB of data, a block
+/// counts `1` plus its transactions and accounts, and other updates count `1`.
+impl Weigher for WeightScales {
+    type Item = TonicResult<FilteredUpdate>;
+
+    fn weight(&self, update: &Self::Item) -> u32 {
+        update
+            .as_ref()
+            .map_or(1, |update| self.update_weight(update))
+    }
+}
+
+/// Sender half of a Subscribe queue.
+type SubscribeSender = LoadAwareSender<TonicResult<FilteredUpdate>, WeightScales>;
+
+/// Sender half of a SubscribeDeshred queue, which bounds the number of queued updates.
+type DeshredSubscribeSender = LoadAwareSender<
+    TonicResult<FilteredUpdateDeshred>,
+    UnitWeigher<TonicResult<FilteredUpdateDeshred>>,
+>;
 
 #[derive(Debug, Clone)]
 pub struct SubscriberChannels {
@@ -671,7 +699,11 @@ impl interceptor::Interceptor for XTokenInterceptor {
 #[derive(Clone)]
 pub struct GrpcService {
     config_snapshot_client_channel_capacity: usize,
-    config_channel_capacity: usize,
+    geyser_subscriber_weight_capacity: usize,
+    deshred_subscriber_channel_capacity: usize,
+    contact_info_subscriber_channel_capacity: usize,
+    weight_scales: WeightScales,
+    client_unresponsive_timeout: Option<Duration>,
     config_filter_limits: Arc<FilterLimits>,
     subscription_tracker: SubscriptionTracker,
     blocks_meta: Option<Arc<BlockMetaStorage>>,
@@ -1018,16 +1050,11 @@ impl GrpcService {
             (Some(blocks_meta), Some(blocks_meta_tx))
         };
 
+        let capacities = config.resolved_capacities();
         let broadcast = SubscriberChannels::new(
-            config
-                .processed_broadcast_capacity
-                .unwrap_or(config.channel_capacity),
-            config
-                .confirmed_broadcast_capacity
-                .unwrap_or(config.channel_capacity),
-            config
-                .finalized_broadcast_capacity
-                .unwrap_or(config.channel_capacity),
+            capacities.processed_broadcast,
+            capacities.confirmed_broadcast,
+            capacities.finalized_broadcast,
         );
         // Deshred subscribers receive their own commitment-free stream.
         let (deshred_broadcast_tx, _) = broadcast::channel(config.channel_capacity);
@@ -1065,7 +1092,11 @@ impl GrpcService {
         let max_decoding_message_size = config.max_decoding_message_size;
         let mut service = GeyserServer::new(Self {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
-            config_channel_capacity: config.channel_capacity,
+            geyser_subscriber_weight_capacity: capacities.geyser_subscriber_weight,
+            deshred_subscriber_channel_capacity: capacities.deshred_subscriber,
+            contact_info_subscriber_channel_capacity: capacities.contact_info_subscriber,
+            weight_scales: capacities.weight_scales,
+            client_unresponsive_timeout: config.client_unresponsive_timeout,
             config_filter_limits: Arc::new(config.filter_limits),
             subscription_tracker: SubscriptionTracker::new(
                 config.subscription_limit,
@@ -1234,12 +1265,14 @@ impl GrpcService {
     ///    set of Account/Transaction/Entry messages for that slot) is sent at level C first.
     ///    This is omitted at Processed because those messages were already delivered individually
     ///    as they arrived.
-    /// 2. `Message::Block` (the precomputed block summary) is sent at level C.
+    /// 2. `Message::Block`, then the Alpenglow `Message::BlockFooter` if the bank has one, then
+    ///    `Message::BlockMeta` are sent at level C.
     /// 3. The synthetic Processed/Confirmed/Finalized slot status message is sent to all three
     ///    commitment levels.
     ///
-    /// This ordering guarantee — block content before `Message::Block` before slot status — must
-    /// be preserved so that subscribers always observe a complete block before the commitment signal.
+    /// This ordering guarantee — block content before `Message::Block` before the footer before
+    /// `Message::BlockMeta` before slot status — must be preserved so that subscribers always
+    /// observe a complete block before the commitment signal.
     ///
     /// # Account deduplication
     ///
@@ -1285,9 +1318,11 @@ impl GrpcService {
     {
         const MESSAGE_BATCH_SIZE: usize = 1024;
         // let mut message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
+        // BlockMeta and BlockFooter close the batch and go to block reconstruction only,
+        // which emits them once the block seals.
         struct PartitionedBuffer {
             message_batch: Vec<Message>,
-            blockmeta_batch: Option<Message>,
+            seal_gated: Option<Message>,
         }
         impl Buffer<Message> for PartitionedBuffer {
             fn accumulate(&mut self, item: Message) -> Result<(), Message> {
@@ -1295,7 +1330,7 @@ impl GrpcService {
                     return Err(item);
                 }
                 match item {
-                    Message::BlockMeta(_) => self.blockmeta_batch = Some(item),
+                    Message::BlockMeta(_) | Message::BlockFooter(_) => self.seal_gated = Some(item),
                     _ => self.message_batch.push(item),
                 }
                 Ok(())
@@ -1303,12 +1338,12 @@ impl GrpcService {
 
             fn ready(&self) -> bool {
                 self.message_batch.len() < self.message_batch.capacity()
-                    && self.blockmeta_batch.is_none()
+                    && self.seal_gated.is_none()
             }
         }
         let mut buffer = PartitionedBuffer {
             message_batch: Vec::with_capacity(MESSAGE_BATCH_SIZE),
-            blockmeta_batch: None,
+            seal_gated: None,
         };
         loop {
             let batch_size_maybe = messages_rx.next_batch(&mut buffer).await;
@@ -1330,11 +1365,11 @@ impl GrpcService {
                 }
             }
 
-            if let Some(blockmeta_message) = buffer.blockmeta_batch.take() {
+            if let Some(message) = buffer.seal_gated.take() {
                 metrics::message_queue_size_dec();
 
                 if block_reconstruction_tx
-                    .send(BlockReconstructionMessage::Single(blockmeta_message))
+                    .send(BlockReconstructionMessage::Single(message))
                     .is_ok()
                 {
                     metrics::block_reconstruction_queue_size_inc();
@@ -1409,9 +1444,13 @@ impl GrpcService {
                             broadcast.send(commitment_level, frozen_block.messages());
                         }
 
-                        let block_meta = Message::BlockMeta(frozen_block.get_block_meta());
-                        let msg_block = Message::Block(frozen_block.get_message_block());
-                        broadcast.send(commitment_level, Arc::new(vec![msg_block, block_meta]));
+                        let mut block_messages = Vec::with_capacity(3);
+                        block_messages.push(Message::Block(frozen_block.get_message_block()));
+                        if let Some(block_footer) = frozen_block.get_block_footer() {
+                            block_messages.push(Message::BlockFooter(block_footer));
+                        }
+                        block_messages.push(Message::BlockMeta(frozen_block.get_block_meta()));
+                        broadcast.send(commitment_level, Arc::new(block_messages));
 
                         let slot_message = Message::Slot(Arc::new(MessageSlot {
                             slot: slot_update.slot,
@@ -1451,8 +1490,8 @@ impl GrpcService {
                         CommitmentLevel::Finalized => solana_commitment_config::CommitmentLevel::Finalized,
                     };
 
-                    // Elaboration on 5 * replay_stored_slots: Each slot can have up to 5 messages (1 for messages, 1 for block meta, 3 for slot status). So we allocate enough space for the worst case scenario.
-                    let mut replayed_messages = Vec::with_capacity(replay_stored_slots as usize + (5 * replay_stored_slots as usize));
+                    // Each slot has up to 7 entries: data batch, block, footer, block meta and 3 slot statuses.
+                    let mut replayed_messages = Vec::with_capacity(7 * replay_stored_slots as usize);
                     let replayed_slot_iter = block_machine.replay_from_slot(replay_slot, min_solana_commitment);
 
                     // We need only an estimated timestamp for the replayed slot messages, so we can use the same timestamp for all of them.
@@ -1466,10 +1505,15 @@ impl GrpcService {
                         // live broadcast path so `blocks` subscribers can resume via `from_slot`
                         replayed_messages.push(ReplayResponseMessageType::Single(Message::Block(replayed_slot.frozen_block.get_message_block())));
 
-                        // 3rd Put block summary
+                        // 3rd Put block footer, which must come before the block summary
+                        if let Some(block_footer) = replayed_slot.frozen_block.get_block_footer() {
+                            replayed_messages.push(ReplayResponseMessageType::Single(Message::BlockFooter(block_footer)));
+                        }
+
+                        // 4th Put block summary
                         replayed_messages.push(ReplayResponseMessageType::Single(Message::BlockMeta(replayed_slot.frozen_block.get_block_meta())));
 
-                        // 4th Put slot status
+                        // 5th Put slot status
                         for slot_update in replayed_slot.slot_status_messages.iter() {
                             let slot_message = Message::Slot(Arc::new(MessageSlot {
                                 slot: slot_update.slot,
@@ -1503,12 +1547,13 @@ impl GrpcService {
     #[allow(clippy::too_many_arguments)]
     async fn client_loop(
         mut session: ClientSession,
-        stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
+        stream_tx: SubscribeSender,
         mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
         mut snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
         broadcast: SubscriberChannels,
         replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
         task_tracker: TaskTracker,
+        client_unresponsive_timeout: Option<Duration>,
     ) {
         let cancellation_token = session.cancellation_token.clone();
 
@@ -1547,7 +1592,11 @@ impl GrpcService {
         let mut messages_rx = broadcast.subscribe(commitment);
 
         'outer: loop {
-            observe_subscriber_queue_size(&session.subscriber_id, stream_tx.queue_size(), "normal");
+            observe_subscriber_queue_size(
+                &session.subscriber_id,
+                stream_tx.current_weight() as u64,
+                "normal",
+            );
 
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -1631,13 +1680,26 @@ impl GrpcService {
                                     .flat_map(|message| session.filter.get_updates(message, Some(commitment)));
 
                                 for filtered_message in replay_it {
-                                    match stream_tx.send(Ok(filtered_message)).await {
-                                        Ok(()) => {
+                                    let send = stream_tx.send(Ok(filtered_message));
+                                    let sent = match client_unresponsive_timeout {
+                                        Some(timeout) => tokio::time::timeout(timeout, send).await,
+                                        None => Ok(send.await),
+                                    };
+                                    match sent {
+                                        Ok(Ok(())) => {
                                             metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
                                         }
-                                        Err(mpsc::error::SendError(_)) => {
+                                        Ok(Err(SendError(_))) => {
                                             error!("client #{}: stream closed", session.subscriber_id);
                                             session.disconnect_reason = "client_closed";
+                                            break 'outer;
+                                        }
+                                        Err(_elapsed) => {
+                                            error!("client #{}: replay not read within {client_unresponsive_timeout:?}", session.subscriber_id);
+                                            task_tracker.spawn(async move {
+                                                let _ = stream_tx.send(Err(Status::internal("client did not read the replay in time"))).await;
+                                            });
+                                            session.disconnect_reason = "client_unresponsive";
                                             break 'outer;
                                         }
                                     }
@@ -1677,7 +1739,7 @@ impl GrpcService {
                                 Ok(()) => {
                                     metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
                                 }
-                                Err(mpsc::error::TrySendError::Full(_)) => {
+                                Err(TrySendError::Full(_)) => {
                                     error!("client #{}: lagged to send an update", session.subscriber_id);
                                     task_tracker.spawn(async move {
                                         let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
@@ -1685,7 +1747,7 @@ impl GrpcService {
                                     session.disconnect_reason = "client_channel_full";
                                     break 'outer;
                                 }
-                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                Err(TrySendError::Closed(_)) => {
                                     error!("client #{}: stream closed", session.subscriber_id);
                                     session.disconnect_reason = "client_closed";
                                     break 'outer;
@@ -1700,7 +1762,7 @@ impl GrpcService {
 
     async fn client_loop_snapshot(
         session: &mut ClientSession,
-        stream_tx: LoadAwareSender<TonicResult<FilteredUpdate>>,
+        stream_tx: SubscribeSender,
         client_rx: &mut mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
         snapshot_rx: crossbeam_channel::Receiver<Box<Message>>,
         cancellation_token: CancellationToken,
@@ -1949,7 +2011,7 @@ impl GrpcService {
     #[allow(clippy::too_many_arguments)]
     async fn deshred_client_loop(
         mut session: DeshredClientSession,
-        stream_tx: LoadAwareSender<TonicResult<FilteredUpdateDeshred>>,
+        stream_tx: DeshredSubscribeSender,
         mut client_rx: mpsc::UnboundedReceiver<Option<DeshredFilter>>,
         mut messages_rx: broadcast::Receiver<DeshredBroadcastedMessage>,
         cancellation_token: CancellationToken,
@@ -1958,7 +2020,7 @@ impl GrpcService {
         'outer: loop {
             observe_subscriber_queue_size(
                 &session.subscriber_id,
-                stream_tx.queue_size(),
+                stream_tx.current_weight() as u64,
                 "deshred",
             );
 
@@ -2023,7 +2085,7 @@ impl GrpcService {
                             Ok(()) => {
                                 metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
                             }
-                            Err(mpsc::error::TrySendError::Full(_)) => {
+                            Err(TrySendError::Full(_)) => {
                                 error!("deshred client #{}/{}: lagged to send an update", session.subscriber_id, session.id);
                                 session.disconnect_reason = "client_channel_full";
                                 task_tracker.spawn(async move {
@@ -2031,7 +2093,7 @@ impl GrpcService {
                                 });
                                 break 'outer;
                             }
-                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                            Err(TrySendError::Closed(_)) => {
                                 error!("deshred client #{}/{}: stream closed", session.subscriber_id, session.id);
                                 session.disconnect_reason = "client_closed";
                                 break 'outer;
@@ -2100,11 +2162,12 @@ impl Geyser for GrpcService {
             None
         };
 
-        let (stream_tx, stream_rx) = load_aware_channel(if snapshot_rx.is_some() {
+        let capacity = if snapshot_rx.is_some() {
             self.config_snapshot_client_channel_capacity
         } else {
-            self.config_channel_capacity
-        });
+            self.geyser_subscriber_weight_capacity
+        };
+        let (stream_tx, stream_rx) = load_aware_channel(capacity, self.weight_scales);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
         let ping_stream_tx = stream_tx.clone();
@@ -2229,6 +2292,7 @@ impl Geyser for GrpcService {
             self.broadcast.clone(),
             self.replay_stored_slots_tx.clone(),
             self.task_tracker.clone(),
+            self.client_unresponsive_timeout,
         ));
 
         Ok(Response::new(stream_rx))
@@ -2273,7 +2337,8 @@ impl Geyser for GrpcService {
             return Err(Status::unavailable("server is shutting down"));
         }
 
-        let (stream_tx, stream_rx) = load_aware_channel(self.config_channel_capacity);
+        let (stream_tx, stream_rx) =
+            load_aware_channel(self.deshred_subscriber_channel_capacity, UnitWeigher::new());
         let (client_tx, client_rx) = mpsc::unbounded_channel();
 
         let ping_stream_tx = stream_tx.clone();
@@ -2427,7 +2492,7 @@ impl Geyser for GrpcService {
             id,
             subscriber_id,
             subscription_permit,
-            self.config_channel_capacity,
+            self.contact_info_subscriber_channel_capacity,
             Arc::clone(&self.contact_info_state),
             client_cancellation_token,
             self.task_tracker.clone(),
@@ -2550,11 +2615,386 @@ mod tests {
     use {
         super::*,
         crate::{
-            plugin::filter::{limits::FilterLimits, name::FilterNames, Filter},
+            plugin::{
+                filter::{
+                    encoder::TransactionEncoder, fixtures, limits::FilterLimits, name::FilterNames,
+                    Filter, FilterAccountsDataSlice,
+                },
+                message::MessageTransaction,
+            },
             util::stream::load_aware_channel,
         },
-        yellowstone_grpc_proto::prelude::{SubscribeRequest, SubscribeRequestFilterSlots},
+        solana_pubkey::Pubkey,
+        solana_signature::Signature,
+        std::time::Instant,
+        yellowstone_grpc_proto::prelude::{
+            SubscribeRequest, SubscribeRequestAccountsDataSlice, SubscribeRequestFilterBlocks,
+            SubscribeRequestFilterSlots,
+        },
     };
+
+    fn create_filter_for_blocks(blocks: SubscribeRequestFilterBlocks) -> Filter {
+        let config = SubscribeRequest {
+            blocks: HashMap::from([("test".into(), blocks)]),
+            ..Default::default()
+        };
+        let mut names = FilterNames::new(64, 1024, Duration::from_secs(1));
+        Filter::new(&config, &FilterLimits::default(), &mut names).unwrap()
+    }
+
+    fn create_filter_with_blocks(include_accounts: bool) -> Filter {
+        create_filter_for_blocks(SubscribeRequestFilterBlocks {
+            include_transactions: Some(true),
+            include_accounts: Some(include_accounts),
+            ..Default::default()
+        })
+    }
+
+    fn test_transaction() -> Arc<MessageTransaction> {
+        fixtures::message_transaction(
+            Signature::default(),
+            vec![Pubkey::default()],
+            false,
+            Default::default(),
+        )
+    }
+
+    fn update(message: FilteredUpdateOneof) -> TonicResult<FilteredUpdate> {
+        Ok(FilteredUpdate::new_empty(message))
+    }
+
+    #[test]
+    fn scaled_weights_apply_per_update_kind() {
+        let scales = WeightScales {
+            account: 4,
+            transaction: 5,
+            entry: 6,
+            slot: 7,
+            block_footer: 8,
+            block: 2,
+            ..WeightScales::default()
+        };
+        let default_scales = WeightScales::default();
+        let account =
+            fixtures::simple_message_account(Pubkey::new_from_array([1; 32]), Pubkey::default());
+
+        let account_update = update(FilteredUpdateOneof::account(
+            Arc::clone(&account),
+            FilterAccountsDataSlice::default(),
+        ));
+        assert_eq!(scales.weight(&account_update), 4);
+        assert_eq!(default_scales.weight(&account_update), 1);
+        assert_eq!(
+            scales.weight(&update(
+                FilteredUpdateOneof::transaction(test_transaction())
+            )),
+            5
+        );
+        assert_eq!(
+            scales.weight(&update(FilteredUpdateOneof::entry(
+                fixtures::message_entry(1, 0)
+            ))),
+            6
+        );
+        let slot = fixtures::message_slot(1, SlotStatus::Processed);
+        assert_eq!(scales.weight(&update(FilteredUpdateOneof::slot(slot))), 7);
+        let footer = fixtures::message_block_footer(1, 1);
+        assert_eq!(
+            scales.weight(&update(FilteredUpdateOneof::block_footer(footer))),
+            8
+        );
+
+        // Kinds without a scale and errors always weigh 1.
+        let status = FilteredUpdateOneof::transaction_status(test_transaction());
+        assert_eq!(scales.weight(&update(status)), 1);
+        let meta = FilteredUpdateOneof::block_meta(fixtures::message_block_meta(1));
+        assert_eq!(scales.weight(&update(meta)), 1);
+        assert_eq!(scales.weight(&update(FilteredUpdateOneof::ping())), 1);
+        assert_eq!(scales.weight(&Err(Status::internal("lagged"))), 1);
+
+        // A block weighs 1 + transactions + accounts, times the block scale only.
+        let block = Message::Block(fixtures::message_block(
+            1,
+            vec![test_transaction(); 3],
+            vec![account; 2],
+            vec![fixtures::message_entry(1, 0)],
+        ));
+        let block_update = create_filter_with_blocks(true)
+            .get_updates(&block, None)
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(scales.weight(&Ok(block_update.clone())), (1 + 5 + 4) * 2);
+        assert_eq!(default_scales.weight(&Ok(block_update)), 1 + 1 + 1);
+
+        let block_update = create_filter_with_blocks(false)
+            .get_updates(&block, None)
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(scales.weight(&Ok(block_update)), (1 + 5) * 2);
+    }
+
+    #[test]
+    fn account_data_adds_weight() {
+        let scales = WeightScales {
+            account: 4,
+            ..WeightScales::default()
+        };
+        let count_only = WeightScales {
+            account_data_unit: 0,
+            ..scales
+        };
+        let account = |len: usize| {
+            fixtures::message_account(fixtures::account_info(
+                Pubkey::default(),
+                Pubkey::default(),
+                vec![0; len],
+                1000,
+                None,
+            ))
+        };
+        let account_update = |len: usize, data_slice: FilterAccountsDataSlice| {
+            update(FilteredUpdateOneof::account(account(len), data_slice))
+        };
+
+        // One unit plus one per 4096 bytes of data, times the account scale.
+        let whole = FilterAccountsDataSlice::default;
+        assert_eq!(scales.weight(&account_update(4095, whole())), 4);
+        assert_eq!(scales.weight(&account_update(4096, whole())), 8);
+        assert_eq!(scales.weight(&account_update(10 << 20, whole())), 4 * 2561);
+        assert_eq!(count_only.weight(&account_update(10 << 20, whole())), 4);
+
+        // A data slice sends less, but the queue still holds the whole account.
+        let slice = FilterAccountsDataSlice::new(
+            &[SubscribeRequestAccountsDataSlice {
+                offset: 0,
+                length: 32,
+            }],
+            usize::MAX,
+        )
+        .unwrap();
+        assert_eq!(scales.weight(&account_update(10 << 20, slice)), 4 * 2561);
+
+        // Accounts in a block count the same units, times the block scale only.
+        let block = Message::Block(fixtures::message_block(
+            1,
+            vec![test_transaction(); 2],
+            vec![account(100), account(20_000)],
+            Vec::new(),
+        ));
+        let block_update = create_filter_with_blocks(true)
+            .get_updates(&block, None)
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(scales.weight(&Ok(block_update.clone())), 1 + 1 + 4 * 4);
+        assert_eq!(count_only.weight(&Ok(block_update)), 1 + 1 + 4 * 2);
+
+        let big = Pubkey::new_unique();
+        let block = Message::Block(fixtures::message_block(
+            1,
+            vec![test_transaction(); 2],
+            vec![
+                account(100),
+                fixtures::message_account(fixtures::account_info(
+                    big,
+                    Pubkey::default(),
+                    vec![0; 20_000],
+                    1000,
+                    None,
+                )),
+            ],
+            Vec::new(),
+        ));
+        let block_update = create_filter_for_blocks(SubscribeRequestFilterBlocks {
+            account_include: vec![big.to_string()],
+            include_transactions: Some(true),
+            include_accounts: Some(true),
+            ..Default::default()
+        })
+        .get_updates(&block, None)
+        .into_iter()
+        .next()
+        .unwrap();
+        assert_eq!(scales.weight(&Ok(block_update)), 1 + 4 * 4);
+    }
+
+    #[test]
+    fn transaction_data_adds_weight() {
+        let scales = WeightScales {
+            transaction: 4,
+            transaction_data_unit: 64,
+            ..WeightScales::default()
+        };
+        let count_only = WeightScales {
+            transaction_data_unit: 0,
+            ..scales
+        };
+        let units = |len: usize| u32::try_from((len / 64).max(1)).unwrap();
+        let transaction = test_transaction();
+        let transaction_update =
+            || update(FilteredUpdateOneof::transaction(Arc::clone(&transaction)));
+
+        assert_eq!(scales.weight(&transaction_update()), 4);
+
+        TransactionEncoder::pre_encode(&transaction.transaction);
+        let len = transaction
+            .transaction
+            .get_pre_encoded()
+            .map_or(0, Vec::len);
+        assert!(units(len) > 1, "the test transaction spans several units");
+        assert_eq!(scales.weight(&transaction_update()), 4 * units(len));
+        assert_eq!(count_only.weight(&transaction_update()), 4);
+
+        let block = Message::Block(fixtures::message_block(
+            1,
+            vec![Arc::clone(&transaction); 10],
+            Vec::new(),
+            Vec::new(),
+        ));
+        let block_update = create_filter_with_blocks(false)
+            .get_updates(&block, None)
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(
+            scales.weight(&Ok(block_update.clone())),
+            1 + 4 * units(10 * len)
+        );
+        assert_eq!(count_only.weight(&Ok(block_update)), 1 + 4 * 10);
+    }
+
+    #[tokio::test]
+    async fn subscribe_queue_budget_counts_scaled_weights() {
+        let scales = WeightScales {
+            account: 4,
+            ..WeightScales::default()
+        };
+        let (stream_tx, mut stream_rx) = load_aware_channel(10, scales);
+        let account = || {
+            update(FilteredUpdateOneof::account(
+                fixtures::simple_message_account(Pubkey::default(), Pubkey::default()),
+                FilterAccountsDataSlice::default(),
+            ))
+        };
+
+        stream_tx.try_send(account()).unwrap();
+        stream_tx.try_send(account()).unwrap();
+        assert_eq!(stream_tx.current_weight(), 8);
+        assert!(matches!(
+            stream_tx.try_send(account()),
+            Err(TrySendError::Full(_))
+        ));
+        // Slots keep their default weight of 1 and still fit.
+        stream_tx
+            .try_send(update(FilteredUpdateOneof::slot(fixtures::message_slot(
+                1,
+                SlotStatus::Processed,
+            ))))
+            .unwrap();
+        assert_eq!(stream_tx.current_weight(), 9);
+
+        stream_rx.recv().await.unwrap().unwrap();
+        assert_eq!(stream_tx.current_weight(), 5);
+    }
+
+    /// Answers one replay request with `blocks` blocks of `transactions` transactions each.
+    async fn answer_replay(
+        mut replay_rx: mpsc::Receiver<ReplayStoredSlotsRequest>,
+        blocks: u64,
+        transactions: usize,
+    ) {
+        if let Some((_commitment, _from_slot, response_tx)) = replay_rx.recv().await {
+            let transaction = test_transaction();
+            let messages = (0..blocks)
+                .map(|slot| {
+                    ReplayResponseMessageType::Single(Message::Block(fixtures::message_block(
+                        slot,
+                        vec![Arc::clone(&transaction); transactions],
+                        Vec::new(),
+                        Vec::new(),
+                    )))
+                })
+                .collect();
+            let _ = response_tx.send(ReplayedResponse::Messages(messages));
+        }
+    }
+
+    /// Starts a client that asks for a replay of 20 blocks weighing 10 each into a queue of 50.
+    fn spawn_replaying_client(timeout: Duration) -> (ClientHandles, tokio::task::JoinHandle<()>) {
+        let (client_tx, client_rx) = mpsc::unbounded_channel();
+        let scales = WeightScales {
+            transaction_data_unit: 0,
+            ..WeightScales::default()
+        };
+        let (stream_tx, stream_rx) = load_aware_channel(50, scales);
+        let (replay_tx, replay_rx) = mpsc::channel(1);
+        tokio::spawn(answer_replay(replay_rx, 20, 9));
+        let session = ClientSession::new(
+            0,
+            Some("test".into()),
+            "test".into(),
+            CancellationToken::new(),
+            None,
+        );
+        let handle = tokio::spawn(GrpcService::client_loop(
+            session,
+            stream_tx,
+            client_rx,
+            None,
+            SubscriberChannels::new(16, 16, 16),
+            Some(replay_tx),
+            TaskTracker::new(),
+            Some(timeout),
+        ));
+        client_tx
+            .send(Some((Some(0), create_filter_with_blocks(false))))
+            .unwrap();
+        ((client_tx, stream_rx), handle)
+    }
+
+    #[tokio::test]
+    async fn replay_disconnects_a_client_that_does_not_read() {
+        let started = Instant::now();
+        let ((_client_tx, mut stream_rx), handle) =
+            spawn_replaying_client(Duration::from_millis(200));
+
+        tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("client loop gave up on the replay")
+            .unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(200));
+
+        // The 5 blocks that fit come first, then the disconnect error.
+        for _ in 0..5 {
+            assert!(matches!(stream_rx.recv().await, Some(Ok(_))));
+        }
+        let status = stream_rx.recv().await.unwrap().unwrap_err();
+        assert_eq!(status.message(), "client did not read the replay in time");
+    }
+
+    #[tokio::test]
+    async fn replay_waits_for_a_client_that_reads() {
+        let ((client_tx, mut stream_rx), handle) =
+            spawn_replaying_client(Duration::from_millis(200));
+
+        for _ in 0..20 {
+            let update = tokio::time::timeout(Duration::from_secs(5), stream_rx.recv())
+                .await
+                .expect("replayed block")
+                .unwrap()
+                .unwrap();
+            assert!(matches!(update.message, FilteredUpdateOneof::Block(_)));
+        }
+        assert!(!handle.is_finished());
+
+        drop(client_tx);
+        tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("client loop ends once the client leaves")
+            .unwrap();
+    }
 
     fn create_filter_with_slots() -> Filter {
         let config = SubscribeRequest {
@@ -2616,7 +3056,7 @@ mod tests {
 
     fn spawn_client_loop(broadcast: SubscriberChannels, ct: CancellationToken) -> ClientHandles {
         let (client_tx, client_rx) = mpsc::unbounded_channel();
-        let (stream_tx, stream_rx) = load_aware_channel(64);
+        let (stream_tx, stream_rx) = load_aware_channel(64, WeightScales::default());
         let session = ClientSession::new(0, Some("test".into()), "test".into(), ct, None);
         tokio::spawn(GrpcService::client_loop(
             session,
@@ -2626,6 +3066,7 @@ mod tests {
             broadcast,
             None,
             TaskTracker::new(),
+            None,
         ));
         (client_tx, stream_rx)
     }
@@ -2725,7 +3166,7 @@ mod tests {
         let tt = TaskTracker::new();
         let broadcast = SubscriberChannels::new(16, 16, 16);
         let (client_tx, client_rx) = mpsc::unbounded_channel();
-        let (stream_tx, stream_rx) = load_aware_channel(16);
+        let (stream_tx, stream_rx) = load_aware_channel(16, WeightScales::default());
         let (half_close_tx, half_close_rx) = oneshot::channel();
 
         // mirrors the incoming handler spawned in subscribe()
@@ -2747,6 +3188,7 @@ mod tests {
             broadcast.clone(),
             None,
             tt.clone(),
+            None,
         ));
 
         // yield so incoming_handler sends the filter and client_loop

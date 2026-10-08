@@ -7337,7 +7337,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-client"
-version = "14.0.0"
+version = "15.0.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -7392,10 +7392,12 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "16.0.0+solana.4.3.0"
+version = "16.1.1"
 dependencies = [
  "affinity",
+ "agave-feature-set",
  "agave-geyser-plugin-interface",
+ "agave-votor-messages",
  "anyhow",
  "arc-swap",
  "base64",
@@ -7433,6 +7435,7 @@ dependencies = [
  "smallvec",
  "solana-account 4.6.0",
  "solana-account-decoder",
+ "solana-bls-signatures",
  "solana-clock",
  "solana-commitment-config",
  "solana-entry",
@@ -7545,7 +7548,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-proto"
-version = "14.0.0"
+version = "14.0.1"
 dependencies = [
  "anyhow",
  "bytes",
