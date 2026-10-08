@@ -72,6 +72,119 @@ macro_rules! prost_repeated_encoded_len_map {
     }};
 }
 
+/// Bytes of account data that add one weight unit to an account by default.
+pub const DEFAULT_ACCOUNT_DATA_UNIT: usize = 4096;
+
+pub const DEFAULT_TRANSACTION_DATA_UNIT: usize = 4096;
+
+/// Weight of each update kind in a Subscribe queue. Scales below `1` count as `1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WeightScales {
+    /// Multiplies an account update's weight, which is the account's units.
+    pub account: u32,
+    pub transaction: u32,
+    pub entry: u32,
+    pub slot: u32,
+    pub block_footer: u32,
+    /// Multiplies a block's weight, which is `1` plus its transactions and its accounts' units.
+    pub block: u32,
+    /// An account counts `1` unit plus one per this many bytes of data. `0` counts it as `1`.
+    pub account_data_unit: usize,
+    pub transaction_data_unit: usize,
+}
+
+impl Default for WeightScales {
+    fn default() -> Self {
+        Self {
+            account: 1,
+            transaction: 1,
+            entry: 1,
+            slot: 1,
+            block_footer: 1,
+            block: 1,
+            account_data_unit: DEFAULT_ACCOUNT_DATA_UNIT,
+            transaction_data_unit: DEFAULT_TRANSACTION_DATA_UNIT,
+        }
+    }
+}
+
+fn data_units(count: usize, len: usize, unit: usize) -> u32 {
+    let units = if count == 0 {
+        0
+    } else {
+        len.checked_div(unit).map_or(count, |units| units.max(1))
+    };
+    u32::try_from(units).unwrap_or(u32::MAX)
+}
+
+impl WeightScales {
+    /// Counts the full data, even under a data slice, because the queue holds the whole account.
+    fn account_units(&self, account: &MessageAccount) -> u32 {
+        let extra = account
+            .account
+            .data
+            .len()
+            .checked_div(self.account_data_unit)
+            .unwrap_or_default();
+        u32::try_from(extra).unwrap_or(u32::MAX).saturating_add(1)
+    }
+
+    /// Weighs a [`FilteredUpdate`] with these scales.
+    ///
+    /// # Arguments
+    ///
+    /// * `update` - The [`FilteredUpdate`] to weigh.
+    ///
+    /// # Returns
+    ///
+    /// The weight of `update`. Transaction status, block meta, ping and pong updates always
+    /// weigh `1`.
+    pub(crate) fn update_weight(&self, update: &FilteredUpdate) -> u32 {
+        let scale = match &update.message {
+            FilteredUpdateOneof::Account(update) => {
+                return self
+                    .account
+                    .max(1)
+                    .saturating_mul(self.account_units(&update.account));
+            }
+            FilteredUpdateOneof::Transaction(update) => {
+                let units = update
+                    .transaction
+                    .transaction
+                    .get_pre_encoded()
+                    .map_or(1, |encoded| {
+                        data_units(1, encoded.len(), self.transaction_data_unit)
+                    });
+                return self.transaction.max(1).saturating_mul(units);
+            }
+            FilteredUpdateOneof::Entry(_) | FilteredUpdateOneof::EntryUpdateParent(_) => self.entry,
+            FilteredUpdateOneof::Slot(_) => self.slot,
+            FilteredUpdateOneof::BlockFooter(_) => self.block_footer,
+            FilteredUpdateOneof::Block(block) => {
+                let transactions = self.transaction.max(1).saturating_mul(data_units(
+                    block.transactions.len(),
+                    block.transactions_data_len,
+                    self.transaction_data_unit,
+                ));
+                let accounts = self.account.max(1).saturating_mul(data_units(
+                    block.accounts.len(),
+                    block.accounts_data_len,
+                    self.account_data_unit,
+                ));
+                return transactions
+                    .saturating_add(accounts)
+                    .saturating_add(1)
+                    .saturating_mul(self.block.max(1));
+            }
+            FilteredUpdateOneof::TransactionStatus(_)
+            | FilteredUpdateOneof::BlockMeta(_)
+            | FilteredUpdateOneof::Ping
+            | FilteredUpdateOneof::Pong(_) => 1,
+        };
+        scale.max(1)
+    }
+}
+
 pub type FilteredUpdates = SmallVec<[FilteredUpdate; 2]>;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1052,6 +1165,8 @@ pub struct FilteredUpdateBlock {
     pub accounts: Vec<Arc<MessageAccount>>,
     pub accounts_data_slice: FilterAccountsDataSlice,
     pub entries: Vec<Arc<MessageEntry>>,
+    pub accounts_data_len: usize,
+    pub transactions_data_len: usize,
 }
 
 impl prost::Message for FilteredUpdateBlock {
@@ -1287,20 +1402,21 @@ pub mod tests {
     use crate::plugin::{
         filter::{
             encoder::{AccountEncoder, TransactionEncoder},
+            fixtures,
             message::{FilteredUpdateAccount, FilteredUpdateTransaction},
         },
-        message::{MessageSlot, SlotStatus},
+        message::{MessageBlockFooter, MessageSlot, SlotStatus},
     };
     #[cfg(test)]
-    use yellowstone_grpc_proto::geyser::SubscribeUpdate;
+    use yellowstone_grpc_proto::geyser::{SubscribeUpdate, SubscribeUpdateBlockFooter};
     use {
         super::{FilteredUpdateBlock, FilteredUpdateFilters},
         crate::plugin::{
             convert_to,
             filter::{name::FilterName, FilterAccountsDataSlice},
             message::{
-                MessageAccount, MessageAccountInfo, MessageBlockFooter, MessageBlockMeta,
-                MessageEntry, MessageTransaction, MessageTransactionInfo,
+                MessageAccount, MessageAccountInfo, MessageBlockMeta, MessageEntry,
+                MessageTransaction, MessageTransactionInfo,
             },
         },
         agave_geyser_plugin_interface::transaction_status_meta as mirror,
@@ -1324,10 +1440,7 @@ pub mod tests {
             sync::{Arc, OnceLock},
             time::SystemTime,
         },
-        yellowstone_grpc_proto::{
-            geyser::{SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta},
-            prelude as proto,
-        },
+        yellowstone_grpc_proto::{geyser::SubscribeUpdateBlockMeta, prelude as proto},
     };
 
     pub fn create_message_filters(names: &[&str]) -> FilteredUpdateFilters {
@@ -1554,6 +1667,8 @@ pub mod tests {
                                 accounts: accounts.clone(),
                                 accounts_data_slice: data_slice.clone(),
                                 entries: entries.clone(),
+                                accounts_data_len: 0,
+                                transactions_data_len: 0,
                             },
                             FilteredUpdateBlock {
                                 meta: Arc::clone(&block_meta2),
@@ -1562,6 +1677,8 @@ pub mod tests {
                                 accounts: accounts.clone(),
                                 accounts_data_slice: data_slice,
                                 entries: entries.clone(),
+                                accounts_data_len: 0,
+                                transactions_data_len: 0,
                             },
                         ]
                     })
@@ -1947,17 +2064,22 @@ pub mod tests {
     #[test]
     fn test_message_block_footer() {
         // An empty user agent, a maximal timestamp, absent certificates and an
-        // empty certificate are the interesting edges for the hand-rolled encoder.
-        for (bank_hash, nanos, user_agent, certs) in [
-            (vec![0u8; 32], 0u64, Vec::new(), [None, None, None]),
+        // empty bitmap are the interesting edges for the hand-rolled encoder.
+        let (final_cert, skip_cert, notar_cert) = fixtures::block_footer_certificates();
+        for (
+            bank_hash,
+            nanos,
+            user_agent,
+            (block_final_cert, skip_reward_cert, notar_reward_cert),
+        ) in [
+            (vec![0u8; 32], 0u64, Vec::new(), (None, None, None)),
             (
                 vec![7u8; 32],
                 u64::MAX,
                 b"agave/3.0.0".to_vec(),
-                [Some(vec![1u8; 96]), Some(Vec::new()), Some(vec![2u8; 48])],
+                (Some(final_cert), Some(skip_cert), Some(notar_cert)),
             ),
         ] {
-            let [block_final_cert, skip_reward_cert, notar_reward_cert] = certs;
             let message = Arc::new(MessageBlockFooter {
                 block_footer: SubscribeUpdateBlockFooter {
                     slot: 42,

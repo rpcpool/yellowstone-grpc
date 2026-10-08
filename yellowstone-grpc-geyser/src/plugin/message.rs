@@ -1,10 +1,7 @@
 use {
     super::convert_to,
     agave_geyser_plugin_interface::{
-        block_footer::{
-            BlockFinalizationCert, NotarRewardCertificate, SkipRewardCertificate,
-            VersionedBlockFooter, VotesAggregate,
-        },
+        block_footer::VersionedBlockFooter,
         geyser_plugin_interface::{
             ReplicaAccountInfoV3, ReplicaBlockFooterInfo, ReplicaBlockInfoV5,
             ReplicaContactInfoV0_0_1, ReplicaDeshredTransactionInfo,
@@ -521,90 +518,22 @@ impl MessageBlockFooter {
                 bank_hash: footer.bank_hash.to_bytes().to_vec(),
                 block_producer_time_nanos: footer.block_producer_time_nanos,
                 block_user_agent: footer.block_user_agent.to_vec(),
-                block_final_cert: footer.block_final_cert.as_ref().map(encode_final_cert),
+                block_final_cert: footer
+                    .block_final_cert
+                    .as_ref()
+                    .map(convert_to::create_block_final_cert),
                 skip_reward_cert: footer
                     .skip_reward_cert
                     .as_ref()
-                    .map(encode_skip_reward_cert),
+                    .map(convert_to::create_skip_reward_cert),
                 notar_reward_cert: footer
                     .notar_reward_cert
                     .as_ref()
-                    .map(encode_notar_reward_cert),
+                    .map(convert_to::create_notar_reward_cert),
             },
             created_at: Timestamp::from(SystemTime::now()),
         }
     }
-}
-
-// The Alpenglow certificates travel as opaque wincode bytes, as the footer holds them.
-// TODO: Should probably have the entire wincode implementation on agave's side instead of here.
-fn encode_final_cert(cert: &BlockFinalizationCert<'_>) -> Vec<u8> {
-    let BlockFinalizationCert {
-        slot,
-        block_id,
-        final_aggregate,
-        notar_aggregate,
-    } = cert;
-    let mut buf = slot.to_le_bytes().to_vec();
-    buf.extend_from_slice(&block_id.to_bytes());
-    encode_votes_aggregate(&mut buf, final_aggregate);
-    match notar_aggregate {
-        Some(aggregate) => {
-            buf.push(1);
-            encode_votes_aggregate(&mut buf, aggregate);
-        }
-        None => buf.push(0),
-    }
-    buf
-}
-
-fn encode_votes_aggregate(buf: &mut Vec<u8>, aggregate: &VotesAggregate<'_>) {
-    let VotesAggregate { signature, bitmap } = aggregate;
-    buf.extend_from_slice(&signature.0);
-    let len = u16::try_from(bitmap.len()).expect("votes aggregate bitmap length to fit in u16");
-    buf.extend_from_slice(&len.to_le_bytes());
-    buf.extend_from_slice(bitmap);
-}
-
-fn encode_skip_reward_cert(cert: &SkipRewardCertificate<'_>) -> Vec<u8> {
-    let SkipRewardCertificate {
-        slot,
-        signature,
-        bitmap,
-    } = cert;
-    let mut buf = slot.to_le_bytes().to_vec();
-    buf.extend_from_slice(&signature.0);
-    encode_short_vec(&mut buf, bitmap);
-    buf
-}
-
-fn encode_notar_reward_cert(cert: &NotarRewardCertificate<'_>) -> Vec<u8> {
-    let NotarRewardCertificate {
-        slot,
-        block_id,
-        signature,
-        bitmap,
-    } = cert;
-    let mut buf = slot.to_le_bytes().to_vec();
-    buf.extend_from_slice(&block_id.to_bytes());
-    buf.extend_from_slice(&signature.0);
-    encode_short_vec(&mut buf, bitmap);
-    buf
-}
-
-fn encode_short_vec(buf: &mut Vec<u8>, bytes: &[u8]) {
-    let mut len =
-        u16::try_from(bytes.len()).expect("reward certificate bitmap length to fit in u16");
-    loop {
-        let byte = (len & 0x7f) as u8;
-        len >>= 7;
-        if len == 0 {
-            buf.push(byte);
-            break;
-        }
-        buf.push(byte | 0x80);
-    }
-    buf.extend_from_slice(bytes);
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -849,9 +778,7 @@ mod tests {
             },
             geyser_plugin_interface::ReplicaBlockFooterInfo,
         },
-        agave_votor_messages::reward_certificate,
         solana_bls_signatures::SignatureCompressed,
-        solana_entry::block_component,
         solana_hash::Hash,
     };
 
@@ -864,7 +791,7 @@ mod tests {
     }
 
     #[test]
-    fn footer_certificates_match_the_agave_wincode_layout() {
+    fn footer_certificates_become_typed_proto_messages() {
         let final_bitmap = vec![0xa5; 300];
         let notar_bitmap = vec![0x5a; 7];
         let skip_bitmap = vec![0x11; 200];
@@ -899,45 +826,34 @@ mod tests {
         });
         let message = footer_message(&footer);
 
-        let bytes = message.block_final_cert.as_deref().expect("final cert");
-        let cert = wincode::deserialize::<block_component::BlockFinalizationCert>(bytes)
-            .expect("agave to decode the final cert");
+        // A slow finalization puts the block_id on the notarize aggregate.
+        let cert = message.block_final_cert.as_ref().expect("final cert");
         assert_eq!(cert.slot, 10);
-        assert_eq!(cert.block_id, Hash::new_from_array([2; 32]));
-        assert_eq!(
-            cert.final_aggregate.as_parts(),
-            (&SignatureCompressed([3; 96]), final_bitmap.as_slice())
-        );
-        assert_eq!(
-            cert.notar_aggregate
-                .as_ref()
-                .map(|aggregate| aggregate.as_parts()),
-            Some((&SignatureCompressed([4; 96]), notar_bitmap.as_slice()))
-        );
-        assert_eq!(wincode::serialize(&cert).expect("final cert"), bytes);
+        let final_aggregate = cert.final_aggregate.as_ref().expect("final aggregate");
+        assert_eq!(final_aggregate.signature, vec![3; 96]);
+        assert_eq!(final_aggregate.signer_bitmap, final_bitmap);
+        assert!(final_aggregate.block_id.is_empty());
+        let notar_aggregate = cert.notar_aggregate.as_ref().expect("notar aggregate");
+        assert_eq!(notar_aggregate.signature, vec![4; 96]);
+        assert_eq!(notar_aggregate.signer_bitmap, notar_bitmap);
+        assert_eq!(notar_aggregate.block_id, vec![2; 32]);
 
-        let skip = reward_certificate::SkipRewardCertificate::try_new(
-            11,
-            SignatureCompressed([5; 96]),
-            skip_bitmap.clone(),
-        )
-        .expect("skip reward cert");
-        assert_eq!(
-            message.skip_reward_cert,
-            Some(wincode::serialize(&skip).expect("skip reward cert"))
-        );
+        let skip = message.skip_reward_cert.as_ref().expect("skip reward cert");
+        let skip_aggregate = skip.aggregate.as_ref().expect("skip aggregate");
+        assert_eq!(skip.slot, 11);
+        assert_eq!(skip_aggregate.signature, vec![5; 96]);
+        assert_eq!(skip_aggregate.signer_bitmap, skip_bitmap);
+        assert!(skip_aggregate.block_id.is_empty());
 
-        let notar = reward_certificate::NotarRewardCertificate::try_new(
-            12,
-            Hash::new_from_array([6; 32]),
-            SignatureCompressed([7; 96]),
-            reward_bitmap.clone(),
-        )
-        .expect("notar reward cert");
-        assert_eq!(
-            message.notar_reward_cert,
-            Some(wincode::serialize(&notar).expect("notar reward cert"))
-        );
+        let notar = message
+            .notar_reward_cert
+            .as_ref()
+            .expect("notar reward cert");
+        let notar_aggregate = notar.aggregate.as_ref().expect("notar aggregate");
+        assert_eq!(notar.slot, 12);
+        assert_eq!(notar_aggregate.signature, vec![7; 96]);
+        assert_eq!(notar_aggregate.signer_bitmap, reward_bitmap);
+        assert_eq!(notar_aggregate.block_id, vec![6; 32]);
     }
 
     #[test]
@@ -949,7 +865,7 @@ mod tests {
             block_user_agent: &[],
             block_final_cert: Some(BlockFinalizationCert {
                 slot: 10,
-                block_id: Hash::default(),
+                block_id: Hash::new_from_array([2; 32]),
                 final_aggregate: VotesAggregate {
                     signature: SignatureCompressed([8; 96]),
                     bitmap: &bitmap,
@@ -961,11 +877,16 @@ mod tests {
         });
         let message = footer_message(&footer);
 
-        let bytes = message.block_final_cert.as_deref().expect("final cert");
-        let cert = wincode::deserialize::<block_component::BlockFinalizationCert>(bytes)
-            .expect("agave to decode the final cert");
+        // A fast finalization puts the block_id on the final aggregate.
+        let cert = message.block_final_cert.as_ref().expect("final cert");
         assert!(cert.notar_aggregate.is_none());
-        assert_eq!(wincode::serialize(&cert).expect("final cert"), bytes);
+        assert_eq!(
+            cert.final_aggregate
+                .as_ref()
+                .expect("final aggregate")
+                .block_id,
+            vec![2; 32]
+        );
         assert_eq!(message.skip_reward_cert, None);
         assert_eq!(message.notar_reward_cert, None);
     }

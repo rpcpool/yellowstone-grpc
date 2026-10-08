@@ -280,7 +280,7 @@ describeAlpenglow("Client.subscribe block footers", () => {
         });
 
         expect(footer.bankHash.length).toBe(32);
-        expect(footer.blockFinalCert?.length ?? 0).toBeGreaterThan(0);
+        expect(footer.blockFinalCert?.finalAggregate?.signature.length).toBe(96);
       } finally {
         stream.destroy();
       }

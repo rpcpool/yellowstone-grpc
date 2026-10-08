@@ -13,18 +13,16 @@ mod bindings;
 mod client;
 mod cuckoo;
 mod encoding;
+mod reconnect;
 mod subscribe_request_validation;
 mod utils;
 
-use futures::{future::poll_fn, Sink, Stream, TryStream, TryStreamExt};
+use futures::{future::poll_fn, Sink, Stream};
 use futures_util::{SinkExt, StreamExt};
 use napi::{bindgen_prelude::*, Env};
 use napi_derive::napi;
 use prost::Message;
-use std::{
-  sync::{Arc, Mutex as StdMutex, Once},
-  task::Poll,
-};
+use std::sync::{Arc, Mutex as StdMutex, Once};
 use yellowstone_grpc_client::{
   GeyserStream, SubscribeDeshredRequestSink, SubscribeDeshredStream, SubscribeRequestSink,
 };
@@ -91,111 +89,34 @@ fn napi_error(status: napi::Status, reason: impl Into<String>) -> napi::Error {
   error
 }
 
-///
-/// Stream decorator that encodes each item to protobuf bytes on `poll_next()`.
-struct ProtoEncodedSt<St> {
-  wrapped: St,
-}
-
-impl<St> Stream for ProtoEncodedSt<St>
-where
-  St: TryStream + Unpin,
-  St::Ok: prost::Message + Send + 'static,
-  St::Error: std::error::Error + Send + Sync + 'static,
-{
-  type Item = std::result::Result<Vec<u8>, St::Error>;
-
-  fn poll_next(
-    self: std::pin::Pin<&mut Self>,
-    cx: &mut std::task::Context<'_>,
-  ) -> std::task::Poll<Option<Self::Item>> {
-    let this = self.get_mut();
-
-    match futures::ready!(this.wrapped.try_poll_next_unpin(cx)) {
-      Some(result) => Poll::Ready(Some(result.map(|message| message.encode_to_vec()))),
-      None => Poll::Ready(None),
-    }
-  }
-}
-
-/// [`SharedStream`]'s guarded state: the wrapped stream plus every task
-/// currently `Pending` on it. Both live behind the same lock because a poll
-/// has to check/update them atomically together (see
-/// [`SharedStream::poll_next`]).
 struct SharedStreamState<St> {
   stream: St,
-  /// Wakers of tasks that polled and got `Pending`, not yet woken since.
-  /// Deduplicated by [`Waker::will_wake`](std::task::Waker::will_wake) so a
-  /// task that polls repeatedly without making progress doesn't grow this
-  /// unboundedly.
-  waiters: Vec<std::task::Waker>,
 }
 
-/// The waker [`SharedStream`] itself registers with the wrapped stream,
-/// regardless of which external task triggered the poll. `St` here is
-/// typically backed by a single-waker-slot resource (a
-/// [`tokio::sync::mpsc::Receiver`], an `h2`-backed
-/// [`tonic::Streaming`]) — registering *this*
-/// stable proxy, instead of forwarding whichever caller's waker happened to
-/// poll last, is what lets multiple concurrent pollers share one
-/// [`SharedStream`] correctly: the underlying resource always wakes the
-/// proxy, and the proxy fans that single notification out to every
-/// registered waiter.
-struct SharedStreamWaker<St> {
-  state: Arc<StdMutex<SharedStreamState<St>>>,
+struct SharedStreamWaker {
+  waiters: Arc<StdMutex<Vec<std::task::Waker>>>,
 }
 
-impl<St: Send> futures::task::ArcWake for SharedStreamWaker<St> {
+impl futures::task::ArcWake for SharedStreamWaker {
   fn wake_by_ref(arc_self: &Arc<Self>) {
-    let waiters = std::mem::take(&mut arc_self.state.lock().expect("state lock").waiters);
+    let waiters = std::mem::take(&mut *arc_self.waiters.lock().expect("waiters lock"));
     for waiter in waiters {
       waiter.wake();
     }
   }
 }
 
-/// A [`Stream`] wrapper that can be cloned and polled concurrently by
-/// multiple tasks, waking every pending poller — not just the most recently
-/// registered one — when the wrapped stream has something ready.
-///
-/// # Why concurrent polling has to be handled at all
-///
-/// [`DuplexStream::read`](crate::DuplexStream::read) takes `&self`, so
-/// nothing at the Rust type level stops a JavaScript caller from invoking
-/// it twice without awaiting the first promise — `&self` only rules out
-/// concurrent *mutation*, not a second overlapping read. Today the only
-/// thing enforcing "one read in flight" is a JS-side convention
-/// (`_readInFlight` in `src/index.ts`), which this crate cannot see or
-/// enforce: the compiled native method is itself public API, callable by
-/// anything that loads the addon directly, and a future edit to the TS
-/// wrapper could silently drop that discipline. So "two tasks poll the same
-/// [`SharedStream`] at once" has to be treated as a real input this type
-/// must handle correctly, not a scenario ruled out elsewhere.
-///
-/// # Why a waiter list, not a single waker slot
-///
-/// The streams [`SharedStream`] wraps ([`tokio::sync::mpsc::Receiver`], an
-/// `h2`-backed [`tonic::Streaming`]) each have
-/// exactly one waker slot: registering a new waker silently replaces
-/// whatever was registered before. If [`SharedStream::poll_next`] forwarded
-/// each caller's own waker straight through, a second concurrent poller
-/// would clobber the first one's registration, and the first poller would
-/// never be woken again — permanently stranded, no error, no panic, just a
-/// `read()` promise that never resolves. Instead, [`SharedStream::poll_next`]
-/// always registers its own stable [`SharedStreamWaker`] proxy with the
-/// wrapped stream, and keeps every real caller's waker in the `waiters`
-/// list on [`SharedStreamState`]; when the wrapped stream wakes the proxy,
-/// it wakes every waiter in that list, so each pending task gets a chance
-/// to re-poll and race for the next item instead of being silently
-/// dropped.
+/// Fans out stream wakeups to all pending readers, including synchronous self-wakes.
 struct SharedStream<St> {
   state: Arc<StdMutex<SharedStreamState<St>>>,
+  waiters: Arc<StdMutex<Vec<std::task::Waker>>>,
 }
 
 impl<St> Clone for SharedStream<St> {
   fn clone(&self) -> Self {
     Self {
       state: Arc::clone(&self.state),
+      waiters: Arc::clone(&self.waiters),
     }
   }
 }
@@ -203,10 +124,8 @@ impl<St> Clone for SharedStream<St> {
 impl<St> SharedStream<St> {
   fn new(inner: St) -> Self {
     Self {
-      state: Arc::new(StdMutex::new(SharedStreamState {
-        stream: inner,
-        waiters: Vec::new(),
-      })),
+      state: Arc::new(StdMutex::new(SharedStreamState { stream: inner })),
+      waiters: Arc::new(StdMutex::new(Vec::new())),
     }
   }
 }
@@ -223,36 +142,26 @@ where
   ) -> std::task::Poll<Option<Self::Item>> {
     let this = self.get_mut();
     let mut guard = this.state.lock().expect("state lock");
-
-    // `state`'s lock is held across the wrapped stream's own `poll_next`
-    // below. `SharedStreamWaker::wake_by_ref` also takes that lock, but
-    // only to drain `waiters` -- it drops the guard before calling
-    // `.wake()` on any of them, so a wakeup delivered asynchronously (the
-    // normal case) never re-enters here. This *would* deadlock if `St`
-    // ever called `cx.waker().wake()` synchronously from inside its own
-    // `poll_next` (self-wake) -- `tokio::sync::mpsc::Receiver` and
-    // `h2`-backed `tonic::Streaming`, the two real backends `St` is
-    // instantiated with, only ever register the waker and return, so this
-    // doesn't happen in practice; it would need to stay true of any future
-    // wrapped stream too.
-    let proxy_waker = futures::task::waker(Arc::new(SharedStreamWaker {
-      state: Arc::clone(&this.state),
-    }));
-    let mut proxy_cx = std::task::Context::from_waker(&proxy_waker);
-
-    match guard.stream.poll_next_unpin(&mut proxy_cx) {
-      std::task::Poll::Ready(item) => std::task::Poll::Ready(item),
-      std::task::Poll::Pending => {
-        if !guard
-          .waiters
-          .iter()
-          .any(|waiter| waiter.will_wake(cx.waker()))
-        {
-          guard.waiters.push(cx.waker().clone());
-        }
-        std::task::Poll::Pending
+    {
+      let mut waiters = this.waiters.lock().expect("waiters lock");
+      if !waiters.iter().any(|waiter| waiter.will_wake(cx.waker())) {
+        waiters.push(cx.waker().clone());
       }
     }
+    // The proxy never locks the stream, so a stream can wake itself while polled.
+    let proxy_waker = futures::task::waker(Arc::new(SharedStreamWaker {
+      waiters: Arc::clone(&this.waiters),
+    }));
+    let mut proxy_cx = std::task::Context::from_waker(&proxy_waker);
+    let result = guard.stream.poll_next_unpin(&mut proxy_cx);
+    if result.is_ready() {
+      this
+        .waiters
+        .lock()
+        .expect("waiters lock")
+        .retain(|waiter| !waiter.will_wake(cx.waker()));
+    }
+    result
   }
 }
 /// Shared engine behind `DuplexStream`/`DuplexStreamDeshred`.
@@ -261,9 +170,8 @@ where
 /// those wraps one concrete instantiation (`Sk` = its gRPC sink type, `St` =
 /// its gRPC stream type) and forwards `read`/`close`/`write_raw` here.
 struct DuplexStreamInner<Sk, St> {
-  /// Read side consumed by `read()`. Polls the gRPC stream directly and
-  /// encodes each update to protobuf bytes.
-  readable: SharedStream<ProtoEncodedSt<St>>,
+  /// Read side consumed by `read()`. Polls the gRPC stream directly.
+  readable: SharedStream<St>,
   /// Write side used by `write_raw()`. Requests are sent directly to the
   /// gRPC sink.
   ///
@@ -283,7 +191,7 @@ struct DuplexStreamInner<Sk, St> {
 impl<Sk, St> DuplexStreamInner<Sk, St> {
   fn new(sink: Sk, stream: St) -> Self {
     Self {
-      readable: SharedStream::new(ProtoEncodedSt { wrapped: stream }),
+      readable: SharedStream::new(stream),
       writable: Arc::new(StdMutex::new(Some(sink))),
       terminal_error: Arc::new(StdMutex::new(None)),
     }
@@ -351,31 +259,43 @@ impl<Sk, St> DuplexStreamInner<Sk, St> {
     })
   }
 
-  async fn recv_update_or_error(
-    mut readable: SharedStream<ProtoEncodedSt<St>>,
+  async fn recv_item_or_error<T, E>(
+    mut readable: SharedStream<St>,
     terminal_error: Arc<StdMutex<Option<napi::Error>>>,
     failure_message: &str,
-  ) -> Result<Option<Vec<u8>>>
+  ) -> Result<Option<T>>
   where
-    St: TryStream + Unpin + Send + 'static,
-    St::Ok: prost::Message + Send + 'static,
-    St::Error: std::error::Error + Send + Sync + 'static,
+    St: Stream<Item = std::result::Result<T, E>> + Unpin + Send + 'static,
+    E: std::error::Error + Send + Sync + 'static,
   {
     let read_fut = poll_fn(|cx| readable.poll_next_unpin(cx));
     match read_fut.await {
-      Some(Ok(update_bytes)) => Ok(Some(update_bytes)),
+      Some(Ok(item)) => Ok(Some(item)),
       Some(Err(status)) => Err(napi_error_with_cause(
         napi::Status::GenericFailure,
         failure_message,
         &status,
       )),
-      // Stream end. If a send failure captured a terminal error first,
-      // surface that instead of a silent graceful EOF.
       None => match get_terminal_error(&terminal_error) {
         Some(error) => Err(error),
         None => Ok(None),
       },
     }
+  }
+
+  async fn recv_update_or_error<T, E>(
+    readable: SharedStream<St>,
+    terminal_error: Arc<StdMutex<Option<napi::Error>>>,
+    failure_message: &str,
+  ) -> Result<Option<Vec<u8>>>
+  where
+    St: Stream<Item = std::result::Result<T, E>> + Unpin + Send + 'static,
+    T: prost::Message,
+    E: std::error::Error + Send + Sync + 'static,
+  {
+    Self::recv_item_or_error(readable, terminal_error, failure_message)
+      .await
+      .map(|item| item.map(|message| message.encode_to_vec()))
   }
 }
 
@@ -525,7 +445,7 @@ impl DuplexStream {
   }
 
   async fn recv_update_or_error(
-    readable: SharedStream<ProtoEncodedSt<GeyserStream>>,
+    readable: SharedStream<GeyserStream>,
     terminal_error: Arc<StdMutex<Option<napi::Error>>>,
   ) -> Result<Option<Vec<u8>>> {
     DuplexStreamInner::<SubscribeRequestSink, GeyserStream>::recv_update_or_error(
@@ -648,7 +568,7 @@ impl DuplexStreamDeshred {
   }
 
   async fn recv_update_or_error(
-    readable: SharedStream<ProtoEncodedSt<SubscribeDeshredStream>>,
+    readable: SharedStream<SubscribeDeshredStream>,
     terminal_error: Arc<StdMutex<Option<napi::Error>>>,
   ) -> Result<Option<Vec<u8>>> {
     DuplexStreamInner::<SubscribeDeshredRequestSink, SubscribeDeshredStream>::recv_update_or_error(
@@ -662,7 +582,7 @@ impl DuplexStreamDeshred {
 
 #[cfg(test)]
 mod tests {
-  use crate::{DuplexStream, DuplexStreamDeshred, DuplexStreamInner, ProtoEncodedSt, SharedStream};
+  use crate::{DuplexStream, DuplexStreamDeshred, DuplexStreamInner, SharedStream};
   use futures::channel::mpsc as futures_mpsc;
   use futures::StreamExt;
   use napi::bindgen_prelude::Buffer;
@@ -827,16 +747,11 @@ mod tests {
   /// Just the read side, independent of a writable sink — used by the
   /// `recv_*` tests below, which don't touch `writable` at all.
   fn make_test_readable() -> (
-    SharedStream<ProtoEncodedSt<GeyserStream>>,
+    SharedStream<GeyserStream>,
     tokio::sync::mpsc::Sender<std::result::Result<SubscribeUpdate, tonic::Status>>,
   ) {
     let (mock_tx, mock_rx) = tokio::sync::mpsc::channel(16);
-    (
-      SharedStream::new(ProtoEncodedSt {
-        wrapped: GeyserStream::mock(mock_rx),
-      }),
-      mock_tx,
-    )
+    (SharedStream::new(GeyserStream::mock(mock_rx)), mock_tx)
   }
 
   // ---------------------------------------------------------------------
@@ -845,6 +760,36 @@ mod tests {
   // are thin forwarders into this, so there is nothing type-specific left
   // to re-verify per wrapper.
   // ---------------------------------------------------------------------
+
+  #[test]
+  fn shared_stream_forwards_synchronous_self_wakes() {
+    let mut first = true;
+    let inner = futures::stream::poll_fn(move |cx| {
+      if first {
+        first = false;
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+      } else {
+        std::task::Poll::Ready(Some(42))
+      }
+    });
+    struct WakeFlag(AtomicBool);
+    impl futures::task::ArcWake for WakeFlag {
+      fn wake_by_ref(this: &Arc<Self>) {
+        this.0.store(true, Ordering::SeqCst);
+      }
+    }
+    let flag = Arc::new(WakeFlag(AtomicBool::new(false)));
+    let waker = futures::task::waker(Arc::clone(&flag));
+    let mut cx = std::task::Context::from_waker(&waker);
+    let mut stream = SharedStream::new(inner);
+    assert!(stream.poll_next_unpin(&mut cx).is_pending());
+    assert!(flag.0.load(Ordering::SeqCst));
+    assert_eq!(
+      stream.poll_next_unpin(&mut cx),
+      std::task::Poll::Ready(Some(42))
+    );
+  }
 
   #[tokio::test]
   async fn close_drops_sink_and_receiver_observes_shutdown() {
@@ -1299,7 +1244,7 @@ mod tests {
     }
 
     assert_eq!(
-      readable.state.lock().expect("state lock").waiters.len(),
+      readable.waiters.lock().expect("waiters lock").len(),
       1,
       "repeated polls with an equivalent waker should collapse to a single waiter"
     );
@@ -1318,7 +1263,7 @@ mod tests {
     ));
 
     assert_eq!(
-      readable.state.lock().expect("state lock").waiters.len(),
+      readable.waiters.lock().expect("waiters lock").len(),
       2,
       "a distinct caller should still be tracked as its own waiter"
     );

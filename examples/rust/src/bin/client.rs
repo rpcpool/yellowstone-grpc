@@ -30,10 +30,10 @@ use {
             subscribe_request_filter_accounts_filter_lamports::Cmp as AccountsFilterLamports,
             subscribe_request_filter_accounts_filter_memcmp::Data as AccountsFilterMemcmpOneof,
             subscribe_update::UpdateOneof,
-            subscribe_update_deshred::UpdateOneof as DeshredUpdateOneof, CommitmentLevel,
-            SubscribeDeshredRequest, SubscribeRequest, SubscribeRequestAccountsDataSlice,
-            SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
-            SubscribeRequestFilterAccountsFilterLamports,
+            subscribe_update_deshred::UpdateOneof as DeshredUpdateOneof, BlockFooterVotesAggregate,
+            CommitmentLevel, SubscribeDeshredRequest, SubscribeRequest,
+            SubscribeRequestAccountsDataSlice, SubscribeRequestFilterAccounts,
+            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterAccountsFilterLamports,
             SubscribeRequestFilterAccountsFilterMemcmp, SubscribeRequestFilterBlockFooter,
             SubscribeRequestFilterBlocks, SubscribeRequestFilterBlocksMeta,
             SubscribeRequestFilterDeshredTransactions, SubscribeRequestFilterEntry,
@@ -999,9 +999,19 @@ async fn geyser_subscribe(
                                 "bankHash": bs58::encode(msg.bank_hash).into_string(),
                                 "blockProducerTimeNanos": msg.block_producer_time_nanos,
                                 "blockUserAgent": String::from_utf8_lossy(&msg.block_user_agent),
-                                "blockFinalCert": msg.block_final_cert.map(|cert| bs58::encode(cert).into_string()),
-                                "skipRewardCert": msg.skip_reward_cert.map(|cert| bs58::encode(cert).into_string()),
-                                "notarRewardCert": msg.notar_reward_cert.map(|cert| bs58::encode(cert).into_string()),
+                                "blockFinalCert": msg.block_final_cert.map(|cert| json!({
+                                    "slot": cert.slot,
+                                    "finalAggregate": cert.final_aggregate.map(votes_aggregate_json),
+                                    "notarAggregate": cert.notar_aggregate.map(votes_aggregate_json),
+                                })),
+                                "skipRewardCert": msg.skip_reward_cert.map(|cert| json!({
+                                    "slot": cert.slot,
+                                    "aggregate": cert.aggregate.map(votes_aggregate_json),
+                                })),
+                                "notarRewardCert": msg.notar_reward_cert.map(|cert| json!({
+                                    "slot": cert.slot,
+                                    "aggregate": cert.aggregate.map(votes_aggregate_json),
+                                })),
                             }),
                         );
                     }
@@ -1273,6 +1283,15 @@ fn create_pretty_entry(msg: SubscribeUpdateEntry) -> anyhow::Result<Value> {
         "executedTransactionCount": msg.executed_transaction_count,
         "startingTransactionIndex": msg.starting_transaction_index,
     }))
+}
+
+fn votes_aggregate_json(aggregate: BlockFooterVotesAggregate) -> Value {
+    json!({
+        "signatureKind": aggregate.signature_kind,
+        "signature": bs58::encode(&aggregate.signature).into_string(),
+        "blockId": bs58::encode(&aggregate.block_id).into_string(),
+        "signerBitmap": bs58::encode(&aggregate.signer_bitmap).into_string(),
+    })
 }
 
 fn print_update(kind: &str, created_at: SystemTime, filters: &[String], value: Value) {

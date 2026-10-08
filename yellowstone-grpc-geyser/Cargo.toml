@@ -64,13 +64,16 @@ url = { workspace = true, features = ["serde"] }
 notify = { workspace = true }
 
 # Agave Monorepo
+agave-feature-set = { workspace = true }
 agave-geyser-plugin-interface = { workspace = true }
+agave-votor-messages = { workspace = true, features = ["agave-unstable-api"] }
 solana-entry = { workspace = true }
 solana-logger = { workspace = true }
 
 # Solana SDK
 solana-account = { workspace = true }
 solana-account-decoder = { workspace = true, features = ["agave-unstable-api"] }
+solana-bls-signatures = { workspace = true }
 solana-clock = { workspace = true }
 solana-commitment-config = { workspace = true }
 solana-hash = { workspace = true }

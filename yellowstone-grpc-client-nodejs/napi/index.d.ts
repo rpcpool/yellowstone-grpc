@@ -84,6 +84,8 @@ export declare class GrpcClient {
    * which handles Node stream lifecycle and protobuf payload decoding.
    */
   subscribe(initialRequestBytes?: Buffer | undefined | null): Promise<DuplexStream>
+  /** Opens a subscription that emits updates and bank recovery events. */
+  subscribeWithReconnect(initialRequestBytes?: Buffer | undefined | null): Promise<ReconnectDuplexStream>
   /**
    * Creates a deshred subscription stream bound to this client connection.
    *
@@ -94,6 +96,12 @@ export declare class GrpcClient {
   subscribeDeshred(): Promise<DuplexStreamDeshred>
 }
 
+export declare class ReconnectDuplexStream {
+  read(): Promise<JsReconnectEvent | undefined | null>
+  close(): void
+  writeRaw(requestBytes: Buffer): Promise<undefined>
+}
+
 export const AUTORECONNECT_FILTER_KEY: string
 
 export declare function decodeTxError(err: Array<number>): string
@@ -101,6 +109,12 @@ export declare function decodeTxError(err: Array<number>): string
 export declare function encodeDeshredTx(data: Uint8Array, encoding: WasmUiTransactionEncoding): string
 
 export declare function encodeTx(data: Uint8Array, encoding: WasmUiTransactionEncoding, maxSupportedTransactionVersion: number | undefined | null, showRewards: boolean): string
+
+export interface JsBankRef {
+  generation: string
+  slot: string
+  bankId: string
+}
 
 /**
  * ChannelOptions from JS.
@@ -135,6 +149,10 @@ export declare const enum JsCompressionAlgorithm {
   Zstd = 1
 }
 
+export declare const enum JsDiscardReason {
+  IncompleteDelivery = 'IncompleteDelivery'
+}
+
 export interface JsReconnectBackoff {
   initialIntervalMs?: number
   multiplier?: number
@@ -142,21 +160,32 @@ export interface JsReconnectBackoff {
 }
 
 export interface JsReconnectConfig {
-  /**
-   * Omitted or true enables reconnect when this object is provided.
-   * False keeps legacy no-reconnect behavior.
-   */
+  /** Unsupported. Call subscribeWithReconnect to enable recovery. */
   enabled?: boolean
   backoff?: JsReconnectBackoff
+  /** Unsupported for bank recovery. */
   slotRetention?: number
-  /** Omitted defaults to RecoverMissedData. */
+  /** Unsupported for bank recovery. */
   policy?: JsReconnectPolicy
 }
+
+export type JsReconnectEvent =
+  | { type: 'Update', generation: string, update: Buffer }
+  | { type: 'DiscardBanks', banks: Array<JsBankRef>, reason: JsDiscardReason, replacement: JsReplacementReplay, winners: Array<JsSlotWinner> }
 
 export declare const enum JsReconnectPolicy {
   RecoverMissedData = 'RecoverMissedData',
   SkipMissedData = 'SkipMissedData'
 }
+
+export interface JsReplacementReplay {
+  fromSlot: string
+  generation: string
+}
+
+export type JsSlotWinner =
+  | { type: 'Unknown', slot: string }
+  | { type: 'Finalized', slot: string, blockhash: string }
 
 export declare const enum WasmUiTransactionEncoding {
   Binary = 0,
