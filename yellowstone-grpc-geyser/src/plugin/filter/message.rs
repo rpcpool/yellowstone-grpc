@@ -148,13 +148,15 @@ impl WeightScales {
                     .saturating_mul(self.account_units(&update.account));
             }
             FilteredUpdateOneof::Transaction(update) => {
-                let units = update
+                let encoded_len = update
                     .transaction
                     .transaction
                     .get_pre_encoded()
-                    .map_or(1, |encoded| {
-                        data_units(1, encoded.len(), self.transaction_data_unit)
-                    });
+                    .map_or_else(
+                        || TransactionEncoder::encoded_len(&update.transaction.transaction),
+                        Vec::len,
+                    );
+                let units = data_units(1, encoded_len, self.transaction_data_unit);
                 return self.transaction.max(1).saturating_mul(units);
             }
             FilteredUpdateOneof::Entry(_) | FilteredUpdateOneof::EntryUpdateParent(_) => self.entry,
