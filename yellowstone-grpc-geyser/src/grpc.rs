@@ -2836,14 +2836,27 @@ mod tests {
         let transaction_update =
             || update(FilteredUpdateOneof::transaction(Arc::clone(&transaction)));
 
-        assert_eq!(scales.weight(&transaction_update()), 4);
+        assert!(
+            transaction.transaction.get_pre_encoded().is_none(),
+            "live transactions can reach the queue before pre-encoding"
+        );
+        let uncached_len = TransactionEncoder::encoded_len(&transaction.transaction);
+        assert!(
+            units(uncached_len) > 1,
+            "the test transaction spans several units"
+        );
+        assert_eq!(
+            scales.weight(&transaction_update()),
+            4 * units(uncached_len)
+        );
+        assert_eq!(count_only.weight(&transaction_update()), 4);
 
         TransactionEncoder::pre_encode(&transaction.transaction);
         let len = transaction
             .transaction
             .get_pre_encoded()
             .map_or(0, Vec::len);
-        assert!(units(len) > 1, "the test transaction spans several units");
+        assert_eq!(len, uncached_len);
         assert_eq!(scales.weight(&transaction_update()), 4 * units(len));
         assert_eq!(count_only.weight(&transaction_update()), 4);
 
