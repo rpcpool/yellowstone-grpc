@@ -10,6 +10,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-10-12
+
+- yellowstone-grpc-geyser 16.1.2
+
+### Fixes
+
+- plugin: a `from_slot` subscription at processed no longer loses the start of a bank that was in progress when the client connected. The client gets that bank whole when it seals, and replay stays sealed-only. A replay with nothing to return no longer ends the subscription.
+
 ## 2026-10-07
 
 - yellowstone-grpc-geyser 16.1.1
