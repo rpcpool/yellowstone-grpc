@@ -6,6 +6,7 @@ use {
     std::{
         collections::{HashMap, HashSet},
         str::FromStr,
+        time::Duration,
     },
     tokio_stream::StreamExt,
     yellowstone_grpc_e2e_macros::test_helper,
@@ -14,12 +15,12 @@ use {
         cuckoo::CompressedAccountFilterSet,
         geyser::{
             subscribe_request_filter_accounts_filter::Filter, subscribe_update::UpdateOneof,
-            SlotStatus, SubscribeRequest, SubscribeRequestFilterAccounts,
-            SubscribeRequestFilterAccountsFilter, SubscribeRequestFilterBlocks,
-            SubscribeRequestFilterSlots, SubscribeRequestFilterTransactions,
-            SubscribeUpdateAccount, SubscribeUpdateBlock, SubscribeUpdateBlockMeta,
-            SubscribeUpdateEntry, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
-            TokenAccountExpansionControlFlag,
+            CommitmentLevel as CommitmentLevelProto, SlotStatus, SubscribeRequest,
+            SubscribeRequestFilterAccounts, SubscribeRequestFilterAccountsFilter,
+            SubscribeRequestFilterBlocks, SubscribeRequestFilterSlots,
+            SubscribeRequestFilterTransactions, SubscribeUpdateAccount, SubscribeUpdateBlock,
+            SubscribeUpdateBlockMeta, SubscribeUpdateEntry, SubscribeUpdateTransaction,
+            SubscribeUpdateTransactionInfo, TokenAccountExpansionControlFlag,
         },
     },
 };
@@ -283,6 +284,7 @@ pub async fn subscribe_should_receive_full_blocks(config: &RunConfig) -> Result<
 }
 
 /// Verifies replay support by receiving historical data from a replay request.
+/// At processed, each bank must also bring all its transactions before its block meta.
 #[test_helper(name = "replay", tags = ["replay"])]
 pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
     let mut client = new_client(config).await?;
@@ -393,6 +395,96 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
         "should have received updates for all expected slots in the replay"
     );
 
+    // Several connects: each one lands in a different part of the bank in progress.
+    for round in 0..PROCESSED_REPLAY_ROUNDS {
+        tokio::time::timeout(
+            PROCESSED_REPLAY_TIMEOUT,
+            replay_delivers_whole_banks_at_processed(config, round),
+        )
+        .await
+        .context("timed out waiting for block metas")??;
+    }
+
+    Ok(())
+}
+
+const PROCESSED_REPLAY_ROUNDS: usize = 5;
+const PROCESSED_REPLAY_SLOTS_BEHIND: u64 = 3;
+const PROCESSED_REPLAY_SLOTS_AFTER: u64 = 3;
+const PROCESSED_REPLAY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Connects at processed a few slots behind the tip and reads a few slots past it.
+/// Every bank must bring `executed_transaction_count` transactions before its block meta.
+async fn replay_delivers_whole_banks_at_processed(config: &RunConfig, round: usize) -> Result<()> {
+    let mut client = new_client(config).await?;
+    let tip = client
+        .get_slot(Some(CommitmentLevelProto::Processed))
+        .await
+        .context("get_slot")?
+        .slot;
+    let from_slot = tip.saturating_sub(PROCESSED_REPLAY_SLOTS_BEHIND);
+    let subscription = SubscribeRequest {
+        transactions: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterTransactions::default(),
+        )]),
+        blocks_meta: HashMap::from([("test".to_string(), Default::default())]),
+        commitment: Some(CommitmentLevelProto::Processed as i32),
+        from_slot: Some(from_slot),
+        ..Default::default()
+    };
+    let mut stream = client
+        .subscribe_once(subscription)
+        .await
+        .context("subscription should succeed")?;
+    log::info!("round {round}: tip {tip}, subscribing from slot {from_slot}");
+
+    // Keyed by (slot, bank_id): one slot can have more than one bank.
+    let mut signatures: HashMap<(u64, u64), HashSet<Vec<u8>>> = HashMap::new();
+    let mut checked = HashSet::new();
+    let mut short = Vec::new();
+
+    while let Some(update) = stream.next().await {
+        let update = update.context("stream should yield updates without error")?;
+        match update.update_oneof {
+            Some(UpdateOneof::Transaction(tx)) => {
+                let key = (tx.slot, tx.bank_id);
+                if let Some(info) = tx.transaction {
+                    signatures.entry(key).or_default().insert(info.signature);
+                }
+            }
+            Some(UpdateOneof::BlockMeta(meta)) => {
+                let key = (meta.slot, meta.bank_id);
+                // A bank that seals while the client connects comes in the replay and live.
+                if meta.slot < from_slot || !checked.insert(key) {
+                    continue;
+                }
+                let received = signatures.remove(&key).map_or(0, |set| set.len() as u64);
+                log::info!(
+                    "round {round}: slot {} bank {}: {received}/{} transactions",
+                    meta.slot,
+                    meta.bank_id,
+                    meta.executed_transaction_count,
+                );
+                if received != meta.executed_transaction_count {
+                    short.push((meta.slot, received, meta.executed_transaction_count));
+                }
+                if meta.slot >= tip + PROCESSED_REPLAY_SLOTS_AFTER {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    ensure!(
+        !checked.is_empty(),
+        "round {round}: no block meta received from slot {from_slot}"
+    );
+    ensure!(
+        short.is_empty(),
+        "round {round}: banks with missing transactions as (slot, received, executed): {short:?}"
+    );
     Ok(())
 }
 
