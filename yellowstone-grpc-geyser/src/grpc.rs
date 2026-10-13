@@ -455,6 +455,12 @@ pub enum ReplayedResponse {
 
 type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<ReplayedResponse>);
 
+/// Why a live update could not be queued for a client.
+enum TrySendFailure {
+    Full,
+    Closed,
+}
+
 /// How a live message reaches a client that holds banks it joined part way through.
 enum HeldMessage<'a> {
     Pass,
@@ -482,14 +488,6 @@ fn route_held<'a>(held: &mut Vec<BankId>, message: &'a Message) -> HeldMessage<'
         }
         None => HeldMessage::Skip,
     }
-}
-
-/// The transactions, accounts and entries of a sealed block as individual messages.
-fn block_content(block: &MessageBlock) -> Vec<Message> {
-    let transactions = block.transactions.iter().cloned().map(Message::Transaction);
-    let accounts = block.accounts.iter().cloned().map(Message::Account);
-    let entries = block.entries.iter().cloned().map(Message::Entry);
-    transactions.chain(accounts).chain(entries).collect()
 }
 
 ///
@@ -1781,30 +1779,50 @@ impl GrpcService {
                     };
 
                     for message in messages.iter() {
-                        let sealed_content = match route_held(&mut held_banks, message) {
-                            HeldMessage::Skip => continue,
-                            HeldMessage::Sealed(block) => block_content(block),
-                            HeldMessage::Pass => Vec::new(),
+                        let sealed_block = if held_banks.is_empty() {
+                            None
+                        } else {
+                            match route_held(&mut held_banks, message) {
+                                HeldMessage::Skip => continue,
+                                HeldMessage::Sealed(block) => Some(block),
+                                HeldMessage::Pass => None,
+                            }
                         };
-                        let messages = sealed_content.iter().chain(std::iter::once(message));
-                        for message in messages.flat_map(|message| session.filter.get_updates(message, Some(commitment))) {
-                            match stream_tx.try_send(Ok(message)) {
-                                Ok(()) => {
-                                    metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
-                                }
-                                Err(TrySendError::Full(_)) => {
-                                    error!("client #{}: lagged to send an update", session.subscriber_id);
-                                    task_tracker.spawn(async move {
-                                        let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
-                                    });
-                                    session.disconnect_reason = "client_channel_full";
-                                    break 'outer;
-                                }
-                                Err(TrySendError::Closed(_)) => {
-                                    error!("client #{}: stream closed", session.subscriber_id);
-                                    session.disconnect_reason = "client_closed";
-                                    break 'outer;
-                                }
+                        let try_send = |update: FilteredUpdate| match stream_tx.try_send(Ok(update)) {
+                            Ok(()) => {
+                                metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+                                Ok(())
+                            }
+                            Err(TrySendError::Full(_)) => Err(TrySendFailure::Full),
+                            Err(TrySendError::Closed(_)) => Err(TrySendFailure::Closed),
+                        };
+                        let sealed_content_sent = match sealed_block {
+                            Some(block) => session
+                                .filter
+                                .try_for_each_block_content_update(block, try_send),
+                            None => Ok(()),
+                        };
+                        let sent = sealed_content_sent.and_then(|()| {
+                            session
+                                .filter
+                                .get_updates(message, Some(commitment))
+                                .into_iter()
+                                .try_for_each(try_send)
+                        });
+                        match sent {
+                            Ok(()) => {}
+                            Err(TrySendFailure::Full) => {
+                                error!("client #{}: lagged to send an update", session.subscriber_id);
+                                task_tracker.spawn(async move {
+                                    let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
+                                });
+                                session.disconnect_reason = "client_channel_full";
+                                break 'outer;
+                            }
+                            Err(TrySendFailure::Closed) => {
+                                error!("client #{}: stream closed", session.subscriber_id);
+                                session.disconnect_reason = "client_closed";
+                                break 'outer;
                             }
                         }
                     }
