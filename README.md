@@ -310,6 +310,28 @@ Example NDJSON payload:
 }
 ```
 
+#### TCP send buffer (`grpc.so_sndbuf`)
+
+`grpc.so_sndbuf` sets `SO_SNDBUF` on every accepted TCP connection, including TLS listeners. It has no effect on Unix domain sockets. It applies to both `grpc.listen` and the legacy `grpc.address`.
+
+- When unset (`null`, the default), the kernel auto-tunes each connection's send buffer between the bounds in `net.ipv4.tcp_wmem`.
+- When set, auto-tuning is disabled for those sockets and the buffer is fixed.
+- Linux doubles the requested value (to account for bookkeeping overhead), so the effective buffer is about 2× what you configure. For example, `3276800` gives an effective buffer of about 6.25 MiB.
+- The requested value is capped by `net.core.wmem_max`.
+- The value must be a JSON integer (in bytes).
+
+The send buffer holds both in-flight (unacknowledged) bytes and bytes not yet sent, so it caps per-connection throughput at roughly `effective buffer / RTT`. Size it to cover the bandwidth-delay product of your farthest clients.
+
+```json
+{
+   "grpc": {
+      "so_sndbuf": 3276800
+   }
+}
+```
+
+To inspect the effective value on a running node, check the `tb` field of `skmem` in `ss -tm state established '( sport = :10000 )'`.
+
 #### Legacy fields
 
 `grpc.address`, `grpc.tls_config`, and `grpc.cert_dir` are legacy and deprecated in favor of `grpc.listen`.

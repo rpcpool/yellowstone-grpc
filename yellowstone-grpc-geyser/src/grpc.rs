@@ -971,7 +971,8 @@ impl GrpcService {
                             addr,
                             TcpConfiguration::default()
                                 .with_nodelay(Some(true))
-                                .with_keepalive(Some(Duration::from_secs(20))),
+                                .with_keepalive(Some(Duration::from_secs(20)))
+                                .with_so_sndbuf(config.so_sndbuf),
                         )
                         .await?;
                         log::info!(
@@ -1019,7 +1020,8 @@ impl GrpcService {
                             addr,
                             TcpConfiguration::default()
                                 .with_nodelay(Some(true))
-                                .with_keepalive(Some(Duration::from_secs(20))),
+                                .with_keepalive(Some(Duration::from_secs(20)))
+                                .with_so_sndbuf(config.so_sndbuf),
                         )
                         .await?;
                         log::info!(

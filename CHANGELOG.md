@@ -10,6 +10,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-10-14
+
+- yellowstone-grpc-geyser 16.1.3
+
+### Features
+
+- plugin: new `grpc.so_sndbuf` config option sets `SO_SNDBUF` on accepted TCP connections (including TLS listeners). When set, kernel send-buffer auto-tuning is disabled for those sockets. Linux doubles the requested value. Unset by default, which keeps auto-tuning.
+
 ## 2026-10-12
 
 - yellowstone-grpc-geyser 16.1.2

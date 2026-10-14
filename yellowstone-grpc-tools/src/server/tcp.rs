@@ -18,6 +18,8 @@ pub struct TcpConfiguration {
     pub nodelay: Option<bool>,
     /// Optional TCP keepalive parameters.
     pub keepalive: Option<TcpKeepalive>,
+    /// Optional TCP send buffer size.
+    pub so_sndbuf: Option<usize>,
 }
 
 impl TcpConfiguration {
@@ -32,6 +34,12 @@ impl TcpConfiguration {
         self.keepalive = keepalive.and_then(|k| make_keepalive(Some(k), None, None));
         self
     }
+
+    /// Sets optional TCP send buffer size for accepted sockets.
+    pub fn with_so_sndbuf(mut self, so_sndbuf: Option<usize>) -> Self {
+        self.so_sndbuf = so_sndbuf;
+        self
+    }
 }
 
 /// Stream of accepted TCP connections.
@@ -40,6 +48,7 @@ pub struct TcpIncoming {
     listener: TcpListenerStream,
     nodelay: Option<bool>,
     keepalive: Option<TcpKeepalive>,
+    so_sndbuf: Option<usize>,
 }
 
 impl TcpIncoming {
@@ -50,6 +59,7 @@ impl TcpIncoming {
             listener: TcpListenerStream::new(listener),
             nodelay: None,
             keepalive: None,
+            so_sndbuf: None,
         })
     }
 
@@ -63,6 +73,7 @@ impl TcpIncoming {
             listener: TcpListenerStream::new(listener),
             nodelay: config.nodelay,
             keepalive: config.keepalive,
+            so_sndbuf: config.so_sndbuf,
         })
     }
 
@@ -79,7 +90,7 @@ impl Stream for TcpIncoming {
         let polled = Pin::new(&mut self.listener).poll_next(cx);
 
         if let Poll::Ready(Some(Ok(stream))) = &polled {
-            set_accepted_socket_options(stream, self.nodelay, &self.keepalive);
+            set_accepted_socket_options(stream, self.nodelay, &self.keepalive, self.so_sndbuf);
         }
 
         polled
@@ -91,6 +102,7 @@ fn set_accepted_socket_options(
     stream: &TcpStream,
     nodelay: Option<bool>,
     keepalive: &Option<TcpKeepalive>,
+    so_sndbuf: Option<usize>,
 ) {
     if let Some(nodelay) = nodelay {
         if let Err(e) = stream.set_nodelay(nodelay) {
@@ -102,6 +114,13 @@ fn set_accepted_socket_options(
         let sock_ref = socket2::SockRef::from(&stream);
         if let Err(e) = sock_ref.set_tcp_keepalive(keepalive) {
             log::warn!("error trying to set TCP_KEEPALIVE: {e}");
+        }
+    }
+
+    if let Some(so_sndbuf) = so_sndbuf {
+        let sock_ref = socket2::SockRef::from(&stream);
+        if let Err(e) = sock_ref.set_send_buffer_size(so_sndbuf) {
+            log::warn!("error trying to set TCP's SO_SNDBUF: {e}");
         }
     }
 }

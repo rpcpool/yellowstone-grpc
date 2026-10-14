@@ -416,6 +416,12 @@ pub struct ConfigGrpc {
 
     #[serde(default)]
     pub listen: Option<Vec<ListenConfig>>,
+
+    ///
+    /// Optional TCP send buffer size for accepted sockets.
+    ///
+    #[serde(default)]
+    pub so_sndbuf: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
