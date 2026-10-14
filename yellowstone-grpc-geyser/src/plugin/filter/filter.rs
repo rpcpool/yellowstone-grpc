@@ -425,11 +425,7 @@ impl Filter {
                 .accounts
                 .get_updates(message, &self.accounts_data_slice),
             Message::Slot(message) => self.slots.get_updates(message, commitment),
-            Message::Transaction(message) => {
-                let mut updates = self.transactions.get_updates(message);
-                updates.append(&mut self.transactions_status.get_updates(message));
-                updates
-            }
+            Message::Transaction(message) => self.get_transaction_updates(message),
             Message::DeshredTransaction(_) | Message::DeshredUpdateParent(_) => {
                 FilteredUpdates::new()
             }
@@ -439,6 +435,46 @@ impl Filter {
             Message::Block(message) => self.blocks.get_updates(message, &self.accounts_data_slice),
             Message::BlockMeta(message) => self.blocks_meta.get_updates(message),
         }
+    }
+
+    fn get_transaction_updates(&self, message: &Arc<MessageTransaction>) -> FilteredUpdates {
+        let mut updates = self.transactions.get_updates(message);
+        updates.append(&mut self.transactions_status.get_updates(message));
+        updates
+    }
+
+    /// Calls `f` with each update for the transactions, accounts and entries of a sealed
+    /// block, as [`Self::get_updates`] yields them one by one. Stops at the first error.
+    pub(crate) fn try_for_each_block_content_update<E>(
+        &self,
+        block: &MessageBlock,
+        mut f: impl FnMut(FilteredUpdate) -> Result<(), E>,
+    ) -> Result<(), E> {
+        // A kind the client did not subscribe to is not walked at all.
+        if !self.transactions.filters.is_empty() || !self.transactions_status.filters.is_empty() {
+            for message in &block.transactions {
+                self.get_transaction_updates(message)
+                    .into_iter()
+                    .try_for_each(&mut f)?;
+            }
+        }
+        if !matches!(self.accounts.strategy, FilterAccountsStrategy::Empty) {
+            for message in &block.accounts {
+                self.accounts
+                    .get_updates(message, &self.accounts_data_slice)
+                    .into_iter()
+                    .try_for_each(&mut f)?;
+            }
+        }
+        if !self.entries.filters.is_empty() {
+            for message in &block.entries {
+                self.entries
+                    .get_updates(message)
+                    .into_iter()
+                    .try_for_each(&mut f)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn get_pong_msg(&self) -> Option<FilteredUpdate> {
@@ -2550,6 +2586,107 @@ mod tests {
 
     pub(super) fn create_filter_names() -> FilterNames {
         FilterNames::new(64, 1024, Duration::from_secs(1))
+    }
+
+    #[test]
+    fn block_content_updates_match_updates_sent_one_by_one() {
+        use crate::plugin::filter::fixtures;
+
+        let transactions = vec![
+            fixtures::message_transaction(
+                solana_signature::Signature::from([1; 64]),
+                vec![Pubkey::new_unique()],
+                false,
+                Default::default(),
+            ),
+            fixtures::message_transaction(
+                solana_signature::Signature::from([2; 64]),
+                vec![Pubkey::new_unique()],
+                true,
+                Default::default(),
+            ),
+        ];
+        let accounts = vec![
+            fixtures::simple_message_account(Pubkey::new_unique(), Pubkey::new_unique()),
+            fixtures::simple_message_account(Pubkey::new_unique(), Pubkey::new_unique()),
+        ];
+        let entries = vec![fixtures::message_entry(1, 0)];
+        let block =
+            fixtures::message_block(1, transactions.clone(), accounts.clone(), entries.clone());
+        let one_by_one = |filter: &Filter| {
+            let transactions = transactions.iter().cloned().map(Message::Transaction);
+            let accounts = accounts.iter().cloned().map(Message::Account);
+            let entries = entries.iter().cloned().map(Message::Entry);
+            transactions
+                .chain(accounts)
+                .chain(entries)
+                .flat_map(|message| filter.get_updates(&message, None))
+                .collect::<Vec<_>>()
+        };
+        let create = |request: SubscribeRequest| {
+            Filter::new(
+                &request,
+                &FilterLimits::default(),
+                &mut create_filter_names(),
+            )
+            .unwrap()
+        };
+        let name = || "test".to_string();
+
+        // Every kind subscribed: three transaction updates (one is a vote), two accounts, one entry.
+        let filter = create(SubscribeRequest {
+            transactions: HashMap::from([(name(), Default::default())]),
+            transactions_status: HashMap::from([(
+                name(),
+                SubscribeRequestFilterTransactions {
+                    vote: Some(true),
+                    ..Default::default()
+                },
+            )]),
+            accounts: HashMap::from([(name(), Default::default())]),
+            entry: HashMap::from([(name(), Default::default())]),
+            ..Default::default()
+        });
+        let block_content = |filter: &Filter| {
+            let mut updates = Vec::new();
+            let walked = filter.try_for_each_block_content_update(&block, |update| {
+                updates.push(update);
+                Ok::<(), ()>(())
+            });
+            assert_eq!(walked, Ok(()));
+            updates
+        };
+        let updates = block_content(&filter);
+        assert_eq!(updates.len(), 6);
+        assert_eq!(updates, one_by_one(&filter));
+
+        // The walk stops at the first error.
+        let mut seen = 0;
+        let walked = filter.try_for_each_block_content_update(&block, |_update| {
+            seen += 1;
+            if seen == 2 {
+                Err("full")
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(walked, Err("full"));
+        assert_eq!(seen, 2);
+
+        // A kind the client did not subscribe to yields nothing.
+        let filter = create(SubscribeRequest {
+            entry: HashMap::from([(name(), Default::default())]),
+            ..Default::default()
+        });
+        let updates = block_content(&filter);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates, one_by_one(&filter));
+
+        let filter = create(SubscribeRequest {
+            slots: HashMap::from([(name(), Default::default())]),
+            ..Default::default()
+        });
+        assert!(block_content(&filter).is_empty());
     }
 
     #[test]
