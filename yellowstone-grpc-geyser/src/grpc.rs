@@ -23,7 +23,9 @@ use {
                 name::FilterNames,
                 DeshredFilter, Filter,
             },
-            message::{CommitmentLevel, Message, MessageBlockMeta, MessageSlot, SlotStatus},
+            message::{
+                CommitmentLevel, Message, MessageBlock, MessageBlockMeta, MessageSlot, SlotStatus,
+            },
             proto::geyser_server::{Geyser, GeyserServer},
         },
         ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
@@ -43,7 +45,7 @@ use {
         pki_types::{pem::PemObject, PrivateKeyDer},
         ServerConfig,
     },
-    solana_clock::{Slot, MAX_RECENT_BLOCKHASHES},
+    solana_clock::{BankId, Slot, MAX_RECENT_BLOCKHASHES},
     std::{
         collections::HashMap,
         io,
@@ -446,11 +448,47 @@ impl<'a> Iterator for ReplayResponseMessageIterator<'a> {
 }
 
 pub enum ReplayedResponse {
-    Messages(Vec<ReplayResponseMessageType>),
+    /// The sealed banks, and at `processed` the ids of the banks still in progress.
+    Messages(Vec<ReplayResponseMessageType>, Vec<BankId>),
     Lagged(Slot),
 }
 
 type ReplayStoredSlotsRequest = (CommitmentLevel, Slot, oneshot::Sender<ReplayedResponse>);
+
+/// Why a live update could not be queued for a client.
+enum TrySendFailure {
+    Full,
+    Closed,
+}
+
+/// How a live message reaches a client that holds banks it joined part way through.
+enum HeldMessage<'a> {
+    Pass,
+    Skip,
+    /// The sealed block of a held bank, which stands in for its live content.
+    Sealed(&'a MessageBlock),
+}
+
+/// Holds back the live content of the banks in `held` and releases a bank when it seals.
+fn route_held<'a>(held: &mut Vec<BankId>, message: &'a Message) -> HeldMessage<'a> {
+    let (bank_id, block) = match message {
+        Message::Account(account) => (account.bank_id, None),
+        Message::Transaction(transaction) => (Some(transaction.bank_id), None),
+        Message::Entry(entry) => (Some(entry.bank_id), None),
+        Message::Block(block) => (Some(block.meta.bank_id), Some(block)),
+        _ => (None, None),
+    };
+    let Some(position) = bank_id.and_then(|id| held.iter().position(|held| *held == id)) else {
+        return HeldMessage::Pass;
+    };
+    match block {
+        Some(block) => {
+            held.swap_remove(position);
+            HeldMessage::Sealed(block)
+        }
+        None => HeldMessage::Skip,
+    }
+}
 
 ///
 /// Tracks the number of active subscriptions per subscriber ID. When a new subscription is created, it increments the count for that subscriber ID. When the subscription is dropped, it decrements the count. If the count exceeds the configured limit,
@@ -1531,9 +1569,11 @@ impl GrpcService {
                         }
                     }
 
-                    if !replayed_messages.is_empty() {
-                        let _ = tx.send(ReplayedResponse::Messages(replayed_messages));
-                    }
+                    let partial_banks = match commitment {
+                        CommitmentLevel::Processed => block_machine.unsealed_bank_ids(),
+                        _ => Vec::new(),
+                    };
+                    let _ = tx.send(ReplayedResponse::Messages(replayed_messages, partial_banks));
                 }
                 else => {
                     // No new messages and replay request channel closed, can only happen on shutdown
@@ -1590,6 +1630,7 @@ impl GrpcService {
 
         let mut commitment = session.filter.get_commitment_level();
         let mut messages_rx = broadcast.subscribe(commitment);
+        let mut held_banks: Vec<BankId> = Vec::new();
 
         'outer: loop {
             observe_subscriber_queue_size(
@@ -1629,6 +1670,7 @@ impl GrpcService {
                             if commitment_new != commitment {
                                 commitment = commitment_new;
                                 messages_rx = broadcast.subscribe(commitment);
+                                held_banks.clear();
                             }
 
                             if let Some(from_slot) = from_slot {
@@ -1652,7 +1694,10 @@ impl GrpcService {
                                 }
 
                                 let messages_batch = match rx.await {
-                                    Ok(ReplayedResponse::Messages(messages_batch)) => messages_batch,
+                                    Ok(ReplayedResponse::Messages(messages_batch, partial_banks)) => {
+                                        held_banks = partial_banks;
+                                        messages_batch
+                                    }
                                     Ok(ReplayedResponse::Lagged(slot)) => {
                                         info!("client #{}: broadcast from {from_slot} is not available", session.subscriber_id);
                                         task_tracker.spawn(async move {
@@ -1734,24 +1779,50 @@ impl GrpcService {
                     };
 
                     for message in messages.iter() {
-                        for message in session.filter.get_updates(message, Some(commitment)) {
-                            match stream_tx.try_send(Ok(message)) {
-                                Ok(()) => {
-                                    metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
-                                }
-                                Err(TrySendError::Full(_)) => {
-                                    error!("client #{}: lagged to send an update", session.subscriber_id);
-                                    task_tracker.spawn(async move {
-                                        let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
-                                    });
-                                    session.disconnect_reason = "client_channel_full";
-                                    break 'outer;
-                                }
-                                Err(TrySendError::Closed(_)) => {
-                                    error!("client #{}: stream closed", session.subscriber_id);
-                                    session.disconnect_reason = "client_closed";
-                                    break 'outer;
-                                }
+                        let sealed_block = if held_banks.is_empty() {
+                            None
+                        } else {
+                            match route_held(&mut held_banks, message) {
+                                HeldMessage::Skip => continue,
+                                HeldMessage::Sealed(block) => Some(block),
+                                HeldMessage::Pass => None,
+                            }
+                        };
+                        let try_send = |update: FilteredUpdate| match stream_tx.try_send(Ok(update)) {
+                            Ok(()) => {
+                                metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+                                Ok(())
+                            }
+                            Err(TrySendError::Full(_)) => Err(TrySendFailure::Full),
+                            Err(TrySendError::Closed(_)) => Err(TrySendFailure::Closed),
+                        };
+                        let sealed_content_sent = match sealed_block {
+                            Some(block) => session
+                                .filter
+                                .try_for_each_block_content_update(block, try_send),
+                            None => Ok(()),
+                        };
+                        let sent = sealed_content_sent.and_then(|()| {
+                            session
+                                .filter
+                                .get_updates(message, Some(commitment))
+                                .into_iter()
+                                .try_for_each(try_send)
+                        });
+                        match sent {
+                            Ok(()) => {}
+                            Err(TrySendFailure::Full) => {
+                                error!("client #{}: lagged to send an update", session.subscriber_id);
+                                task_tracker.spawn(async move {
+                                    let _ = stream_tx.send(Err(Status::internal("lagged to send an update"))).await;
+                                });
+                                session.disconnect_reason = "client_channel_full";
+                                break 'outer;
+                            }
+                            Err(TrySendFailure::Closed) => {
+                                error!("client #{}: stream closed", session.subscriber_id);
+                                session.disconnect_reason = "client_closed";
+                                break 'outer;
                             }
                         }
                     }
@@ -2917,7 +2988,7 @@ mod tests {
                     )))
                 })
                 .collect();
-            let _ = response_tx.send(ReplayedResponse::Messages(messages));
+            let _ = response_tx.send(ReplayedResponse::Messages(messages, Vec::new()));
         }
     }
 
@@ -3260,6 +3331,297 @@ mod tests {
             );
         }
         assert!(tracker.counters.lock().unwrap().get("sub-1").is_none());
+    }
+
+    mod from_slot_partial_slot {
+        use {
+            super::{super::*, *},
+            crate::{
+                block_reconstruction_v2::MUST_HAVE_SYSVAR_ACCOUNTS,
+                plugin::message::MessageBlockMeta, stream::tokio::BatchStreamUnboundedReceiver,
+            },
+            solana_hash::Hash,
+            tokio::sync::watch,
+            yellowstone_grpc_proto::prelude::{
+                SubscribeRequestFilterTransactions, SubscribeUpdateBlockMeta,
+            },
+        };
+
+        const REPLAYED_SLOT: u64 = 10;
+        const PARTIAL_SLOT: u64 = 11;
+
+        fn slot_message(slot: u64, status: SlotStatus) -> Message {
+            Message::Slot(Arc::new(fixtures::message_slot(slot, status)))
+        }
+
+        fn transaction(slot: u64, id: u8) -> Message {
+            let mut transaction = fixtures::message_transaction(
+                Signature::from([id; 64]),
+                vec![Pubkey::default()],
+                false,
+                Default::default(),
+            );
+            let message = Arc::get_mut(&mut transaction).unwrap();
+            message.slot = slot;
+            message.bank_id = slot;
+            Message::Transaction(transaction)
+        }
+
+        /// CreatedBank and the sysvar writes every bank needs before it can seal.
+        fn open_slot(slot: u64) -> Vec<Message> {
+            let mut messages = vec![slot_message(slot, SlotStatus::CreatedBank)];
+            for pubkey in MUST_HAVE_SYSVAR_ACCOUNTS {
+                let mut account = fixtures::simple_message_account(pubkey, Pubkey::default());
+                let message = Arc::get_mut(&mut account).unwrap();
+                message.slot = slot;
+                message.bank_id = Some(slot);
+                messages.push(Message::Account(account));
+            }
+            messages
+        }
+
+        /// The entry, block meta and commitment statuses that seal and confirm a slot.
+        fn close_slot(slot: u64, transactions: u64) -> Vec<Message> {
+            vec![
+                Message::Entry(fixtures::message_entry(slot, 0)),
+                Message::BlockMeta(Arc::new(MessageBlockMeta::from_update_oneof(
+                    SubscribeUpdateBlockMeta {
+                        slot,
+                        parent_slot: slot - 1,
+                        blockhash: Hash::new_unique().to_string(),
+                        executed_transaction_count: transactions,
+                        entries_count: 1,
+                        bank_id: slot,
+                        ..Default::default()
+                    },
+                    Timestamp::from(SystemTime::now()),
+                ))),
+                slot_message(slot, SlotStatus::Processed),
+                slot_message(slot, SlotStatus::Confirmed),
+            ]
+        }
+
+        fn create_filter(commitment: CommitmentLevelProto) -> Filter {
+            let config = SubscribeRequest {
+                slots: HashMap::from([("test".into(), SubscribeRequestFilterSlots::default())]),
+                transactions: HashMap::from([(
+                    "test".into(),
+                    SubscribeRequestFilterTransactions::default(),
+                )]),
+                commitment: Some(commitment as i32),
+                ..Default::default()
+            };
+            Filter::new(
+                &config,
+                &FilterLimits::default(),
+                &mut fixtures::filter_names(),
+            )
+            .unwrap()
+        }
+
+        async fn wait_broadcast(
+            rx: &mut broadcast::Receiver<BroadcastedMessage>,
+            mut found: impl FnMut(&Message) -> bool,
+        ) {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let batch = rx.recv().await.expect("broadcast open");
+                    if batch.iter().any(&mut found) {
+                        return;
+                    }
+                }
+            })
+            .await
+            .expect("timed out waiting for a broadcast");
+        }
+
+        /// Reads the client stream until `slot` is confirmed.
+        /// Returns the transaction ids received on the way, per slot, in order.
+        async fn read_until_confirmed(
+            stream_rx: &mut LoadAwareReceiver<TonicResult<FilteredUpdate>>,
+            slot: u64,
+        ) -> Vec<(u64, u8)> {
+            let mut transactions = Vec::new();
+            loop {
+                let update = tokio::time::timeout(Duration::from_secs(5), stream_rx.recv())
+                    .await
+                    .expect("timed out waiting for an update")
+                    .expect("stream closed")
+                    .expect("status error");
+                match update.message {
+                    FilteredUpdateOneof::Transaction(update) => {
+                        let id = update.transaction.transaction.signature.as_ref()[0];
+                        transactions.push((update.slot, id));
+                    }
+                    FilteredUpdateOneof::Slot(update)
+                        if update.slot == slot && update.status == SlotStatus::Confirmed =>
+                    {
+                        return transactions;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        /// A client subscribes with `from_slot` while `PARTIAL_SLOT` is half delivered.
+        /// Returns every transaction id the client received, per slot, in order.
+        async fn subscribe_during_partial_slot(
+            commitment: CommitmentLevelProto,
+            from_slot: u64,
+            reconstruction_behind: bool,
+        ) -> Vec<(u64, u8)> {
+            let (messages_tx, messages_rx) = mpsc::unbounded_channel();
+            let (block_reconstruction_tx, mut gate_rx) = mpsc::unbounded_channel();
+            let (gate_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
+            // Passes messages on to block reconstruction, and keeps them while paused.
+            let (pause, mut paused) = watch::channel(false);
+            tokio::spawn(async move {
+                while let Some(message) = gate_rx.recv().await {
+                    if paused.wait_for(|paused| !paused).await.is_err()
+                        || gate_tx.send(message).is_err()
+                    {
+                        return;
+                    }
+                }
+            });
+            let (replay_tx, replay_rx) = mpsc::channel(1);
+            let broadcast = SubscriberChannels::new(1024, 1024, 1024);
+            let mut processed_rx = broadcast.subscribe(CommitmentLevel::Processed);
+            let mut confirmed_rx = broadcast.subscribe(CommitmentLevel::Confirmed);
+            tokio::spawn(GrpcService::geyser_loop(
+                BatchStreamUnboundedReceiver::new(messages_rx),
+                broadcast.clone(),
+                block_reconstruction_tx.clone(),
+            ));
+            tokio::spawn(GrpcService::block_reconstruction_loop(
+                BatchStreamUnboundedReceiver::new(block_reconstruction_rx),
+                broadcast.clone(),
+                Some(replay_rx),
+                None,
+                100,
+            ));
+            // Commitment statuses skip the geyser loop, as in `update_bank_status`.
+            let send = |messages: Vec<Message>| {
+                for message in messages {
+                    let commitment_status = matches!(
+                        &message,
+                        Message::Slot(slot)
+                            if matches!(slot.status, SlotStatus::Processed | SlotStatus::Confirmed)
+                    );
+                    if commitment_status {
+                        block_reconstruction_tx
+                            .send(BlockReconstructionMessage::Single(message))
+                            .unwrap();
+                    } else {
+                        messages_tx.send(message).unwrap();
+                    }
+                }
+            };
+
+            // A complete slot that the replay buffer can serve.
+            send(open_slot(REPLAYED_SLOT));
+            send(vec![
+                transaction(REPLAYED_SLOT, 1),
+                transaction(REPLAYED_SLOT, 2),
+            ]);
+            send(close_slot(REPLAYED_SLOT, 2));
+            wait_broadcast(
+                &mut confirmed_rx,
+                |message| matches!(message, Message::BlockMeta(meta) if meta.slot == REPLAYED_SLOT),
+            )
+            .await;
+
+            // The first half of the next slot goes out before the client connects.
+            pause.send_replace(reconstruction_behind);
+            send(open_slot(PARTIAL_SLOT));
+            send(vec![transaction(PARTIAL_SLOT, 1)]);
+            wait_broadcast(
+                &mut processed_rx,
+                |message| matches!(message, Message::Transaction(tx) if tx.slot == PARTIAL_SLOT),
+            )
+            .await;
+
+            let (client_tx, client_rx) = mpsc::unbounded_channel();
+            let (stream_tx, mut stream_rx) = load_aware_channel(1024, WeightScales::default());
+            let session = ClientSession::new(
+                0,
+                Some("test".into()),
+                "test".into(),
+                CancellationToken::new(),
+                None,
+            );
+            tokio::spawn(GrpcService::client_loop(
+                session,
+                stream_tx,
+                client_rx,
+                None,
+                broadcast,
+                Some(replay_tx),
+                TaskTracker::new(),
+                None,
+            ));
+            client_tx
+                .send(Some((Some(from_slot), create_filter(commitment))))
+                .unwrap();
+
+            // The replay ends while the partial slot is still open.
+            let mut received = Vec::new();
+            if from_slot <= REPLAYED_SLOT {
+                received = read_until_confirmed(&mut stream_rx, REPLAYED_SLOT).await;
+            }
+            pause.send_replace(false);
+
+            send(vec![transaction(PARTIAL_SLOT, 2)]);
+            send(close_slot(PARTIAL_SLOT, 2));
+            received.extend(read_until_confirmed(&mut stream_rx, PARTIAL_SLOT).await);
+            received
+        }
+
+        const EVERY_TRANSACTION: [(u64, u8); 4] = [
+            (REPLAYED_SLOT, 1),
+            (REPLAYED_SLOT, 2),
+            (PARTIAL_SLOT, 1),
+            (PARTIAL_SLOT, 2),
+        ];
+
+        #[tokio::test]
+        async fn processed_client_gets_the_whole_partial_slot() {
+            let received = subscribe_during_partial_slot(
+                CommitmentLevelProto::Processed,
+                REPLAYED_SLOT,
+                false,
+            )
+            .await;
+            assert_eq!(received, EVERY_TRANSACTION);
+        }
+
+        #[tokio::test]
+        #[ignore = "block reconstruction cannot name a bank it has not taken in yet"]
+        async fn processed_client_gets_a_partial_slot_reconstruction_has_not_seen() {
+            let received =
+                subscribe_during_partial_slot(CommitmentLevelProto::Processed, REPLAYED_SLOT, true)
+                    .await;
+            assert_eq!(received, EVERY_TRANSACTION);
+        }
+
+        #[tokio::test]
+        async fn processed_client_can_start_at_the_partial_slot() {
+            let received =
+                subscribe_during_partial_slot(CommitmentLevelProto::Processed, PARTIAL_SLOT, false)
+                    .await;
+            assert_eq!(received, EVERY_TRANSACTION[2..]);
+        }
+
+        #[tokio::test]
+        async fn confirmed_client_gets_the_whole_partial_slot() {
+            let received = subscribe_during_partial_slot(
+                CommitmentLevelProto::Confirmed,
+                REPLAYED_SLOT,
+                false,
+            )
+            .await;
+            assert_eq!(received, EVERY_TRANSACTION);
+        }
     }
 
     mod geyser_loop_routing {
