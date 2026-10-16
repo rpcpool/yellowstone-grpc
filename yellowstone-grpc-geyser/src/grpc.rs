@@ -972,7 +972,9 @@ impl GrpcService {
                             TcpConfiguration::default()
                                 .with_nodelay(Some(true))
                                 .with_keepalive(Some(Duration::from_secs(20)))
-                                .with_so_sndbuf(config.so_sndbuf),
+                                .with_so_sndbuf(config.so_sndbuf)
+                                .with_tcp_notsent_lowat(config.tcp_notsent_lowat)
+                                .with_tcp_congestion(config.tcp_congestion.clone()),
                         )
                         .await?;
                         log::info!(
@@ -1021,7 +1023,9 @@ impl GrpcService {
                             TcpConfiguration::default()
                                 .with_nodelay(Some(true))
                                 .with_keepalive(Some(Duration::from_secs(20)))
-                                .with_so_sndbuf(config.so_sndbuf),
+                                .with_so_sndbuf(config.so_sndbuf)
+                                .with_tcp_notsent_lowat(config.tcp_notsent_lowat)
+                                .with_tcp_congestion(config.tcp_congestion.clone()),
                         )
                         .await?;
                         log::info!(

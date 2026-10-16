@@ -422,6 +422,14 @@ pub struct ConfigGrpc {
     ///
     #[serde(default)]
     pub so_sndbuf: Option<usize>,
+
+    /// Optional TCP_NOTSENT_LOWAT for accepted sockets, in bytes.
+    #[serde(default)]
+    pub tcp_notsent_lowat: Option<u32>,
+
+    /// Optional TCP congestion control algorithm for accepted sockets, such as "cubic".
+    #[serde(default)]
+    pub tcp_congestion: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

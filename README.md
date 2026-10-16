@@ -332,6 +332,43 @@ The send buffer holds both in-flight (unacknowledged) bytes and bytes not yet se
 
 To inspect the effective value on a running node, check the `tb` field of `skmem` in `ss -tm state established '( sport = :10000 )'`.
 
+#### TCP unsent data limit (`grpc.tcp_notsent_lowat`)
+
+`grpc.tcp_notsent_lowat` sets `TCP_NOTSENT_LOWAT` on every accepted TCP connection, in bytes. It applies to the same listeners as `grpc.so_sndbuf`. It works on Linux only.
+
+- It limits the bytes that the kernel holds for a connection but has not sent yet. Bytes in flight do not count, so unlike `grpc.so_sndbuf` it does not cap throughput.
+- When a connection reaches the limit, new data waits in the plugin's queue for that client instead of in kernel memory.
+- When unset (`null`, the default) or `0`, the host's `net.ipv4.tcp_notsent_lowat` applies. The kernel default is `4294967295`, which means no limit.
+- Smaller values keep less unsent data per connection, but the plugin must refill the socket more often during large messages. `131072` (128 KiB) is a reasonable start.
+
+```json
+{
+   "grpc": {
+      "tcp_notsent_lowat": 131072
+   }
+}
+```
+
+On a running node, `notsent` in `ss -ti state established '( sport = :10000 )'` shows the unsent bytes of each connection.
+
+#### TCP congestion control (`grpc.tcp_congestion`)
+
+`grpc.tcp_congestion` sets `TCP_CONGESTION` on every accepted TCP connection, for example `"cubic"` or `"bbr"`. It applies to the same listeners as `grpc.so_sndbuf`. It works on Linux and FreeBSD only.
+
+- When unset (`null`, the default), connections use the host's `net.ipv4.tcp_congestion_control`.
+- Without `CAP_NET_ADMIN`, the kernel accepts only algorithms that are loaded and listed in `net.ipv4.tcp_allowed_congestion_control`. If the kernel rejects the name, the plugin logs a warning and the connection keeps the host default.
+- Linux has no per-connection option for slow start after idle. BBR ignores `net.ipv4.tcp_slow_start_after_idle`. With other algorithms, such as `cubic`, set it to `0` on the host. Otherwise a connection that was idle for longer than its retransmission timeout restarts with a smaller congestion window.
+
+```json
+{
+   "grpc": {
+      "tcp_congestion": "cubic"
+   }
+}
+```
+
+On a running node, `ss -ti state established '( sport = :10000 )'` shows the algorithm of each connection.
+
 #### Legacy fields
 
 `grpc.address`, `grpc.tls_config`, and `grpc.cert_dir` are legacy and deprecated in favor of `grpc.listen`.

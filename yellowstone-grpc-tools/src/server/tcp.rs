@@ -20,6 +20,10 @@ pub struct TcpConfiguration {
     pub keepalive: Option<TcpKeepalive>,
     /// Optional TCP send buffer size.
     pub so_sndbuf: Option<usize>,
+    /// Optional limit of unsent bytes (TCP_NOTSENT_LOWAT).
+    pub tcp_notsent_lowat: Option<u32>,
+    /// Optional TCP congestion control algorithm, such as "cubic".
+    pub tcp_congestion: Option<String>,
 }
 
 impl TcpConfiguration {
@@ -40,6 +44,18 @@ impl TcpConfiguration {
         self.so_sndbuf = so_sndbuf;
         self
     }
+
+    /// Sets optional TCP_NOTSENT_LOWAT for accepted sockets.
+    pub fn with_tcp_notsent_lowat(mut self, tcp_notsent_lowat: Option<u32>) -> Self {
+        self.tcp_notsent_lowat = tcp_notsent_lowat;
+        self
+    }
+
+    /// Sets optional TCP congestion control algorithm for accepted sockets.
+    pub fn with_tcp_congestion(mut self, tcp_congestion: Option<String>) -> Self {
+        self.tcp_congestion = tcp_congestion;
+        self
+    }
 }
 
 /// Stream of accepted TCP connections.
@@ -49,6 +65,8 @@ pub struct TcpIncoming {
     nodelay: Option<bool>,
     keepalive: Option<TcpKeepalive>,
     so_sndbuf: Option<usize>,
+    tcp_notsent_lowat: Option<u32>,
+    tcp_congestion: Option<String>,
 }
 
 impl TcpIncoming {
@@ -60,6 +78,8 @@ impl TcpIncoming {
             nodelay: None,
             keepalive: None,
             so_sndbuf: None,
+            tcp_notsent_lowat: None,
+            tcp_congestion: None,
         })
     }
 
@@ -74,6 +94,8 @@ impl TcpIncoming {
             nodelay: config.nodelay,
             keepalive: config.keepalive,
             so_sndbuf: config.so_sndbuf,
+            tcp_notsent_lowat: config.tcp_notsent_lowat,
+            tcp_congestion: config.tcp_congestion,
         })
     }
 
@@ -118,6 +140,26 @@ fn set_accepted_socket_options(stream: &TcpStream, config: Pin<&TcpIncoming>) {
             log::warn!("error trying to set TCP's SO_SNDBUF: {e}");
         }
     }
+
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    if let Some(lowat) = config.tcp_notsent_lowat {
+        let sock_ref = socket2::SockRef::from(&stream);
+        if let Err(e) = sock_ref.set_tcp_notsent_lowat(lowat) {
+            log::warn!("error trying to set TCP_NOTSENT_LOWAT: {e}");
+        }
+    }
+
+    #[cfg(any(target_os = "freebsd", target_os = "linux"))]
+    if let Some(congestion) = config.tcp_congestion.as_deref() {
+        let sock_ref = socket2::SockRef::from(&stream);
+        if let Err(e) = sock_ref.set_tcp_congestion(congestion.as_bytes()) {
+            log::warn!("error trying to set TCP_CONGESTION to {congestion}: {e}");
+        }
+    }
+
+    // avoid clippy errors for targets that do not use these fields.
+    let _ = &config.tcp_notsent_lowat;
+    let _ = &config.tcp_congestion;
 }
 
 fn make_keepalive(
@@ -192,10 +234,14 @@ mod tests {
     fn tcp_configuration_builder_sets_fields() {
         let cfg = TcpConfiguration::default()
             .with_nodelay(Some(true))
-            .with_keepalive(Some(Duration::from_secs(5)));
+            .with_keepalive(Some(Duration::from_secs(5)))
+            .with_tcp_notsent_lowat(Some(131_072))
+            .with_tcp_congestion(Some("cubic".to_owned()));
 
         assert_eq!(cfg.nodelay, Some(true));
         assert!(cfg.keepalive.is_some());
+        assert_eq!(cfg.tcp_notsent_lowat, Some(131_072));
+        assert_eq!(cfg.tcp_congestion.as_deref(), Some("cubic"));
     }
 
     #[test]
@@ -229,5 +275,60 @@ mod tests {
             .expect("client task should complete")
             .expect("client should connect");
         assert!(accepted.nodelay().expect("reading nodelay should succeed"));
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn accept_with_config(config: TcpConfiguration) -> (TcpStream, TcpStream) {
+        let mut incoming = TcpIncoming::bind_with_config("127.0.0.1:0", config)
+            .await
+            .expect("listener should bind");
+        let addr = incoming
+            .local_addr()
+            .expect("listener should expose address");
+        let client = tokio::spawn(async move { TcpStream::connect(addr).await });
+
+        let accepted = incoming
+            .next()
+            .await
+            .expect("stream should yield connection")
+            .expect("accept should succeed");
+        let client = client
+            .await
+            .expect("client task should complete")
+            .expect("client should connect");
+        (accepted, client)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn bind_with_config_applies_tcp_options_to_accepted_stream() {
+        // reno is built into every kernel and differs from the usual default, cubic.
+        let (accepted, _client) = accept_with_config(
+            TcpConfiguration::default()
+                .with_tcp_notsent_lowat(Some(131_072))
+                .with_tcp_congestion(Some("reno".to_owned())),
+        )
+        .await;
+
+        let sock_ref = socket2::SockRef::from(&accepted);
+        let lowat = sock_ref
+            .tcp_notsent_lowat()
+            .expect("reading TCP_NOTSENT_LOWAT should succeed");
+        assert_eq!(lowat, 131_072);
+        let congestion = sock_ref
+            .tcp_congestion()
+            .expect("reading TCP_CONGESTION should succeed");
+        assert_eq!(congestion.split(|&b| b == 0).next(), Some(&b"reno"[..]));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn unknown_congestion_algorithm_still_accepts_the_connection() {
+        let (accepted, _client) = accept_with_config(
+            TcpConfiguration::default().with_tcp_congestion(Some("no-such-algorithm".to_owned())),
+        )
+        .await;
+
+        assert!(accepted.peer_addr().is_ok());
     }
 }

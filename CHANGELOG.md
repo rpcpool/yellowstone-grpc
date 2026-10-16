@@ -17,6 +17,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Features
 
 - plugin: new `grpc.so_sndbuf` config option sets `SO_SNDBUF` on accepted TCP connections (including TLS listeners). When set, kernel send-buffer auto-tuning is disabled for those sockets. Linux doubles the requested value. Unset by default, which keeps auto-tuning.
+- plugin: new `grpc.tcp_notsent_lowat` config option sets `TCP_NOTSENT_LOWAT` on accepted TCP connections. Unset by default, which keeps the host's `net.ipv4.tcp_notsent_lowat`.
+- plugin: new `grpc.tcp_congestion` config option sets `TCP_CONGESTION` on accepted TCP connections, for example `cubic`. Unset by default, which keeps the host's `net.ipv4.tcp_congestion_control`.
 
 ## 2026-10-12
 

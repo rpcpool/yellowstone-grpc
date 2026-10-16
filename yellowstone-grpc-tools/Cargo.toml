@@ -32,4 +32,4 @@ tokio-rustls = { workspace = true }
 x509-parser = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-socket2 = { workspace = true }
+socket2 = { workspace = true, features = ["all"] }

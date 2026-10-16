@@ -35,6 +35,8 @@
     "server_initial_connection_window_size": null,
     "server_initial_stream_window_size": null,
     "so_sndbuf": null,
+    "tcp_notsent_lowat": null,
+    "tcp_congestion": null,
     "max_decoding_message_size": "4_194_304",
     "snapshot_plugin_channel_capacity": null,
     "snapshot_client_channel_capacity": "50_000_000",
