@@ -139,7 +139,11 @@ impl BankBuffer {
                 {
                     self.musthave_sysvar_accounts_bitmask |= 1 << position;
                 }
-                if message_account.account.pubkey == *ALPENGLOW_CLOCK_ACCOUNT {
+                // The PDA can be prefunded before Alpenglow starts. Only the runtime's
+                // serialized clock account (non-empty data) proves a footer is required.
+                if message_account.account.pubkey == *ALPENGLOW_CLOCK_ACCOUNT
+                    && !message_account.account.data.is_empty()
+                {
                     self.footer_expected = true;
                 }
                 self.accounts.push(Arc::clone(message_account));
@@ -1030,6 +1034,73 @@ mod tests {
         Timestamp::from(SystemTime::now())
     }
 
+    #[test]
+    fn review_prefunded_alpenclock_does_not_stall_a_legacy_bank() {
+        let mut storage = BlockMachineStorage::new(10);
+        drive_bank_to_processed(&mut storage, 1, 1, None);
+        assert!(
+            storage.pop_ready_block().is_some(),
+            "control bank must seal"
+        );
+
+        // A plain System Program transfer can fund this public PDA before Alpenglow.
+        // It produces a system-owned, empty-data account, not an Alpenglow clock.
+        let mut prefund = make_account_msg(2, 2, *ALPENGLOW_CLOCK_ACCOUNT, 1);
+        if let Message::Account(account) = &mut prefund {
+            let account = &mut Arc::make_mut(account).account;
+            account.txn_signature = Some(Signature::from([7; 64]));
+            account.lamports = 1_000_000;
+        }
+        storage.add(make_created_bank_msg(2, Some(1), 2));
+        add_musthave_sysvars(&mut storage, 2, 2);
+        storage.add(prefund);
+        let mut transaction = fixtures::message_transaction(
+            Signature::from([7; 64]),
+            vec![Pubkey::new_from_array([7; 32]), *ALPENGLOW_CLOCK_ACCOUNT],
+            false,
+            Default::default(),
+        );
+        Arc::make_mut(&mut transaction).slot = 2;
+        Arc::make_mut(&mut transaction).bank_id = 2;
+        Arc::make_mut(&mut transaction).transaction.index = 0;
+        storage.add(Message::Transaction(transaction));
+        let mut entry = make_entry_msg(2, 0, 2);
+        if let Message::Entry(entry) = &mut entry {
+            Arc::make_mut(entry).executed_transaction_count = 1;
+        }
+        storage.add(entry);
+        let mut meta = make_block_meta_msg(2, 1, 2);
+        if let Message::BlockMeta(meta) = &mut meta {
+            let meta = Arc::make_mut(meta);
+            meta.executed_transaction_count = 1;
+            meta.entries_count = 1;
+        }
+        storage.add(meta);
+        storage.add(make_commitment_msg(2, Some(1), SlotStatus::Processed, 2));
+
+        let ready = storage.pop_ready_block().is_some();
+        let replay_count = storage
+            .replay_from_slot(2, CommitmentLevel::Processed)
+            .count();
+        println!("prefunded legacy bank: ready={ready}, replay_count={replay_count}");
+        assert!(ready, "a plain transfer to the clock PDA must not make a legacy bank wait for a nonexistent footer");
+        assert_eq!(replay_count, 1);
+    }
+
+    #[test]
+    fn review_real_alpenclock_still_waits_for_its_footer() {
+        let mut storage = BlockMachineStorage::new(10);
+        let mut clock = make_account_msg(3, 3, *ALPENGLOW_CLOCK_ACCOUNT, 1);
+        if let Message::Account(account) = &mut clock {
+            Arc::make_mut(account).account.data = Bytes::from(123456789_i64.to_le_bytes().to_vec());
+        }
+        storage.add(clock);
+        drive_bank_to_processed(&mut storage, 3, 3, None);
+        assert!(storage.pop_ready_block().is_none());
+        storage.add(make_footer_msg(3, 3));
+        assert!(storage.pop_ready_block().is_some());
+    }
+
     fn make_account_msg(slot: u64, bank_id: BankId, pubkey: Pubkey, write_version: u64) -> Message {
         Message::Account(Arc::new(MessageAccount {
             account: MessageAccountInfo {
@@ -1883,7 +1954,11 @@ mod tests {
     ) {
         storage.add(make_created_bank_msg(slot, None, bank_id));
         add_musthave_sysvars(storage, slot, bank_id);
-        storage.add(make_account_msg(slot, bank_id, *ALPENGLOW_CLOCK_ACCOUNT, 1));
+        let mut clock = make_account_msg(slot, bank_id, *ALPENGLOW_CLOCK_ACCOUNT, 1);
+        if let Message::Account(account) = &mut clock {
+            Arc::make_mut(account).account.data = Bytes::copy_from_slice(&123_i64.to_le_bytes());
+        }
+        storage.add(clock);
         storage.add(make_entry_msg(slot, 0, bank_id));
         storage.add(make_block_meta_msg(slot, 0, bank_id));
         storage.add(make_commitment_msg(
