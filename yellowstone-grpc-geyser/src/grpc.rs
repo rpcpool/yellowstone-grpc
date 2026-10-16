@@ -897,7 +897,6 @@ fn load_server_config_from_tls_config(
 pub struct GrpcServiceResult {
     pub snapshot_tx: Option<crossbeam_channel::Sender<Box<Message>>>,
     pub deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
-    pub block_reconstruction_tx: mpsc::UnboundedSender<BlockReconstructionMessage>,
     pub contact_info_tx: mpsc::UnboundedSender<contact_info::ContactInfoNotification>,
     pub broadcast: SubscriberChannels,
     pub blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
@@ -1188,7 +1187,6 @@ impl GrpcService {
         }
 
         {
-            let block_reconstruction_tx = block_reconstruction_tx.clone();
             let broadcast = broadcast.clone();
 
             task_tracker.spawn(async move {
@@ -1271,7 +1269,6 @@ impl GrpcService {
             snapshot_tx,
             deshred_broadcast_tx,
             contact_info_tx,
-            block_reconstruction_tx,
             broadcast,
             blocks_meta_tx,
         })
@@ -1356,8 +1353,8 @@ impl GrpcService {
     {
         const MESSAGE_BATCH_SIZE: usize = 1024;
         // let mut message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
-        // BlockMeta and BlockFooter close the batch and go to block reconstruction only,
-        // which emits them once the block seals.
+        // BlockMeta, BlockFooter and the Processed/Confirmed/Finalized slot statuses close the
+        // batch and go to block reconstruction only, which emits them once the block seals.
         struct PartitionedBuffer {
             message_batch: Vec<Message>,
             seal_gated: Option<Message>,
@@ -1367,8 +1364,16 @@ impl GrpcService {
                 if self.message_batch.len() == self.message_batch.capacity() {
                     return Err(item);
                 }
-                match item {
+                match &item {
                     Message::BlockMeta(_) | Message::BlockFooter(_) => self.seal_gated = Some(item),
+                    Message::Slot(slot)
+                        if matches!(
+                            slot.status,
+                            SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Finalized
+                        ) =>
+                    {
+                        self.seal_gated = Some(item)
+                    }
                     _ => self.message_batch.push(item),
                 }
                 Ok(())
@@ -3491,7 +3496,7 @@ mod tests {
             tokio::spawn(GrpcService::geyser_loop(
                 BatchStreamUnboundedReceiver::new(messages_rx),
                 broadcast.clone(),
-                block_reconstruction_tx.clone(),
+                block_reconstruction_tx,
             ));
             tokio::spawn(GrpcService::block_reconstruction_loop(
                 BatchStreamUnboundedReceiver::new(block_reconstruction_rx),
@@ -3500,21 +3505,9 @@ mod tests {
                 None,
                 100,
             ));
-            // Commitment statuses skip the geyser loop, as in `update_bank_status`.
             let send = |messages: Vec<Message>| {
                 for message in messages {
-                    let commitment_status = matches!(
-                        &message,
-                        Message::Slot(slot)
-                            if matches!(slot.status, SlotStatus::Processed | SlotStatus::Confirmed)
-                    );
-                    if commitment_status {
-                        block_reconstruction_tx
-                            .send(BlockReconstructionMessage::Single(message))
-                            .unwrap();
-                    } else {
-                        messages_tx.send(message).unwrap();
-                    }
+                    messages_tx.send(message).unwrap();
                 }
             };
 
@@ -3628,23 +3621,27 @@ mod tests {
         use {
             super::super::*,
             crate::{
+                block_reconstruction_v2::MUST_HAVE_SYSVAR_ACCOUNTS,
                 plugin::{
                     convert_to,
+                    filter::fixtures,
                     message::{
-                        MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageSlot,
-                        SlotStatus,
+                        MessageBlockMeta, MessageDeshredTransaction, MessageDeshredTransactionInfo,
+                        MessageSlot, SlotStatus,
                     },
                 },
                 stream::tokio::BatchStreamUnboundedReceiver,
             },
             foldhash::{HashSet as FoldHashSet, HashSetExt as _},
             prost_types::Timestamp,
+            solana_hash::Hash,
             solana_message::{legacy::Message as SolMessage, MessageHeader},
             solana_pubkey::Pubkey,
             solana_signature::Signature,
             solana_transaction::{versioned::VersionedTransaction, Transaction},
             std::{sync::Arc, time::SystemTime},
             tokio::sync::{broadcast, mpsc},
+            yellowstone_grpc_proto::prelude::SubscribeUpdateBlockMeta,
         };
 
         struct Harness {
@@ -3804,6 +3801,102 @@ mod tests {
                 total, 3,
                 "deshred channel should see each Slot status once (3 statuses sent => 3 emissions)"
             );
+
+            drop(harness.messages_tx);
+            let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
+            let _ =
+                tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
+        }
+
+        fn bank_status(slot: u64, status: SlotStatus, bank_id: Option<u64>) -> Message {
+            Message::Slot(Arc::new(MessageSlot {
+                slot,
+                parent: Some(slot - 1),
+                status,
+                dead_error: None,
+                created_at: Timestamp::from(SystemTime::now()),
+                bank_id,
+            }))
+        }
+
+        /// CreatedBank, the sysvars, an entry and BlockMeta: everything `bank_id` needs to seal.
+        fn sealed_bank(slot: u64, bank_id: u64) -> Vec<Message> {
+            let mut messages = vec![bank_status(slot, SlotStatus::CreatedBank, Some(bank_id))];
+            for pubkey in MUST_HAVE_SYSVAR_ACCOUNTS {
+                let mut account = fixtures::simple_message_account(pubkey, Pubkey::default());
+                let message = Arc::get_mut(&mut account).unwrap();
+                message.slot = slot;
+                message.bank_id = Some(bank_id);
+                messages.push(Message::Account(account));
+            }
+            let mut entry = fixtures::message_entry(slot, 0);
+            Arc::get_mut(&mut entry).unwrap().bank_id = bank_id;
+            messages.push(Message::Entry(entry));
+            messages.push(Message::BlockMeta(Arc::new(
+                MessageBlockMeta::from_update_oneof(
+                    SubscribeUpdateBlockMeta {
+                        slot,
+                        parent_slot: slot - 1,
+                        blockhash: Hash::new_unique().to_string(),
+                        entries_count: 1,
+                        bank_id,
+                        ..Default::default()
+                    },
+                    Timestamp::from(SystemTime::now()),
+                ),
+            )));
+            messages
+        }
+
+        /// Bank 1 for slot 10 dies, and its repaired replacement, bank 2, is processed. `Dead`
+        /// names a slot, not a bank, so bank 2's Processed must reach block reconstruction after
+        /// that `Dead`, or the `Dead` discards bank 2 too. The statuses keep that order by going
+        /// through geyser_loop, which must not broadcast them itself.
+        #[tokio::test]
+        async fn replacement_bank_after_dead_is_delivered_once_at_processed() {
+            let mut harness = spawn_loop();
+            let mut messages = vec![
+                bank_status(10, SlotStatus::CreatedBank, Some(1)),
+                bank_status(10, SlotStatus::Dead, None),
+            ];
+            messages.extend(sealed_bank(10, 2));
+            messages.push(bank_status(10, SlotStatus::Processed, Some(2)));
+            for message in messages {
+                harness.messages_tx.send(message).unwrap();
+            }
+
+            let is_processed_status = |message: &Message| {
+                matches!(
+                    message,
+                    Message::Slot(slot) if slot.slot == 10 && slot.status == SlotStatus::Processed
+                )
+            };
+            let mut received = Vec::new();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !received.iter().any(is_processed_status) {
+                    let batch = harness.broadcast_rx.recv().await.expect("broadcast open");
+                    received.extend(batch.iter().cloned());
+                }
+            })
+            .await
+            .expect("slot 10 was never delivered at Processed");
+            // Give a duplicate time to show up.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            while let Ok(batch) = harness.broadcast_rx.try_recv() {
+                received.extend(batch.iter().cloned());
+            }
+
+            let processed_statuses: Vec<_> = received
+                .iter()
+                .filter_map(|message| match message {
+                    Message::Slot(slot) if is_processed_status(message) => Some(slot.bank_id),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(processed_statuses, vec![Some(2)]);
+            assert!(received.iter().any(
+                |message| matches!(message, Message::Block(block) if block.meta.bank_id == 2)
+            ));
 
             drop(harness.messages_tx);
             let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;

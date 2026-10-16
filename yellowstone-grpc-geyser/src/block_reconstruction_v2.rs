@@ -352,6 +352,12 @@ pub struct BlockMachineStorage {
     // simply hasn't been resolved as a winner *yet*, which must still be allowed to
     // accumulate normally (see `processed_banks_are_peers_until_one_is_confirmed`).
     discarded_bank_ids: FoldHashMap<BankId, Slot>,
+    // Banks that received their own Processed status, paired with their slot so
+    // `sweep_stale_slots` can age them out. Processed is delivered per bank, not per slot:
+    // agave reports Processed for every bank it freezes, including a replacement for a bank
+    // of the same slot that was already delivered, so a bank in here is delivered at
+    // Processed as soon as it seals, whether or not it is its slot's resolved bank.
+    processed_bank_ids: FoldHashMap<BankId, Slot>,
     // The bank_id currently believed to be a slot's canonical bank. Multiple banks for the
     // same slot can be simultaneously Processed with no precedence between them -- a
     // Processed sighting never sets or changes this (see `handle_commitment_update`) --
@@ -393,6 +399,7 @@ impl BlockMachineStorage {
             banks: FoldHashMap::with_capacity(replayed_capacity),
             slot_to_banks: FoldHashMap::with_capacity(replayed_capacity),
             discarded_bank_ids: FoldHashMap::new(),
+            processed_bank_ids: FoldHashMap::new(),
             resolved_bank_per_slot: FoldHashMap::with_capacity(replayed_capacity),
             slot_min_commitment: FoldHashMap::with_capacity(replayed_capacity),
             slot_commitment_progression_map: FoldHashMap::with_capacity(replayed_capacity),
@@ -471,6 +478,8 @@ impl BlockMachineStorage {
         }
 
         self.discarded_bank_ids
+            .retain(|_, &mut slot| slot >= cutoff);
+        self.processed_bank_ids
             .retain(|_, &mut slot| slot >= cutoff);
     }
 
@@ -629,6 +638,10 @@ impl BlockMachineStorage {
         }
 
         self.bump_slot_commitment(slot, commitment);
+        if commitment == CommitmentLevel::Processed {
+            self.processed_bank_ids.insert(bank_id, slot);
+            self.deliver_own_processed(slot, bank_id);
+        }
     }
 
     /// Replaces `slot`'s resolved bank_id, dropping the live-delivery history that was
@@ -641,7 +654,15 @@ impl BlockMachineStorage {
     /// new winner while preserving that winner's own already-sealed content if present.
     fn supersede_resolved_bank(&mut self, slot: Slot, new_winner: BankId) {
         self.resolved_bank_per_slot.insert(slot, new_winner);
-        self.slot_commitment_progression_map.remove(&slot);
+        // The old winner only ever reached Processed, so only Processed deliveries are
+        // recorded here. The new winner's own one was really delivered, so it is kept and
+        // not sent again.
+        if let Some(progression) = self.slot_commitment_progression_map.get_mut(&slot) {
+            progression.commitment.retain(|u| u.bank_id == new_winner);
+            if progression.commitment.is_empty() {
+                self.slot_commitment_progression_map.remove(&slot);
+            }
+        }
     }
 
     fn discard_losing_banks(&mut self, slot: Slot, winner: BankId) {
@@ -738,11 +759,18 @@ impl BlockMachineStorage {
     /// Infers `slot`'s resolved winning bank_id when it hasn't been named by a direct
     /// Confirmed/Finalized status update yet but there's exactly one known candidate for
     /// it -- geyser doesn't guarantee a direct commitment status update arrives for every
-    /// slot (see `resolved_bank_per_slot`). With more than one still-unresolved candidate,
-    /// which one is canonical genuinely can't be determined here, so it's left unresolved
-    /// and logged (both remain available for Processed-level replay regardless).
+    /// slot (see `resolved_bank_per_slot`). A sole sealed bank wins even next to banks that
+    /// never sealed: agave never announces a bank dumped before it froze, so it stays
+    /// registered forever, and agave holds only one bank per slot at a time. With more than
+    /// one still-unresolved candidate, which one is canonical genuinely can't be determined
+    /// here, so it's left unresolved and logged (both remain available for Processed-level
+    /// replay regardless).
     fn try_infer_sole_candidate_winner(&mut self, slot: Slot) {
         if self.resolved_bank_per_slot.contains_key(&slot) {
+            return;
+        }
+        if let Some([sealed]) = self.replayed_slot.get(&slot).map(Vec::as_slice) {
+            self.resolved_bank_per_slot.insert(slot, sealed.bank_id);
             return;
         }
         match self.slot_to_banks.get(&slot).map(Vec::as_slice) {
@@ -789,6 +817,17 @@ impl BlockMachineStorage {
                 }
             }
         }
+        if self.processed_bank_ids.contains_key(&bank_id) {
+            self.deliver_own_processed(slot, bank_id);
+        }
+    }
+
+    /// Delivers `bank_id` at Processed if it has sealed, whether or not it is `slot`'s
+    /// resolved bank -- see `processed_bank_ids`. A no-op if it was already delivered.
+    fn deliver_own_processed(&mut self, slot: Slot, bank_id: BankId) {
+        if let Some(frozen) = self.replay_candidate(slot, bank_id).cloned() {
+            self.emit_commitment_levels_up_to(slot, CommitmentLevel::Processed, &frozen);
+        }
     }
 
     fn emit_commitment_levels_up_to(
@@ -820,11 +859,11 @@ impl BlockMachineStorage {
                 if commitment_rank(candidate) > commitment_rank(level) {
                     break;
                 }
-                if progression
-                    .commitment
-                    .iter()
-                    .any(|u| u.commitment == candidate)
-                {
+                // Processed is delivered once per bank, Confirmed/Finalized once per slot.
+                if progression.commitment.iter().any(|u| {
+                    u.commitment == candidate
+                        && (candidate != CommitmentLevel::Processed || u.bank_id == bank_id)
+                }) {
                     continue;
                 }
                 let update = SlotCommitmentStatusUpdate {
@@ -990,8 +1029,14 @@ impl BlockMachineStorage {
     fn replay_status_for(&self, frozen: &FrozenBank) -> Vec<SlotCommitmentStatusUpdate> {
         if self.resolved_bank_per_slot.get(&frozen.slot) == Some(&frozen.bank_id) {
             if let Some(progression) = self.slot_commitment_progression_map.get(&frozen.slot) {
-                if !progression.commitment.is_empty() {
-                    return progression.commitment.clone();
+                let history: Vec<_> = progression
+                    .commitment
+                    .iter()
+                    .filter(|u| u.bank_id == frozen.bank_id)
+                    .cloned()
+                    .collect();
+                if !history.is_empty() {
+                    return history;
                 }
             }
         }
@@ -1492,9 +1537,10 @@ mod tests {
             .expect("first bank's Processed delivery");
         assert_eq!(update.bank_id, first_bank);
 
-        // A second, genuinely different bank for the same slot also reaches Processed --
-        // this must NOT supersede or discard the first. Multiple Processed banks are peers
-        // with no precedence between them; only Confirmed/Finalized is authoritative.
+        // A second, genuinely different bank for the same slot also reaches Processed -- it
+        // is delivered at Processed too, but must NOT supersede or discard the first.
+        // Multiple Processed banks are peers with no precedence between them; only
+        // Confirmed/Finalized is authoritative.
         storage.add(make_created_bank_msg(slot, None, corrected_bank));
         storage.add(make_account_msg(slot, corrected_bank, corrected_pubkey, 1));
         add_musthave_sysvars(&mut storage, slot, corrected_bank);
@@ -1506,9 +1552,18 @@ mod tests {
             SlotStatus::Processed,
             corrected_bank,
         ));
-        assert!(
-            storage.pop_ready_block().is_none(),
-            "a second Processed bank must not produce a delivery or discard the first"
+        let (update, _) = storage
+            .pop_ready_block()
+            .expect("second bank's Processed delivery");
+        assert_eq!(update.bank_id, corrected_bank);
+        assert_eq!(update.commitment, CommitmentLevel::Processed);
+        assert!(storage.pop_ready_block().is_none());
+        assert_eq!(
+            storage
+                .replay_from_slot(slot, CommitmentLevel::Processed)
+                .count(),
+            2,
+            "the second Processed bank must not discard the first"
         );
 
         // Only once the second bank reaches Confirmed does it become the slot's permanent,
@@ -1519,8 +1574,7 @@ mod tests {
             SlotStatus::Confirmed,
             corrected_bank,
         ));
-        // corrected_bank never got its own Processed status directly, so this also
-        // gap-fills the missing Processed level -- both deliveries are corrected_bank's.
+        // corrected_bank was already delivered at Processed, so only its Confirmed follows.
         let mut deliveries = Vec::new();
         while let Some((update, frozen)) = storage.pop_ready_block() {
             deliveries.push((update, frozen));
@@ -1948,5 +2002,88 @@ mod tests {
             .collect();
         assert_eq!(replayed.len(), 1);
         assert!(replayed[0].frozen_block.get_block_footer().is_some());
+    }
+
+    /// CreatedBank, sysvars, one entry and BlockMeta: everything a bank needs to seal.
+    fn seal_bank(storage: &mut BlockMachineStorage, slot: u64, bank_id: BankId, parent: u64) {
+        storage.add(make_created_bank_msg(slot, Some(parent), bank_id));
+        add_musthave_sysvars(storage, slot, bank_id);
+        storage.add(make_entry_msg(slot, 0, bank_id));
+        storage.add(make_block_meta_msg(slot, parent, bank_id));
+    }
+
+    fn drain_ready(storage: &mut BlockMachineStorage) -> Vec<(Slot, CommitmentLevel, BankId)> {
+        let mut delivered = Vec::new();
+        while let Some((update, frozen)) = storage.pop_ready_block() {
+            delivered.push((update.slot, update.commitment, frozen.bank_id));
+        }
+        delivered
+    }
+
+    /// Processed delivery goes through the slot's single winner, and the first bank to seal
+    /// becomes that winner. A replacement bank is skipped even though nothing was reordered.
+    ///
+    /// ```text
+    /// slot 9 ◄── slot 10
+    ///            ├── b1   sealed, Processed ✔ delivered, then dumped as a duplicate
+    ///            └── b2   repaired, sealed, Processed ✘ never delivered
+    ///
+    /// agave sends = storage gets (no reordering):
+    ///                 seal(b1) ─► Processed(b1) ─► seal(b2) ─► Processed(b2)
+    ///
+    /// seal(b1)        only candidate for slot 10 → resolved[10] = b1
+    /// Processed(b1)   winner b1 sealed → emits (10, Processed, b1)   ✔
+    /// seal(b2)        resolved[10] = b1 ≠ b2 → emits nothing
+    /// Processed(b2)   Processed never changes the winner; b1 already delivered → nothing   ✘
+    /// result          b2 is only delivered if it later reaches Confirmed
+    /// ```
+    #[test]
+    fn replacement_bank_is_delivered_at_processed_after_the_first_bank_was() {
+        let mut storage = BlockMachineStorage::new(16);
+        seal_bank(&mut storage, 10, 1, 9);
+        storage.add(make_commitment_msg(10, Some(9), SlotStatus::Processed, 1));
+        assert_eq!(
+            drain_ready(&mut storage),
+            vec![(10, CommitmentLevel::Processed, 1)]
+        );
+
+        seal_bank(&mut storage, 10, 2, 9);
+        storage.add(make_commitment_msg(10, Some(9), SlotStatus::Processed, 2));
+        assert_eq!(
+            drain_ready(&mut storage),
+            vec![(10, CommitmentLevel::Processed, 2)],
+            "bank 2 got its own Processed and must be delivered"
+        );
+    }
+
+    /// A bank dumped before it freezes produces no event, so it stays a candidate forever.
+    /// With two candidates, slot 10 has no winner and Processed is never delivered.
+    ///
+    /// ```text
+    /// slot 9 ◄── slot 10
+    ///            ├── b1   CreatedBank + entry, dumped before freeze (no event)
+    ///            └── b2   repaired, sealed, Processed ✘ never delivered
+    ///
+    /// agave sends = storage gets (no reordering):
+    ///                 CreatedBank(b1) ─► Entry(b1) ─► seal(b2) ─► Processed(b2)
+    ///
+    /// CreatedBank(b1) slot_to_banks[10] = [b1]
+    /// seal(b2)        slot_to_banks[10] = [b1, b2] → two candidates, no winner
+    /// Processed(b2)   no winner for slot 10 → warns "competing bank_ids", emits nothing   ✘
+    /// result          b2 is only delivered if it later reaches Confirmed
+    /// ```
+    #[test]
+    fn replacement_bank_is_delivered_at_processed_after_the_first_bank_was_silently_dumped() {
+        let mut storage = BlockMachineStorage::new(16);
+        storage.add(make_created_bank_msg(10, Some(9), 1));
+        storage.add(make_entry_msg(10, 0, 1));
+
+        seal_bank(&mut storage, 10, 2, 9);
+        storage.add(make_commitment_msg(10, Some(9), SlotStatus::Processed, 2));
+        assert_eq!(
+            drain_ready(&mut storage),
+            vec![(10, CommitmentLevel::Processed, 2)],
+            "bank 2 got its own Processed and must be delivered"
+        );
     }
 }
