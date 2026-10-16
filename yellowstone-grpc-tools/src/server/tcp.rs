@@ -90,7 +90,7 @@ impl Stream for TcpIncoming {
         let polled = Pin::new(&mut self.listener).poll_next(cx);
 
         if let Poll::Ready(Some(Ok(stream))) = &polled {
-            set_accepted_socket_options(stream, self.nodelay, &self.keepalive, self.so_sndbuf);
+            set_accepted_socket_options(stream, self.as_ref());
         }
 
         polled
@@ -98,26 +98,21 @@ impl Stream for TcpIncoming {
 }
 
 // Consistent with hyper-0.14, this function does not return an error.
-fn set_accepted_socket_options(
-    stream: &TcpStream,
-    nodelay: Option<bool>,
-    keepalive: &Option<TcpKeepalive>,
-    so_sndbuf: Option<usize>,
-) {
-    if let Some(nodelay) = nodelay {
+fn set_accepted_socket_options(stream: &TcpStream, config: Pin<&TcpIncoming>) {
+    if let Some(nodelay) = config.nodelay {
         if let Err(e) = stream.set_nodelay(nodelay) {
             log::warn!("error trying to set TCP_NODELAY: {e}");
         }
     }
 
-    if let Some(keepalive) = keepalive {
+    if let Some(keepalive) = config.keepalive.as_ref() {
         let sock_ref = socket2::SockRef::from(&stream);
         if let Err(e) = sock_ref.set_tcp_keepalive(keepalive) {
             log::warn!("error trying to set TCP_KEEPALIVE: {e}");
         }
     }
 
-    if let Some(so_sndbuf) = so_sndbuf {
+    if let Some(so_sndbuf) = config.so_sndbuf {
         let sock_ref = socket2::SockRef::from(&stream);
         if let Err(e) = sock_ref.set_send_buffer_size(so_sndbuf) {
             log::warn!("error trying to set TCP's SO_SNDBUF: {e}");
