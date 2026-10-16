@@ -3,7 +3,7 @@ use {
         config::Config,
         contact_info::ContactInfoNotification,
         file_watcher::FileWatcher,
-        grpc::{BlockReconstructionMessage, GrpcService, SubscriberChannels},
+        grpc::{GrpcService, SubscriberChannels},
         metrics::{self, incr_geyser_event_dropped, PrometheusService},
         plugin::{
             filter::limits::FilterLimits,
@@ -51,8 +51,7 @@ pub struct PluginInner {
     grpc_channel: mpsc::UnboundedSender<Message>, // geyser_loop
     deshred_channel: broadcast::Sender<Message>,  // deshred_client_loop
     contact_info_channel: mpsc::UnboundedSender<ContactInfoNotification>,
-    block_reconstruction_channel: mpsc::UnboundedSender<BlockReconstructionMessage>, // block_reconstruction_loop
-    broadcast_channel: SubscriberChannels,                                           // client_loop
+    broadcast_channel: SubscriberChannels, // client_loop
     blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
     plugin_cancellation_token: CancellationToken,
     plugin_task_tracker: TaskTracker,
@@ -71,13 +70,6 @@ impl PluginInner {
     fn send_deshred_message(&self, message: Message) {
         if let Ok(count) = self.deshred_channel.send(message) {
             metrics::deshred_queue_size_inc(count as i64);
-        }
-    }
-
-    // Sends messages to the block reconstruction loop
-    fn send_block_reconstruction_message(&self, message: BlockReconstructionMessage) {
-        if self.block_reconstruction_channel.send(message).is_ok() {
-            metrics::block_reconstruction_queue_size_inc();
         }
     }
 
@@ -217,7 +209,6 @@ impl GeyserPlugin for Plugin {
             grpc_channel: grpc_channel_tx,
             deshred_channel: grpc_service_result.deshred_broadcast_tx,
             contact_info_channel: grpc_service_result.contact_info_tx,
-            block_reconstruction_channel: grpc_service_result.block_reconstruction_tx,
             broadcast_channel: grpc_service_result.broadcast,
             blocks_meta_tx: grpc_service_result.blocks_meta_tx,
             plugin_cancellation_token,
@@ -358,12 +349,69 @@ impl GeyserPlugin for Plugin {
 
             match status {
                 SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Rooted => {
-                    // Processed/Confirmed/Finalized slot status updates are handled by the block reconstruction loop and are never directly exposed by the processed message loop (geyser_loop.)
-                    // If they were to be sent through geyser_loop, the block_reconstruction_loop would also send them, resulting in duplicate slot life-cycle messages.
-                    // By sending them directly to block_reconstruction_loop, we avoid this issue while ensuring block reconstruction happens as normal.
-                    inner.send_block_reconstruction_message(BlockReconstructionMessage::Single(
-                        message.clone(),
-                    ));
+                    // Processed/Confirmed/Finalized slot status updates are delivered by the block reconstruction loop once their bank seals.
+                    // They still go through geyser_loop, which hands them to block reconstruction without broadcasting them,
+                    // so they keep their order with the bank data, CreatedBank and Dead sent before them.
+                    //
+                    // They used to go straight to block reconstruction and could overtake everything still queued in geyser_loop:
+                    //
+                    // 1. A Dead for an older bank discarded the new bank whose status overtook it.
+                    //    Dead names a slot, not a bank, so it discards every bank registered for that slot.
+                    //
+                    //    slot 9 ◄── slot 10
+                    //               ├── b1   replay fails → Dead(10)
+                    //               └── b2   repaired replacement, must be delivered
+                    //
+                    //    agave sends:    CreatedBank(b1) ─► Dead(10) ─► seal(b2) ─► Processed(b2)
+                    //                                                                    │
+                    //                           ┌────────────────────────────────────────┘
+                    //                           │ direct channel, skips geyser_loop
+                    //                           ▼
+                    //    storage gets:   CreatedBank(b1) ─► Processed(b2) ─► Dead(10) ─► seal(b2)
+                    //
+                    //    Processed(b2)   slot_to_banks[10] = [b1, b2]
+                    //    Dead(10)        discards every bank of slot 10: b1 and b2   ✘
+                    //    seal(b2)        b2 is discarded, so its data is dropped
+                    //    result          slot 10 is never delivered
+                    //
+                    // 2. A loser whose data arrived after its winner's Confirmed was replayed as confirmed.
+                    //    Losers are only discarded among the banks already registered when the slot resolves.
+                    //
+                    //    slot 9 ◄── slot 10
+                    //               ├── b1   froze, then dumped as a duplicate (loser)
+                    //               └── b2   repaired, Confirmed (winner)
+                    //
+                    //    agave sends:    seal(b1) ─► seal(b2) ─► Confirmed(b2)
+                    //                                                 │
+                    //                   ┌─────────────────────────────┘
+                    //                   │ direct channel, skips geyser_loop
+                    //                   ▼
+                    //    storage gets:   Confirmed(b2) ─► seal(b1) ─► seal(b2)
+                    //
+                    //    Confirmed(b2)   resolved[10] = b2, discards the other banks of slot 10: none yet
+                    //    seal(b1)        b1 is not discarded, so it is added to replayed_slot[10]   ✘
+                    //    seal(b2)        replayed_slot[10] = [b1, b2]
+                    //    result          a Confirmed replay of slot 10 serves b1 and b2
+                    //
+                    // 3. A child's commitment never reached its parent when the status arrived before the data.
+                    //    Passing a commitment up needs the child's parent slot, which is only known once its data arrives.
+                    //
+                    //    slot 9 ◄── slot 10 (b2) ◄── slot 11 (b3)
+                    //               no own Confirmed  Confirmed
+                    //
+                    //    agave sends:    seal(b2) ─► seal(b3) ─► Confirmed(b3)
+                    //                                                 │
+                    //                   ┌─────────────────────────────┘
+                    //                   │ direct channel, skips geyser_loop
+                    //                   ▼
+                    //    storage gets:   Confirmed(b3) ─► seal(b2) ─► seal(b3)
+                    //
+                    //    Confirmed(b3)   slot 11 floor = Confirmed; b3 has no buffer, so its parent is unknown
+                    //                    → slot 10 is not raised, and the floor is marked as already raised
+                    //    seal(b2)        slot 10 has no floor → nothing
+                    //    seal(b3)        emits slot 11 Processed + Confirmed, but never walks up to slot 10   ✘
+                    //    result          slot 10 is never delivered at Confirmed
+                    inner.send_message(message.clone());
                 }
                 variant @ (SlotStatus::FirstShredReceived
                 | SlotStatus::Dead(_)

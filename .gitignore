@@ -42,3 +42,6 @@ yellowstone-grpc-geyser/config-test.json
 scripts
 
 target-ubuntu2204
+
+# Claude Code: share .claude/rules, keep personal settings local
+.claude/settings.local.json
