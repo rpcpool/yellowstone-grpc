@@ -1069,7 +1069,7 @@ impl GrpcService {
         // Snapshot channel
         let (snapshot_tx, snapshot_rx) = match config.snapshot_plugin_channel_capacity {
             Some(cap) if !is_reload => {
-                let (tx, rx) = crossbeam_channel::bounded(cap);
+                let (tx, rx) = crossbeam_channel::bounded(cap.max(1));
                 (Some(tx), Some(rx))
             }
             _ => (None, None),
@@ -1094,7 +1094,7 @@ impl GrpcService {
             capacities.finalized_broadcast,
         );
         // Deshred subscribers receive their own commitment-free stream.
-        let (deshred_broadcast_tx, _) = broadcast::channel(config.channel_capacity);
+        let (deshred_broadcast_tx, _) = broadcast::channel(config.channel_capacity.max(1));
         let (replay_first_available_slot, replay_stored_slots_tx, replay_stored_slots_rx) =
             if config.replay_stored_slots == 0 {
                 (None, None, None)
@@ -1104,7 +1104,7 @@ impl GrpcService {
             };
 
         // contact info subscribers
-        let contact_info_state = ContactInfoState::new(config.contact_info_channel_capacity);
+        let contact_info_state = ContactInfoState::new(config.contact_info_channel_capacity.max(1));
 
         let (contact_info_tx, contact_info_rx) = mpsc::unbounded_channel();
 
@@ -1128,7 +1128,7 @@ impl GrpcService {
         // Build the shared GeyserServer (Clone-able because GrpcService: Clone)
         let max_decoding_message_size = config.max_decoding_message_size;
         let mut service = GeyserServer::new(Self {
-            config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
+            config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity.max(1),
             geyser_subscriber_weight_capacity: capacities.geyser_subscriber_weight,
             deshred_subscriber_channel_capacity: capacities.deshred_subscriber,
             contact_info_subscriber_channel_capacity: capacities.contact_info_subscriber,
