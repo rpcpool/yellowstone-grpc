@@ -10,6 +10,13 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-10-17
+
+- yellowstone-grpc-geyser 16.1.4
+
+### Misc
+- plugin: update agave dependencies to 4.3.2
+
 ## 2026-10-16
 
 - yellowstone-grpc-geyser 16.1.3
