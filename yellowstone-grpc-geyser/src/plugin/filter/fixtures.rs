@@ -197,6 +197,7 @@ pub fn message_block(
 ) -> Arc<MessageBlock> {
     Arc::new(MessageBlock {
         meta: message_block_meta(slot),
+        created_bank: Arc::new(message_slot(slot, SlotStatus::CreatedBank)),
         updated_account_count: accounts.len() as u64,
         transactions,
         accounts,
