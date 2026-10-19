@@ -45,6 +45,9 @@ pub(crate) const MUST_HAVE_SYSVAR_ACCOUNTS: [Pubkey; 4] = [
 // builtin/core-BPF migration targets, and the vote accounts charged the VAT and paid
 // commission on Alpenglow. So is the Rent sysvar, which is only rewritten when a feature that
 // changes rent activates at that epoch.
+// NOTE: THIS CONSTANT IS NOT USED ANYWHERE, BESIDES TESTS, IT'S ONLY FOR DOCUMENTATION PURPOSES.
+// PERHAPS SOMEDAY THIS CONSTANT WILL BE USED IN THE MAIN LOGIC, BUT FOR NOW IT'S PURELY DOCUMENTATION TO HELP AGENT.
+#[allow(dead_code)]
 pub(crate) const SYSVAR_ON_EPOCH_CROSSING: [Pubkey; 5] = [
     // Every epoch crossing: updated when the epoch is activated.
     Pubkey::from_str_const("SysvarStakeHistory1111111111111111111111111"),
@@ -315,8 +318,21 @@ impl FrozenBank {
         Arc::clone(&self.created_bank)
     }
 
-    /// Where the `CreatedBank` arrived in [`Self::messages`]: it came right before
-    /// `messages()[created_bank_index]`.
+    /// Returns where the bank's [`SlotStatus::CreatedBank`] arrived among [`Self::messages`].
+    ///
+    /// Agave stores some accounts while it constructs a bank, before it sends
+    /// [`SlotStatus::CreatedBank`]: SlotHashes and Clock for every bank, plus the
+    /// epoch-crossing and partitioned-rewards accounts on some banks. Those writes are the
+    /// messages before this index. A replay splits [`Self::messages`] here and sends
+    /// [`Self::created_bank`] in between, so a replayed bank keeps the order of the live
+    /// stream without copying its messages. An account written both before and after the
+    /// [`SlotStatus::CreatedBank`], such as the Alpenglow Clock, only appears at its last
+    /// write.
+    ///
+    /// # Returns
+    ///
+    /// The index in [`Self::messages`] of the first message that arrived after the
+    /// [`SlotStatus::CreatedBank`], or the length of [`Self::messages`] if none did.
     pub const fn created_bank_index(&self) -> usize {
         self.created_bank_index
     }
