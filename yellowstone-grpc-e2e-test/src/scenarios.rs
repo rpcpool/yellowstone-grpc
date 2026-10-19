@@ -46,6 +46,8 @@ pub fn init_log() {
     });
 }
 
+// Alpenglow scenarios run only with `--module alpenglow`.
+pub mod alpenglow;
 pub mod default;
 pub mod ratelimit;
 // Reconnect scenarios run only with `--module reconnect`.

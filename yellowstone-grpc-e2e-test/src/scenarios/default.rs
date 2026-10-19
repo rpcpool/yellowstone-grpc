@@ -24,7 +24,6 @@ use {
     },
 };
 
-pub mod block_footer;
 pub mod blockmachine;
 pub mod deshred;
 pub mod gossip;

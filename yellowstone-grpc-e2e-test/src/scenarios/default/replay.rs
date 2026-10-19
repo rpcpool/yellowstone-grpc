@@ -1,5 +1,4 @@
 use {
-    super::block_footer::{check_footer_fields, footer_and_block_meta_request, UPDATE_TIMEOUT},
     crate::{grpc::new_client, scenarios::RunConfig},
     anyhow::{bail, ensure, Context, Result},
     solana_pubkey::Pubkey,
@@ -8,7 +7,6 @@ use {
         str::FromStr,
         time::Duration,
     },
-    tokio::time::timeout,
     tokio_stream::StreamExt,
     yellowstone_grpc_e2e_macros::test_helper,
     yellowstone_grpc_proto::geyser::{
@@ -18,8 +16,54 @@ use {
     },
 };
 
+/// Sysvar accounts every bank writes. Agave writes Clock and SlotHashes while it constructs the
+/// bank, before CreatedBank, RecentBlockhashes at the block's last tick, and SlotHistory when
+/// the block freezes.
+const MUST_HAVE_SYSVAR_ACCOUNTS: [&str; 4] = [
+    // emitted before CreatedBank
+    "SysvarC1ock11111111111111111111111111111111",
+    "SysvarS1otHashes111111111111111111111111111",
+    // written when the block freeze
+    "SysvarS1otHistory11111111111111111111111111",
+    "SysvarRecentB1ockHashes11111111111111111111",
+];
+
+/// Fixed-address accounts the first bank of a new epoch on its fork writes while agave
+/// constructs it, before CreatedBank. Mirrors `SYSVAR_ON_EPOCH_CROSSING` in the geyser plugin's
+/// block reconstruction.
+const EPOCH_CROSSING_ACCOUNTS: [&str; 5] = [
+    // every epoch crossing
+    "SysvarStakeHistory1111111111111111111111111",
+    "SysvarEpochRewards1111111111111111111111111",
+    // Alpenglow (or migration epoch): reward-epoch delegated stakes account
+    "CHfmHwNcskfxg1ZnLatbHbmVvYbA6rLDz3Xok5a3Ku8i",
+    // Alpenglow: the incinerator receives the VAT burned from staked vote accounts
+    "1nc1nerator11111111111111111111111111111111",
+    // Alpenglow: vote reward account
+    "3vJzniWALu2qGFJ1ZY6JD3Y2ZmA5zWqmVdDX7yBXHgu7",
+];
+
+fn must_have_sysvar_pubkeys() -> Result<HashSet<Pubkey>> {
+    MUST_HAVE_SYSVAR_ACCOUNTS
+        .iter()
+        .map(|s| Pubkey::from_str(s).context("valid must-have sysvar pubkey string"))
+        .collect()
+}
+
+/// The must-have sysvar accounts and the epoch-crossing accounts: the fixed-address accounts
+/// that may arrive before a bank's CreatedBank.
+fn before_created_bank_pubkeys() -> Result<HashSet<Pubkey>> {
+    MUST_HAVE_SYSVAR_ACCOUNTS
+        .iter()
+        .chain(EPOCH_CROSSING_ACCOUNTS.iter())
+        .map(|s| Pubkey::from_str(s).context("valid pubkey string"))
+        .collect()
+}
+
 /// Verifies replay support by receiving historical data from a replay request.
-/// Each replayed bank's CreatedBank comes before its accounts and block meta.
+/// Each replayed bank's CreatedBank comes before its block meta, and before its accounts other
+/// than the must-have sysvars and epoch-crossing accounts written while the bank is
+/// constructed, as in the live stream.
 /// At processed, each bank must also bring all its transactions before its block meta.
 #[test_helper(name = "replay", tags = ["replay"])]
 pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
@@ -27,8 +71,9 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
 
     let resp = client.get_slot(None).await.context("get_slot")?;
     let tip = resp.slot;
-    let sysvar_clock_str = "SysvarC1ock11111111111111111111111111111111";
+    let sysvar_clock_str = MUST_HAVE_SYSVAR_ACCOUNTS[0];
     let sysvar_clock_pubkey = Pubkey::from_str(sysvar_clock_str).context("valid pubkey string")?;
+    let before_created_bank = before_created_bank_pubkeys()?;
     let account_filter = SubscribeRequestFilterAccounts {
         account: vec![sysvar_clock_str.to_string()],
         ..Default::default()
@@ -109,10 +154,14 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
                 let bank_id = subscribe_update_account
                     .bank_id
                     .context("replayed account update should have a bank_id")?;
+                // Agave writes some must-have sysvars, and the epoch-crossing accounts on the
+                // first bank of an epoch, while it constructs the bank, before CreatedBank; any
+                // other account comes after it.
                 ensure!(
                     subscribe_update_account.slot >= tip
-                        || created_banks.contains(&(subscribe_update_account.slot, bank_id)),
-                    "slot {} bank_id {bank_id}: CreatedBank should arrive before the bank's account updates",
+                        || created_banks.contains(&(subscribe_update_account.slot, bank_id))
+                        || before_created_bank.contains(&actual_pubkey),
+                    "slot {} bank_id {bank_id}: account {actual_pubkey} arrived before CreatedBank, but only must-have sysvar and epoch-crossing accounts may",
                     subscribe_update_account.slot
                 );
 
@@ -475,20 +524,9 @@ pub async fn all_sysvar_must_be_present_in_replay(config: &RunConfig) -> Result<
 
     let resp = client.get_slot(None).await.context("get_slot")?;
     let tip = resp.slot;
-    let sysvar_account_musthave = vec![
-        // emitted before CreatedBank
-        "SysvarC1ock11111111111111111111111111111111".to_string(),
-        "SysvarS1otHashes111111111111111111111111111".to_string(),
-        // written when the block freeze
-        "SysvarS1otHistory11111111111111111111111111".to_string(),
-        "SysvarRecentB1ockHashes11111111111111111111".to_string(),
-    ];
-    let musthave_pubkeys = sysvar_account_musthave
-        .iter()
-        .map(|s| Pubkey::from_str(s).context("valid must-have sysvar pubkey string"))
-        .collect::<Result<HashSet<_>>>()?;
+    let musthave_pubkeys = must_have_sysvar_pubkeys()?;
     let account_filter = SubscribeRequestFilterAccounts {
-        account: sysvar_account_musthave,
+        account: MUST_HAVE_SYSVAR_ACCOUNTS.map(str::to_string).to_vec(),
         ..Default::default()
     };
     let from_slot = tip.saturating_sub(200);
@@ -618,72 +656,5 @@ pub async fn all_sysvar_must_be_present_in_replay(config: &RunConfig) -> Result<
         "should have received updates for all expected slots in the replay"
     );
 
-    Ok(())
-}
-
-/// Verifies `from_slot` replay sends each bank's block footer before its block meta.
-#[test_helper(name = "block-footer-replay", tags = ["block-footer", "alpenglow", "replay"])]
-pub async fn block_footer_should_replay_before_block_meta(config: &RunConfig) -> Result<()> {
-    const REPLAY_DEPTH: u64 = 10;
-    // Slots skipped by their leader have no block, so require only some replayed banks.
-    const MIN_REPLAYED_BANKS: usize = 3;
-
-    let mut client = crate::grpc::new_client(config).await?;
-    let tip = client.get_slot(None).await.context("get_slot")?.slot;
-    let from_slot = tip.saturating_sub(REPLAY_DEPTH);
-    log::info!("current tip slot is {tip}, replaying from slot {from_slot}");
-
-    let mut stream = client
-        .subscribe_once(footer_and_block_meta_request(
-            CommitmentLevelProto::Processed,
-            Some(from_slot),
-        ))
-        .await
-        .context("subscription should succeed")?;
-
-    let mut footers: HashSet<(u64, u64)> = HashSet::new();
-    let mut replayed_banks = 0usize;
-    loop {
-        let update = timeout(UPDATE_TIMEOUT, stream.next())
-            .await
-            .with_context(|| format!("no update within {UPDATE_TIMEOUT:?}"))?
-            .context("stream ended before replay caught up with the tip")?
-            .context("stream should yield updates without error")?;
-
-        match update.update_oneof {
-            Some(UpdateOneof::BlockFooter(footer)) => {
-                check_footer_fields(&footer)?;
-                ensure!(
-                    footers.insert((footer.slot, footer.bank_id)),
-                    "received duplicate footer for slot {} bank_id {}",
-                    footer.slot,
-                    footer.bank_id
-                );
-            }
-            Some(UpdateOneof::BlockMeta(block_meta)) => {
-                if block_meta.slot >= tip {
-                    break;
-                }
-                ensure!(
-                    block_meta.slot >= from_slot,
-                    "slot {}: replay sent a block meta before from_slot {from_slot}",
-                    block_meta.slot
-                );
-                ensure!(
-                    footers.contains(&(block_meta.slot, block_meta.bank_id)),
-                    "slot {} bank_id {}: replayed block meta arrived without a footer before it",
-                    block_meta.slot,
-                    block_meta.bank_id
-                );
-                replayed_banks += 1;
-            }
-            _ => {}
-        }
-    }
-
-    ensure!(
-        replayed_banks >= MIN_REPLAYED_BANKS,
-        "only {replayed_banks} banks replayed between slot {from_slot} and tip {tip}, expected at least {MIN_REPLAYED_BANKS}"
-    );
     Ok(())
 }
