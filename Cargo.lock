@@ -7386,9 +7386,9 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-block-machine"
-version = "0.9.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "622d22b8a110308ecf77be9a73a604fb0ac1f2fe9feb4470eb94eadf32b60720"
+checksum = "ab3b0a07d8fe1be284bc7155e76c6035b0bf4a397e5decfa82373ab1e45a278c"
 dependencies = [
  "bs58",
  "bytesize 2.7.0",
@@ -7397,7 +7397,7 @@ dependencies = [
  "futures-util",
  "rustc-hash",
  "serde",
- "solana-clock 3.2.1",
+ "solana-clock 4.0.0",
  "solana-commitment-config",
  "solana-hash",
  "solana-pubkey 4.4.0",

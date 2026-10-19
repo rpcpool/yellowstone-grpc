@@ -1,6 +1,6 @@
 use {
     crate::{
-        grpc::E2EGeyserEventAdapter,
+        grpc::{BlockEventCounts, E2EGeyserEventAdapter, BLOCK_MACHINE_CONFIG},
         reconnect_blocks::{ReconnectBlockEvent, ReconnectBlockStream},
         scenarios::RunConfig,
     },
@@ -458,11 +458,13 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
         DedupState::with_slot_retention(DEFAULT_SLOT_RETENTION),
     );
 
-    let mut blocks = BlockStream::<_, E2EGeyserEventAdapter, SimpleBlockAccumulator<_>>::new(
-        Box::pin(stream),
-        SimpleBlockAccumulator::default(),
-        MachineCommitment::Processed,
-    );
+    let mut blocks =
+        BlockStream::<_, E2EGeyserEventAdapter, SimpleBlockAccumulator<_>>::new_with_config(
+            Box::pin(stream),
+            SimpleBlockAccumulator::default(),
+            MachineCommitment::Processed,
+            BLOCK_MACHINE_CONFIG,
+        );
 
     // Stable side channel for the expected blockhash. Only the block-building
     // stream is put under reconnect pressure.
@@ -479,8 +481,9 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
     /// Blocks that must be rebuilt after the disconnect before the run ends.
     const BLOCKS_AFTER_RECONNECT: usize = 1;
 
-    let mut metas: HashMap<u64, SubscribeUpdateBlockMeta> = HashMap::new();
-    let mut built: HashMap<u64, Block<SimpleBlockStore<SubscribeUpdate>>> = HashMap::new();
+    // Keyed by (slot, bank_id): a slot can have more than one bank, each with its own block.
+    let mut metas: HashMap<(u64, u64), SubscribeUpdateBlockMeta> = HashMap::new();
+    let mut built: HashMap<(u64, u64), Block<SimpleBlockStore<SubscribeUpdate>>> = HashMap::new();
     let mut rebuilt_after_reconnect = HashSet::new();
     let mut matched_after_reconnect = HashSet::new();
 
@@ -497,9 +500,10 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
                     let update = meta.context("block meta stream ended")??;
                     if let Some(UpdateOneof::BlockMeta(m)) = update.update_oneof {
                         let slot = m.slot;
+                        let bank_id = m.bank_id;
                         ensure!(
-                            metas.insert(slot, m).is_none(),
-                            "block meta delivered twice for slot {slot}"
+                            metas.insert((slot, bank_id), m).is_none(),
+                            "block meta delivered twice for slot {slot} bank {bank_id}"
                         );
                         if rebuilt_after_reconnect.contains(&slot) {
                             matched_after_reconnect.insert(slot);
@@ -511,14 +515,15 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
                     match output {
                         BlockMachineOutput::FrozenBlock(b) => {
                             let slot = b.slot;
-                            log::info!("rebuilt block for slot {slot}");
+                            let bank_id = b.bank_id;
+                            log::info!("rebuilt block for slot {slot} bank {bank_id}");
                             ensure!(
-                                built.insert(slot, b).is_none(),
-                                "block machine emitted slot {slot} twice"
+                                built.insert((slot, bank_id), b).is_none(),
+                                "block machine emitted slot {slot} bank {bank_id} twice"
                             );
                             if progress.lock().unwrap().resumed() {
                                 rebuilt_after_reconnect.insert(slot);
-                                if metas.contains_key(&slot) {
+                                if metas.contains_key(&(slot, bank_id)) {
                                     matched_after_reconnect.insert(slot);
                                 }
                             }
@@ -528,6 +533,13 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
                         }
                         BlockMachineOutput::ForkDetected(f) => {
                             log::warn!("fork detected at slot {}", f.slot);
+                        }
+                        BlockMachineOutput::BankDiscarded(discarded) => {
+                            log::info!(
+                                "bank {} of slot {} discarded",
+                                discarded.bank_id,
+                                discarded.slot
+                            );
                         }
                         BlockMachineOutput::SlotCommitmentUpdate(_) => {}
                     }
@@ -547,10 +559,11 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
 
     progress.lock().unwrap().validate(true)?;
 
-    for (slot, block) in built {
-        let Some(meta) = metas.get(&slot) else {
+    for ((slot, bank_id), block) in built {
+        let Some(meta) = metas.get(&(slot, bank_id)) else {
             continue;
         };
+        let counts = BlockEventCounts::of(&block.events);
 
         let expected = solana_hash::Hash::from_str(&meta.blockhash)
             .context("block meta blockhash should parse")?
@@ -560,21 +573,21 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
             "slot {slot}: rebuilt blockhash does not match block meta"
         );
         ensure!(
-            block.events.transaction_len() > 0,
+            counts.transactions > 0,
             "slot {slot}: rebuilt block has no transactions"
         );
 
         ensure!(
-            meta.executed_transaction_count as usize == block.events.transaction_len(),
+            meta.executed_transaction_count as usize == counts.transactions,
             "slot {slot}: expected {} transactions, got {}",
             meta.executed_transaction_count,
-            block.events.transaction_len()
+            counts.transactions
         );
         ensure!(
-            meta.entries_count as usize == block.events.entry_len(),
+            meta.entries_count as usize == counts.entries,
             "slot {slot}: expected {} entries, got {}",
             meta.entries_count,
-            block.events.entry_len()
+            counts.entries
         );
     }
 
@@ -1028,6 +1041,9 @@ pub async fn reconnect_should_preserve_block_integrity(config: &RunConfig) -> Re
                                 "INTEGRITY OUTPUT: ForkDetected generation={generation}, slot={}", fork.slot),
                             BlockMachineOutput::SlotCommitmentUpdate(status) => log::info!(
                                 "INTEGRITY OUTPUT: SlotCommitmentUpdate generation={generation}, status={status:?}"),
+                            BlockMachineOutput::BankDiscarded(discarded) => log::info!(
+                                "INTEGRITY OUTPUT: BankDiscarded generation={generation}, slot={}, bank_id={}",
+                                discarded.slot, discarded.bank_id),
                         }
                     }
                 }
@@ -1067,6 +1083,25 @@ pub async fn reconnect_should_preserve_block_integrity(config: &RunConfig) -> Re
 mod integrity_tests {
     use {super::*, yellowstone_grpc_proto::geyser::*};
 
+    /// A block rebuilt for slot 10 with `events`, as the block machine hands it over.
+    fn rebuilt_block(events: Vec<SubscribeUpdate>) -> Block<SimpleBlockStore<SubscribeUpdate>> {
+        Block {
+            slot: 10,
+            bank_id: 10,
+            blockhash: [0; 32],
+            events: SimpleBlockStore {
+                slot: 10,
+                blockhash: [0; 32],
+                events,
+            },
+            entry_count: 0,
+            executed_transaction_count: 0,
+            parent_slot: 9,
+            parent_blockhash: [0; 32],
+            blocktime_unix_ts: 0,
+        }
+    }
+
     #[test]
     fn integrity_accepts_matching_empty_block() {
         let reference = SubscribeUpdateBlock {
@@ -1074,18 +1109,7 @@ mod integrity_tests {
             blockhash: solana_hash::Hash::default().to_string(),
             ..Default::default()
         };
-        let rebuilt = Block {
-            slot: 10,
-            blockhash: [0; 32],
-            events: SimpleBlockStore {
-                slot: 10,
-                events: vec![],
-                account_idx_map: vec![],
-                transaction_idx_map: vec![],
-                entry_idx_map: vec![],
-                other_idx_map: vec![],
-            },
-        };
+        let rebuilt = rebuilt_block(vec![]);
         verify_block_integrity(&rebuilt, &reference).unwrap();
     }
 
@@ -1139,18 +1163,7 @@ mod integrity_tests {
             ..Default::default()
         })
         .collect();
-        let rebuilt = Block {
-            slot: 10,
-            blockhash: [0; 32],
-            events: SimpleBlockStore {
-                slot: 10,
-                events,
-                account_idx_map: vec![0],
-                transaction_idx_map: vec![1],
-                entry_idx_map: vec![2],
-                other_idx_map: vec![],
-            },
-        };
+        let rebuilt = rebuilt_block(events);
         verify_block_integrity(&rebuilt, &reference).unwrap();
         let mut corrupt = reference.clone();
         corrupt.accounts[0].lamports += 1;

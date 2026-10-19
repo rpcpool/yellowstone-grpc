@@ -2,7 +2,7 @@
 //! Retains input history for the stream lifetime; intended for bounded E2E runs.
 
 use {
-    crate::grpc::E2EGeyserEventAdapter,
+    crate::grpc::{E2EGeyserEventAdapter, BLOCK_MACHINE_CONFIG},
     futures::{channel::mpsc, Stream},
     solana_commitment_config::CommitmentLevel,
     std::{
@@ -65,10 +65,11 @@ fn machine() -> (mpsc::Sender<Result<SubscribeUpdate, Status>>, Machine) {
     let (sender, receiver) = mpsc::channel(2);
     (
         sender,
-        BlockStream::new(
+        BlockStream::new_with_config(
             receiver,
             SimpleBlockAccumulator::default(),
             CommitmentLevel::Processed,
+            BLOCK_MACHINE_CONFIG,
         ),
     )
 }
@@ -318,10 +319,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::*, futures::StreamExt, yellowstone_block_machine::stream::BlockEventStore,
-        yellowstone_grpc_proto::geyser::*,
-    };
+    use {super::*, futures::StreamExt, yellowstone_grpc_proto::geyser::*};
 
     fn update(
         generation: u64,
@@ -349,6 +347,56 @@ mod tests {
         )
     }
 
+    /// The bank each fixture slot is built in: 7 for slot 10, the slot number otherwise.
+    const fn bank_of(slot: u64) -> u64 {
+        if slot == 10 {
+            7
+        } else {
+            slot
+        }
+    }
+
+    /// The sysvar writes the block machine needs from every bank before it freezes it.
+    fn sysvars(generation: u64, slot: u64) -> Vec<Result<ReconnectEvent, Status>> {
+        [
+            "SysvarC1ock11111111111111111111111111111111",
+            "SysvarS1otHashes111111111111111111111111111",
+            "SysvarS1otHistory11111111111111111111111111",
+            "SysvarRecentB1ockHashes11111111111111111111",
+        ]
+        .into_iter()
+        .map(|pubkey| {
+            update(
+                generation,
+                subscribe_update::UpdateOneof::Account(SubscribeUpdateAccount {
+                    slot,
+                    bank_id: Some(bank_of(slot)),
+                    account: Some(SubscribeUpdateAccountInfo {
+                        pubkey: solana_pubkey::Pubkey::from_str_const(pubkey)
+                            .to_bytes()
+                            .to_vec(),
+                        owner: solana_pubkey::Pubkey::from_str_const(
+                            "Sysvar1111111111111111111111111111111111111",
+                        )
+                        .to_bytes()
+                        .to_vec(),
+                        lamports: 1,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            )
+        })
+        .collect()
+    }
+
+    /// The fixture's own account updates in a rebuilt block, without the sysvars.
+    fn fixture_accounts(store: &SimpleBlockStore<SubscribeUpdate>) -> Vec<&SubscribeUpdateAccount> {
+        crate::grpc::block_accounts(store)
+            .filter(|account| account.account.as_ref().unwrap().pubkey == vec![1; 32])
+            .collect()
+    }
+
     fn account(generation: u64, lamports: u64) -> Result<ReconnectEvent, Status> {
         update(
             generation,
@@ -367,8 +415,7 @@ mod tests {
 
     #[tokio::test]
     async fn discard_resets_partial_state_before_rebuilding() {
-        use subscribe_update::UpdateOneof;
-        let events = vec![
+        let mut events = vec![
             created(0),
             account(0, 99),
             Ok(ReconnectEvent::DiscardBanks {
@@ -384,38 +431,10 @@ mod tests {
                 },
                 winners: vec![],
             }),
+            created(1),
             account(1, 42),
-            update(
-                1,
-                UpdateOneof::Entry(SubscribeUpdateEntry {
-                    slot: 10,
-                    bank_id: 7,
-                    hash: vec![3; 32],
-                    ..Default::default()
-                }),
-            ),
-            update(
-                1,
-                UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
-                    slot: 10,
-                    parent_slot: 9,
-                    bank_id: 7,
-                    entries_count: 1,
-                    blockhash: solana_hash::Hash::new_from_array([3; 32]).to_string(),
-                    ..Default::default()
-                }),
-            ),
-            update(
-                1,
-                UpdateOneof::Slot(SubscribeUpdateSlot {
-                    slot: 10,
-                    parent: Some(9),
-                    bank_id: Some(7),
-                    status: SlotStatus::SlotProcessed as i32,
-                    ..Default::default()
-                }),
-            ),
         ];
+        events.extend(finish(1, 10));
         let mut stream = ReconnectBlockStream::new(futures::stream::iter(events));
         let mut discarded = false;
         let mut rebuilt = false;
@@ -431,11 +450,9 @@ mod tests {
                 } => {
                     assert!(discarded);
                     assert_eq!(generation, 1);
-                    assert_eq!(block.events.account_len(), 1);
-                    let account = block.events.account_iter().next().unwrap();
-                    let Some(UpdateOneof::Account(account)) = &account.update_oneof else {
-                        panic!("expected account")
-                    };
+                    let accounts = fixture_accounts(&block.events);
+                    assert_eq!(accounts.len(), 1);
+                    let account = accounts[0];
                     assert_eq!(account.account.as_ref().unwrap().lamports, 42);
                     rebuilt = true;
                 }
@@ -458,20 +475,25 @@ mod tests {
             UpdateOneof::Slot(m) => {
                 m.slot = slot;
                 m.parent = Some(slot - 1);
+                m.bank_id = Some(bank_of(slot));
             }
-            UpdateOneof::Account(m) => m.slot = slot,
+            UpdateOneof::Account(m) => {
+                m.slot = slot;
+                m.bank_id = Some(bank_of(slot));
+            }
             _ => panic!("unexpected fixture"),
         }
         Ok(ReconnectEvent::Update { generation, update })
     }
 
     fn finish(generation: u64, slot: u64) -> Vec<Result<ReconnectEvent, Status>> {
-        vec![
+        let mut events = sysvars(generation, slot);
+        events.extend([
             update(
                 generation,
                 UpdateOneof::Entry(SubscribeUpdateEntry {
                     slot,
-                    bank_id: 7,
+                    bank_id: bank_of(slot),
                     hash: vec![3; 32],
                     ..Default::default()
                 }),
@@ -481,7 +503,7 @@ mod tests {
                 UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
                     slot,
                     parent_slot: slot - 1,
-                    bank_id: 7,
+                    bank_id: bank_of(slot),
                     entries_count: 1,
                     blockhash: solana_hash::Hash::new_from_array([3; 32]).to_string(),
                     ..Default::default()
@@ -492,12 +514,13 @@ mod tests {
                 UpdateOneof::Slot(SubscribeUpdateSlot {
                     slot,
                     parent: Some(slot - 1),
-                    bank_id: Some(7),
+                    bank_id: Some(bank_of(slot)),
                     status: SlotStatus::SlotProcessed as i32,
                     ..Default::default()
                 }),
             ),
-        ]
+        ]);
+        events
     }
 
     fn discard(generation: u64) -> Result<ReconnectEvent, Status> {
@@ -534,10 +557,7 @@ mod tests {
                 ..
             } = event.unwrap()
             {
-                for event in block.events.account_iter() {
-                    let Some(UpdateOneof::Account(account)) = &event.update_oneof else {
-                        unreachable!()
-                    };
+                for account in fixture_accounts(&block.events) {
                     accounts.push(account.account.as_ref().unwrap().lamports);
                 }
             }
@@ -547,7 +567,7 @@ mod tests {
 
     #[tokio::test]
     async fn replacement_bank_id_does_not_reuse_another_banks_payloads() {
-        let mut replacement = vec![account(1, 42)];
+        let mut replacement = vec![created(1), account(1, 42)];
         replacement.extend(finish(1, 10));
         for event in &mut replacement {
             let ReconnectEvent::Update { update, .. } = event.as_mut().unwrap() else {
@@ -571,10 +591,7 @@ mod tests {
                 ..
             } = event.unwrap()
             {
-                for event in block.events.account_iter() {
-                    let Some(UpdateOneof::Account(account)) = &event.update_oneof else {
-                        unreachable!()
-                    };
+                for account in fixture_accounts(&block.events) {
                     accounts.push((account.bank_id, account.account.as_ref().unwrap().lamports));
                 }
             }
@@ -594,9 +611,9 @@ mod tests {
             discard(0),
         ]);
         events.extend(finish(1, 9));
-        events.push(account(1, 42));
+        events.extend([created(1), account(1, 42)]);
         events.extend(finish(1, 10));
-        events.extend([discard(1), account(2, 43)]);
+        events.extend([discard(1), created(2), account(2, 43)]);
         events.extend(finish(2, 10));
         let mut stream = ReconnectBlockStream::new(futures::stream::iter(events));
         let mut observed = Vec::new();
@@ -608,11 +625,9 @@ mod tests {
                     output: BlockMachineOutput::FrozenBlock(block),
                     ..
                 } => {
-                    assert_eq!(block.events.account_len(), 1);
-                    let account = block.events.account_iter().next().unwrap();
-                    let Some(UpdateOneof::Account(account)) = &account.update_oneof else {
-                        panic!("expected account")
-                    };
+                    let accounts = fixture_accounts(&block.events);
+                    assert_eq!(accounts.len(), 1);
+                    let account = accounts[0];
                     observed.push((
                         block.slot,
                         account.account.as_ref().unwrap().lamports,

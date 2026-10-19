@@ -3,12 +3,18 @@ use {
     anyhow::{ensure, Context, Result},
     std::str::FromStr,
     tokio::net::TcpStream,
-    yellowstone_block_machine::event::{
-        BlockMetaEvInfo, EntryEvInfo, GeyserEventAdapter, GeyserEventInfo, SlotStatusKind,
-        SlotUpdateEvInfo,
+    yellowstone_block_machine::{
+        event::{
+            BlockFooterEvInfo, BlockMetaEvInfo, EntryEvInfo, GeyserEventAdapter, GeyserEventInfo,
+            SlotStatusKind, SlotUpdateEvInfo,
+        },
+        stream::SimpleBlockStore,
+        wrapper::BlockMachineConfig,
     },
     yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcClient},
-    yellowstone_grpc_proto::geyser::{subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate},
+    yellowstone_grpc_proto::geyser::{
+        subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdate, SubscribeUpdateAccount,
+    },
 };
 
 pub async fn new_client(config: &RunConfig) -> Result<GeyserGrpcClient> {
@@ -117,7 +123,72 @@ const fn slot_status_kind(value: SlotStatus) -> SlotStatusKind {
     }
 }
 
+/// How many accounts, transactions and entries a block rebuilt by the block machine holds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BlockEventCounts {
+    pub accounts: usize,
+    pub transactions: usize,
+    pub entries: usize,
+}
+
+impl BlockEventCounts {
+    /// Counts the events of a rebuilt block by kind.
+    ///
+    /// # Arguments
+    ///
+    /// * `store` - The rebuilt block's events, as [`SimpleBlockStore`] keeps them.
+    ///
+    /// # Returns
+    ///
+    /// The number of account, transaction and entry updates among them; other updates are not
+    /// counted.
+    pub fn of(store: &SimpleBlockStore<SubscribeUpdate>) -> Self {
+        let mut counts = Self::default();
+        for event in &store.events {
+            match event.update_oneof {
+                Some(UpdateOneof::Account(_)) => counts.accounts += 1,
+                Some(UpdateOneof::Transaction(_)) => counts.transactions += 1,
+                Some(UpdateOneof::Entry(_)) => counts.entries += 1,
+                _ => {}
+            }
+        }
+        counts
+    }
+}
+
+/// Iterates the account updates of a block rebuilt by the block machine.
+///
+/// # Arguments
+///
+/// * `store` - The rebuilt block's events, as [`SimpleBlockStore`] keeps them.
+///
+/// # Returns
+///
+/// Each [`SubscribeUpdateAccount`] among the events, in the order the block machine kept them.
+pub fn block_accounts(
+    store: &SimpleBlockStore<SubscribeUpdate>,
+) -> impl Iterator<Item = &SubscribeUpdateAccount> {
+    store
+        .events
+        .iter()
+        .filter_map(|event| match &event.update_oneof {
+            Some(UpdateOneof::Account(account)) => Some(account),
+            _ => None,
+        })
+}
+
 pub struct E2EGeyserEventAdapter;
+
+/// How the e2e scenarios configure the block machine. The default module also runs against
+/// clusters without Alpenglow, which produce no block footers, so a bank's BlockMeta alone ends
+/// its block.
+pub const BLOCK_MACHINE_CONFIG: BlockMachineConfig = BlockMachineConfig {
+    require_block_footer: false,
+};
+
+/// Owner of every sysvar account.
+const SYSVAR_PROGRAM_ID: [u8; 32] =
+    solana_pubkey::Pubkey::from_str_const("Sysvar1111111111111111111111111111111111111").to_bytes();
 
 impl GeyserEventAdapter for E2EGeyserEventAdapter {
     type EventT = SubscribeUpdate;
@@ -130,6 +201,7 @@ impl GeyserEventAdapter for E2EGeyserEventAdapter {
                 parent: slot_update.parent,
                 status: slot_status_kind(slot_update.status()),
                 dead_error: slot_update.dead_error.is_some(),
+                bank_id: slot_update.bank_id,
             })),
             UpdateOneof::BlockMeta(block_meta) => {
                 Some(GeyserEventInfo::BlockMeta(BlockMetaEvInfo {
@@ -140,6 +212,14 @@ impl GeyserEventAdapter for E2EGeyserEventAdapter {
                     blockhash: solana_hash::Hash::from_str(&block_meta.blockhash)
                         .ok()?
                         .to_bytes(),
+                    // Genesis's parent_blockhash is empty, not a valid base58 hash.
+                    parent_blockhash: solana_hash::Hash::from_str(&block_meta.parent_blockhash)
+                        .map(|hash| hash.to_bytes())
+                        .unwrap_or_default(),
+                    block_time: block_meta
+                        .block_time
+                        .map_or(0, |time| time.timestamp.max(0) as u64),
+                    bank_id: block_meta.bank_id,
                 }))
             }
             UpdateOneof::Entry(entry) => Some(GeyserEventInfo::Entry(EntryEvInfo {
@@ -148,20 +228,48 @@ impl GeyserEventAdapter for E2EGeyserEventAdapter {
                 starting_transaction_index: entry.starting_transaction_index,
                 executed_transaction_count: entry.executed_transaction_count,
                 hash: entry.hash.as_slice().try_into().ok()?,
+                bank_id: entry.bank_id,
             })),
-            UpdateOneof::Transaction(tx) => Some(GeyserEventInfo::Transaction { slot: tx.slot }),
-            UpdateOneof::Account(account) => Some(GeyserEventInfo::Account { slot: account.slot }),
-            UpdateOneof::TransactionStatus(tx) => {
-                Some(GeyserEventInfo::Transaction { slot: tx.slot })
+            UpdateOneof::Transaction(tx) => Some(GeyserEventInfo::BankData {
+                slot: tx.slot,
+                bank_id: tx.bank_id,
+            }),
+            UpdateOneof::TransactionStatus(tx) => Some(GeyserEventInfo::BankData {
+                slot: tx.slot,
+                bank_id: tx.bank_id,
+            }),
+            UpdateOneof::Account(account) => {
+                // A startup/snapshot account has no bank_id and is not part of any bank.
+                let bank_id = account.bank_id?;
+                let info = account.account.as_ref();
+                if info.is_some_and(|info| info.owner == SYSVAR_PROGRAM_ID) {
+                    Some(GeyserEventInfo::SysvarAccount {
+                        slot: account.slot,
+                        bank_id,
+                        pubkey: info
+                            .and_then(|info| info.pubkey.as_slice().try_into().ok())
+                            .unwrap_or_default(),
+                    })
+                } else {
+                    Some(GeyserEventInfo::BankData {
+                        slot: account.slot,
+                        bank_id,
+                    })
+                }
             }
-            UpdateOneof::Block(block) => Some(GeyserEventInfo::Other { slot: block.slot }),
-            // A footer joins no block, so it only counts towards per-slot traffic.
-            UpdateOneof::BlockFooter(footer) => Some(GeyserEventInfo::Other { slot: footer.slot }),
-            UpdateOneof::EntryUpdateParent(update) => {
-                Some(GeyserEventInfo::Other { slot: update.slot })
+            UpdateOneof::BlockFooter(footer) => {
+                Some(GeyserEventInfo::BlockFooter(BlockFooterEvInfo {
+                    slot: footer.slot,
+                    bank_id: footer.bank_id,
+                    bank_hash: footer.bank_hash.as_slice().try_into().ok()?,
+                    block_user_agent: String::from_utf8_lossy(&footer.block_user_agent)
+                        .into_owned(),
+                }))
             }
-            UpdateOneof::Ping(_) => None,
-            UpdateOneof::Pong(_) => None,
+            // A block repeats content the block machine rebuilds itself, and an UpdateParent
+            // has no counterpart in its abstraction.
+            UpdateOneof::Block(_) | UpdateOneof::EntryUpdateParent(_) => None,
+            UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => None,
         }
     }
 }
