@@ -120,7 +120,7 @@ where
     })
 }
 
-/// Cuts the stream right after an account of a bank with no block meta yet, once
+/// Cuts the stream right after a transaction of a bank with no block meta yet, once
 /// `BLOCK_METAS_BEFORE_CUT` block metas arrived. The cut always lands mid-bank, after a checkpoint.
 struct CutMidBank<S> {
     inner: Option<S>,
@@ -167,12 +167,11 @@ where
                     self.block_metas += 1;
                     self.complete.insert((meta.slot, meta.bank_id));
                 }
-                Some(UpdateOneof::Account(account))
+                // A transaction comes after its bank's CreatedBank, unlike construction-time
+                // sysvar writes, so the cut never lands before the bank is opened.
+                Some(UpdateOneof::Transaction(tx))
                     if self.block_metas >= BLOCK_METAS_BEFORE_CUT
-                        && account.account.is_some()
-                        && account.bank_id.is_some_and(|bank_id| {
-                            !self.complete.contains(&(account.slot, bank_id))
-                        }) =>
+                        && !self.complete.contains(&(tx.slot, tx.bank_id)) =>
                 {
                     self.cut_next = true;
                 }
@@ -712,15 +711,27 @@ mod tests {
         })
     }
 
+    fn tx_of(slot: u64) -> Result<SubscribeUpdate, Status> {
+        Ok(SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::Transaction(SubscribeUpdateTransaction {
+                slot,
+                bank_id: slot,
+                transaction: Some(SubscribeUpdateTransactionInfo::default()),
+            })),
+            ..Default::default()
+        })
+    }
+
     #[tokio::test]
     async fn cut_lands_mid_bank_after_enough_block_metas() {
-        let mut updates = vec![account_of(1), meta(1), meta(2)];
+        let mut updates = vec![tx_of(1), meta(1), meta(2)];
         updates.extend([
-            account_of(3),
+            tx_of(3),
             meta(3),
-            account_of(3),
+            tx_of(3),
             account_of(4),
-            account_of(4),
+            tx_of(4),
+            tx_of(4),
         ]);
         let mut stream = CutMidBank::new(futures::stream::iter(updates));
         let mut delivered = Vec::new();
@@ -731,8 +742,9 @@ mod tests {
             }
         };
         assert_eq!(error.code(), yellowstone_grpc_proto::tonic::Code::Aborted);
-        // Slot 3's late account belongs to a complete bank; slot 4's first account triggers the cut.
-        assert_eq!(delivered.len(), 7);
+        // Slot 3's late transaction belongs to a complete bank. Slot 4's account comes before its
+        // CreatedBank, so only slot 4's first transaction triggers the cut.
+        assert_eq!(delivered.len(), 8);
         assert!(stream.next().await.is_none());
     }
 
