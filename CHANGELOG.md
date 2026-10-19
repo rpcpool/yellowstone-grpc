@@ -10,6 +10,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-client 15.0.1
+
+### Fixes
+
+- client: `DedupStream` drops a replayed `CreatedBank` of a bank it already delivered. It used to read it as a rollback and forget the bank, so the replayed copy of the block reached the client a second time. A `CreatedBank` of a new bank, or one without a `bank_id`, still resets the slot.
+
 ## 2026-10-17
 
 - yellowstone-grpc-geyser 16.1.4
