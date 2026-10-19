@@ -30,7 +30,7 @@ pub mod blockmachine;
 pub mod deshred;
 pub mod gossip;
 pub mod misc;
-pub mod reconnect;
+pub mod replay;
 
 fn all_account_keys(info: &SubscribeUpdateTransactionInfo) -> Result<Vec<Pubkey>> {
     let mut keys = Vec::new();

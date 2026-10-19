@@ -48,3 +48,5 @@ pub fn init_log() {
 
 pub mod default;
 pub mod ratelimit;
+// Reconnect scenarios run only with `--module reconnect`.
+pub mod reconnect;

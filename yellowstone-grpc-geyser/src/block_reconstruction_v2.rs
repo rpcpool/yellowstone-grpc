@@ -268,6 +268,18 @@ impl FrozenBank {
     pub fn get_block_footer(&self) -> Option<Arc<MessageBlockFooter>> {
         self.block_footer.clone()
     }
+
+    pub const fn slot(&self) -> Slot {
+        self.slot
+    }
+
+    pub const fn bank_id(&self) -> BankId {
+        self.bank_id
+    }
+
+    pub fn parent_slot(&self) -> Slot {
+        self.block_meta.parent_slot
+    }
 }
 
 #[derive(Debug, Clone)]

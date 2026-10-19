@@ -469,9 +469,23 @@ enum HeldMessage<'a> {
     Sealed(&'a MessageBlock),
 }
 
+/// The CreatedBank status of a sealed bank, for clients that join after its live CreatedBank.
+fn created_bank_message(slot: u64, parent: u64, bank_id: BankId, created_at: Timestamp) -> Message {
+    Message::Slot(Arc::new(MessageSlot {
+        slot,
+        parent: Some(parent),
+        status: SlotStatus::CreatedBank,
+        dead_error: None,
+        created_at,
+        bank_id: Some(bank_id),
+    }))
+}
+
 /// Holds back the live content of the banks in `held` and releases a bank when it seals.
+/// A held bank's CreatedBank is held too: it is sent once, right before the sealed block.
 fn route_held<'a>(held: &mut Vec<BankId>, message: &'a Message) -> HeldMessage<'a> {
     let (bank_id, block) = match message {
+        Message::Slot(slot) if slot.status == SlotStatus::CreatedBank => (slot.bank_id, None),
         Message::Account(account) => (account.bank_id, None),
         Message::Transaction(transaction) => (Some(transaction.bank_id), None),
         Message::Entry(entry) => (Some(entry.bank_id), None),
@@ -1533,14 +1547,22 @@ impl GrpcService {
                         CommitmentLevel::Finalized => solana_commitment_config::CommitmentLevel::Finalized,
                     };
 
-                    // Each slot has up to 7 entries: data batch, block, footer, block meta and 3 slot statuses.
-                    let mut replayed_messages = Vec::with_capacity(7 * replay_stored_slots as usize);
+                    // Each slot has up to 8 entries: CreatedBank, data batch, block, footer, block meta and 3 slot statuses.
+                    let mut replayed_messages = Vec::with_capacity(8 * replay_stored_slots as usize);
                     let replayed_slot_iter = block_machine.replay_from_slot(replay_slot, min_solana_commitment);
 
                     // We need only an estimated timestamp for the replayed slot messages, so we can use the same timestamp for all of them.
                     let created_at = Timestamp::from(SystemTime::now());
 
                     for replayed_slot in replayed_slot_iter {
+                        // CreatedBank opens the bank for clients that rebuild blocks, so it goes before its data.
+                        replayed_messages.push(ReplayResponseMessageType::Single(created_bank_message(
+                            replayed_slot.frozen_block.slot(),
+                            replayed_slot.frozen_block.parent_slot(),
+                            replayed_slot.frozen_block.bank_id(),
+                            created_at,
+                        )));
+
                         // 1st Put data (account/txn/entries)
                         replayed_messages.push(ReplayResponseMessageType::Batch(replayed_slot.frozen_block.messages()));
 
@@ -1802,9 +1824,21 @@ impl GrpcService {
                             Err(TrySendError::Closed(_)) => Err(TrySendFailure::Closed),
                         };
                         let sealed_content_sent = match sealed_block {
+                            // The held bank's live CreatedBank went out before this client joined.
                             Some(block) => session
                                 .filter
-                                .try_for_each_block_content_update(block, try_send),
+                                .get_updates(
+                                    &created_bank_message(
+                                        block.meta.slot,
+                                        block.meta.parent_slot,
+                                        block.meta.bank_id,
+                                        block.created_at,
+                                    ),
+                                    Some(commitment),
+                                )
+                                .into_iter()
+                                .try_for_each(try_send)
+                                .and_then(|()| session.filter.try_for_each_block_content_update(block, try_send)),
                             None => Ok(()),
                         };
                         let sent = sealed_content_sent.and_then(|()| {
@@ -3655,6 +3689,12 @@ mod tests {
         }
 
         fn spawn_loop() -> Harness {
+            spawn_loop_with_replay(None)
+        }
+
+        fn spawn_loop_with_replay(
+            replay_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
+        ) -> Harness {
             let (messages_tx, messages_rx) = mpsc::unbounded_channel();
             let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
             let broadcast = SubscriberChannels::new(1024, 1024, 1024);
@@ -3672,7 +3712,7 @@ mod tests {
             let handle_reconstruction = tokio::spawn(GrpcService::block_reconstruction_loop(
                 BatchStreamUnboundedReceiver::new(block_reconstruction_rx),
                 broadcast,
-                None,
+                replay_rx,
                 None,
                 100,
             ));
@@ -3903,6 +3943,86 @@ mod tests {
             let _ =
                 tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
         }
+
+        /// A client rebuilding blocks opens a bank on its CreatedBank, so a `from_slot` replay
+        /// must send each bank's CreatedBank before that bank's data.
+        #[tokio::test]
+        async fn replay_sends_created_bank_before_bank_data() {
+            let (replay_tx, replay_rx) = mpsc::channel(1);
+            let mut harness = spawn_loop_with_replay(Some(replay_rx));
+            let mut messages = sealed_bank(10, 2);
+            messages.push(bank_status(10, SlotStatus::Processed, Some(2)));
+            for message in messages {
+                harness.messages_tx.send(message).unwrap();
+            }
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let batch = harness.broadcast_rx.recv().await.expect("broadcast open");
+                    if batch
+                        .iter()
+                        .any(|message| matches!(message, Message::Block(_)))
+                    {
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect("slot 10 never sealed");
+
+            let (response_tx, response_rx) = oneshot::channel();
+            replay_tx
+                .send((CommitmentLevel::Processed, 10, response_tx))
+                .await
+                .unwrap();
+            let Ok(ReplayedResponse::Messages(replayed, _)) = response_rx.await else {
+                panic!("replay failed");
+            };
+            let replayed: Vec<&Message> = replayed.iter().flatten().collect();
+            assert!(matches!(
+                replayed.first(),
+                Some(Message::Slot(slot)) if slot.slot == 10
+                    && slot.status == SlotStatus::CreatedBank
+                    && slot.bank_id == Some(2)
+                    && slot.parent == Some(9)
+            ));
+            let created_banks = replayed
+                .iter()
+                .filter(|message| {
+                    matches!(message, Message::Slot(slot) if slot.status == SlotStatus::CreatedBank)
+                })
+                .count();
+            assert_eq!(created_banks, 1);
+
+            drop(harness.messages_tx);
+            let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
+            let _ =
+                tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
+        }
+    }
+
+    /// A held bank's live CreatedBank is held back; another bank's passes.
+    #[test]
+    fn route_held_holds_created_bank_of_held_bank() {
+        let created_bank = |bank_id| {
+            Message::Slot(Arc::new(MessageSlot {
+                slot: 10,
+                parent: Some(9),
+                status: SlotStatus::CreatedBank,
+                dead_error: None,
+                created_at: Timestamp::default(),
+                bank_id: Some(bank_id),
+            }))
+        };
+        let mut held = vec![2];
+        assert!(matches!(
+            route_held(&mut held, &created_bank(2)),
+            HeldMessage::Skip
+        ));
+        assert!(matches!(
+            route_held(&mut held, &created_bank(3)),
+            HeldMessage::Pass
+        ));
+        assert_eq!(held, vec![2]);
     }
 
     #[tokio::test]
