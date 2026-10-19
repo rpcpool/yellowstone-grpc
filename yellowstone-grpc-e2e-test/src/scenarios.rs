@@ -69,5 +69,3 @@ pub fn init_log() {
 pub mod alpenglow;
 pub mod default;
 pub mod ratelimit;
-// Reconnect scenarios run only with `--module reconnect`.
-pub mod reconnect;
