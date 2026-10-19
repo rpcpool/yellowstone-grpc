@@ -64,6 +64,7 @@ fn before_created_bank_pubkeys() -> Result<HashSet<Pubkey>> {
 /// Each replayed bank's CreatedBank comes before its block meta, and before its accounts other
 /// than the must-have sysvars and epoch-crossing accounts written while the bank is
 /// constructed, as in the live stream.
+/// Each replayed bank brings every must-have sysvar account.
 /// At processed, each bank must also bring all its transactions before its block meta.
 #[test_helper(name = "replay", tags = ["replay"])]
 pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
@@ -71,11 +72,10 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
 
     let resp = client.get_slot(None).await.context("get_slot")?;
     let tip = resp.slot;
-    let sysvar_clock_str = MUST_HAVE_SYSVAR_ACCOUNTS[0];
-    let sysvar_clock_pubkey = Pubkey::from_str(sysvar_clock_str).context("valid pubkey string")?;
+    let musthave_pubkeys = must_have_sysvar_pubkeys()?;
     let before_created_bank = before_created_bank_pubkeys()?;
     let account_filter = SubscribeRequestFilterAccounts {
-        account: vec![sysvar_clock_str.to_string()],
+        account: MUST_HAVE_SYSVAR_ACCOUNTS.map(str::to_string).to_vec(),
         ..Default::default()
     };
     let from_slot = tip.saturating_sub(10);
@@ -110,6 +110,7 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
     let mut slot_status_received = HashMap::new();
     // Keyed by (slot, bank_id): a slot can have more than one bank across forks.
     let mut created_banks = HashSet::new();
+    let mut musthave_seen: HashMap<(u64, u64), HashSet<Pubkey>> = HashMap::new();
     while let Some(update) = stream.next().await {
         if remaining_slot_to_visit.is_empty() {
             break;
@@ -146,14 +147,18 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
                 let actual_pubkey = Pubkey::try_from(account.pubkey.clone())
                     .map_err(|_| anyhow::anyhow!("invalid account pubkey bytes"))?;
                 ensure!(
-                    actual_pubkey == sysvar_clock_pubkey,
-                    "received unexpected pubkey"
+                    musthave_pubkeys.contains(&actual_pubkey),
+                    "received unexpected pubkey {actual_pubkey}"
                 );
                 block_visited.insert(subscribe_update_account.slot);
 
                 let bank_id = subscribe_update_account
                     .bank_id
                     .context("replayed account update should have a bank_id")?;
+                musthave_seen
+                    .entry((subscribe_update_account.slot, bank_id))
+                    .or_default()
+                    .insert(actual_pubkey);
                 // Agave writes some must-have sysvars, and the epoch-crossing accounts on the
                 // first bank of an epoch, while it constructs the bank, before CreatedBank; any
                 // other account comes after it.
@@ -204,6 +209,32 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
     ensure!(
         remaining_slot_to_visit.is_empty(),
         "should have received updates for all expected slots in the replay"
+    );
+    let created_bank_slots: HashSet<u64> = created_banks.iter().map(|(slot, _)| *slot).collect();
+    let slots_without_created_bank: Vec<u64> = (from_slot..tip)
+        .filter(|slot| !created_bank_slots.contains(slot))
+        .collect();
+    ensure!(
+        slots_without_created_bank.is_empty(),
+        "should receive CreatedBank for every slot in the replay, missing for slots {slots_without_created_bank:?}"
+    );
+    let mut banks_missing_musthave: Vec<(u64, u64, Vec<Pubkey>)> = created_banks
+        .iter()
+        .filter(|(slot, _)| (from_slot..tip).contains(slot))
+        .filter_map(|&(slot, bank_id)| {
+            let seen = musthave_seen.get(&(slot, bank_id));
+            let missing: Vec<Pubkey> = musthave_pubkeys
+                .iter()
+                .filter(|pubkey| !seen.is_some_and(|seen| seen.contains(pubkey)))
+                .copied()
+                .collect();
+            (!missing.is_empty()).then_some((slot, bank_id, missing))
+        })
+        .collect();
+    banks_missing_musthave.sort_unstable();
+    ensure!(
+        banks_missing_musthave.is_empty(),
+        "every replayed bank should bring all must-have sysvar accounts, missing (slot, bank_id, accounts): {banks_missing_musthave:?}"
     );
 
     // Several connects: each one lands in a different part of the bank in progress.
