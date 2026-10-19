@@ -187,6 +187,14 @@ cargo run -p yellowstone-grpc-intg-test --bin yellowstone-e2e -- \
 	all --module default --tag accounts --tag filters
 ```
 
+Skip scenarios carrying any of several tags (wins over `--tags`; also works with `list`):
+
+```bash
+cargo run -p yellowstone-grpc-intg-test --bin yellowstone-e2e -- \
+	--endpoint https://127.0.0.1:10000 \
+	all --module default --exclude-tags replay --exclude-tags blockmachine
+```
+
 ### Run one scenario
 
 ```bash
