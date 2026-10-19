@@ -266,11 +266,11 @@ fn matches_module(scenario: &Scenario, module: &str) -> bool {
 fn find_scenario(name: &str) -> Result<&'static Scenario> {
     inventory::iter::<Scenario>
         .into_iter()
-        .find(|s| s.name == name)
+        .find(|s| s.full_name() == name)
         .ok_or_else(|| {
             let available: Vec<_> = inventory::iter::<Scenario>
                 .into_iter()
-                .map(|s| s.name)
+                .map(Scenario::full_name)
                 .collect();
             anyhow::anyhow!(
                 "unknown scenario '{}'; available: {}",
@@ -291,7 +291,7 @@ async fn run_scenario(
             .expect("valid template")
             .tick_strings(&["|", "/", "-", "\\"]),
     );
-    pb.set_message(format!("running scenario '{}'...", scenario.name));
+    pb.set_message(format!("running scenario '{}'...", scenario.full_name()));
     pb.enable_steady_tick(Duration::from_millis(120));
 
     let res = (scenario.run)(config).await;
@@ -299,8 +299,8 @@ async fn run_scenario(
     pb.disable_steady_tick();
 
     let message = match &res {
-        Ok(()) => format!("✅ scenario '{}' passed", scenario.name),
-        Err(err) => format!("❌ scenario '{}' failed: {:#}", scenario.name, err),
+        Ok(()) => format!("✅ scenario '{}' passed", scenario.full_name()),
+        Err(err) => format!("❌ scenario '{}' failed: {:#}", scenario.full_name(), err),
     };
     // Print the final line to the scrollback and drop this bar, so the still-running
     // scenarios' spinners stay pinned as the trailing lines instead of being interleaved
@@ -327,13 +327,13 @@ async fn run_scenario_check(
     let started = Instant::now();
     match run_scenario(scenario, config, multi).await {
         Ok(()) => VerificationCheck {
-            name: scenario.name.to_string(),
+            name: scenario.full_name(),
             status: VerificationStatus::Ok,
             detail: None,
             duration_ms: duration_ms(started.elapsed()),
         },
         Err(err) => VerificationCheck {
-            name: scenario.name.to_string(),
+            name: scenario.full_name(),
             status: VerificationStatus::Critical,
             detail: Some(bounded_detail(format!("{err:#}"))),
             duration_ms: duration_ms(started.elapsed()),
@@ -381,7 +381,11 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             return Ok(ExitCode::from(exit_code::OK));
         }
 
-        let name_w = scenarios.iter().map(|s| s.name.len()).max().unwrap_or(4);
+        let name_w = scenarios
+            .iter()
+            .map(|s| s.full_name().len())
+            .max()
+            .unwrap_or(4);
         let tags_w = scenarios
             .iter()
             .map(|s| s.tags.join(", ").len())
@@ -395,7 +399,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         for scenario in scenarios {
             println!(
                 "{:<name_w$}  {:<tags_w$}  {}",
-                scenario.name,
+                scenario.full_name(),
                 scenario.tags.join(", "),
                 scenario.description,
             );
@@ -497,10 +501,12 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                         let run_config = &run_config;
                         let multi = &multi;
                         async move {
-                            log::info!("running scenario: {}", scenario.name);
+                            log::info!("running scenario: {}", scenario.full_name());
                             run_scenario(scenario, run_config, multi)
                                 .await
-                                .with_context(|| format!("scenario '{}' failed", scenario.name))
+                                .with_context(|| {
+                                    format!("scenario '{}' failed", scenario.full_name())
+                                })
                         }
                     })
                     .await?;
@@ -552,7 +558,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     let run_config = &run_config;
                     let multi = &multi;
                     async move {
-                        log::info!("running scenario: {}", scenario.name);
+                        log::info!("running scenario: {}", scenario.full_name());
                         run_scenario_check(scenario, run_config, multi).await
                     }
                 })
@@ -622,6 +628,18 @@ mod tests {
             cli.json_file.as_deref(),
             Some(std::path::Path::new("/tmp/result.json"))
         );
+    }
+
+    /// Scenarios are run by name, and a `params` entry is named after its values' `Debug`
+    /// output, so two entries that format the same would make one of them unreachable.
+    #[test]
+    fn scenario_names_are_unique() {
+        let mut names = std::collections::HashSet::new();
+        for scenario in inventory::iter::<Scenario> {
+            let name = scenario.full_name();
+            assert!(names.insert(name.clone()), "duplicate scenario name {name}");
+        }
+        assert!(names.contains("replay[Processed]"));
     }
 
     #[test]

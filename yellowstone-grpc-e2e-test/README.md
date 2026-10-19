@@ -49,6 +49,7 @@ Supported attribute arguments:
 - `description = "..."` (optional)
 - `tags = ["..."]` (optional)
 - `config = Type` (optional; required for 3-arg signature)
+- `params = [...]` or `params = ([...], [...])` (optional; see below)
 
 Supported function signatures:
 
@@ -61,6 +62,41 @@ Rules:
 - 3-parameter scenarios must provide `config = Type`.
 - For the 2-parameter no-`config` case, parameter 2 is module-level `ModuleConfig`.
 - Module name is inferred from Rust `module_path!()` (typically the file/module name under `src/scenarios`).
+
+## Parameterized scenarios with `params`
+
+`params` gives one list of values per extra parameter: a single list `[a, b]` for one
+parameter, or a tuple of lists `([a, b], [x, y])` for several. The lists fill the function's
+last parameters in order, after the `RunConfig` and config parameters above, and the function
+is registered once per combination of values, one from each list. Values can be any
+expression whose type implements `Debug`, and each scenario is named `<name>[<values>]` from
+their `Debug` output:
+
+```rust
+#[test_helper(
+    name = "replay",
+    params = [CommitmentLevel::Processed, CommitmentLevel::Confirmed, CommitmentLevel::Finalized],
+)]
+pub async fn it_should_support_replay(
+    config: &RunConfig,
+    commitment: CommitmentLevel,
+) -> Result<()> { /* ... */ }
+```
+
+This registers `replay[Processed]`, `replay[Confirmed]` and `replay[Finalized]`. With several
+lists, `params = ([CommitmentLevel::Processed, CommitmentLevel::Confirmed], [10, 20])` feeds
+`fn(config: &RunConfig, commitment: CommitmentLevel, depth: u64)` and registers every
+combination: `<name>[Processed, 10]`, `<name>[Processed, 20]`, `<name>[Confirmed, 10]` and
+`<name>[Confirmed, 20]`. Combinations must format differently, and `config = T` is shared by
+all of them (`[scenarios.<module>.<name>]`).
+
+Quote the name when running one, since shells treat `[...]` as a glob:
+
+```bash
+cargo run -p yellowstone-grpc-intg-test --bin yellowstone-e2e -- \
+	--endpoint https://127.0.0.1:10000 \
+	run 'replay[Processed]'
+```
 
 ## Module-level config with `module_config!`
 

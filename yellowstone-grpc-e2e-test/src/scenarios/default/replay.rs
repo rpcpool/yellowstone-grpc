@@ -60,14 +60,52 @@ fn before_created_bank_pubkeys() -> Result<HashSet<Pubkey>> {
         .collect()
 }
 
+/// How many slots `it_should_support_replay` checks once they reach its commitment level.
+const REPLAY_SLOTS_TO_CHECK: usize = 10;
+
 /// Verifies replay support by receiving historical data from a replay request.
+/// Replays from a depth below the processed tip that depends on `commitment`, and checks the
+/// first [`REPLAY_SLOTS_TO_CHECK`] replayed slots that reach `commitment`.
 /// Each replayed bank's CreatedBank comes before its block meta, and before its accounts other
 /// than the must-have sysvars and epoch-crossing accounts written while the bank is
 /// constructed, as in the live stream.
 /// Each replayed bank brings every must-have sysvar account.
+/// Each checked slot gets every slot status up to `commitment`, in order: Processed, then
+/// Confirmed, then Finalized.
 /// At processed, each bank must also bring all its transactions before its block meta.
-#[test_helper(name = "replay", tags = ["replay"])]
-pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
+#[test_helper(
+    name = "replay",
+    tags = ["replay"],
+    params = [
+        CommitmentLevelProto::Processed,
+        CommitmentLevelProto::Confirmed,
+        CommitmentLevelProto::Finalized,
+    ]
+)]
+pub async fn it_should_support_replay(
+    config: &RunConfig,
+    commitment: CommitmentLevelProto,
+) -> Result<()> {
+    // Confirmed and finalized lag the processed tip, so replay starts deep enough to find
+    // REPLAY_SLOTS_TO_CHECK slots that already reached the level.
+    // A slot reaches `commitment` with the last of `expected_statuses`, after the others.
+    let (replay_depth, expected_statuses): (u64, &[SlotStatus]) = match commitment {
+        CommitmentLevelProto::Processed => (10, &[SlotStatus::SlotProcessed]),
+        CommitmentLevelProto::Confirmed => {
+            (100, &[SlotStatus::SlotProcessed, SlotStatus::SlotConfirmed])
+        }
+        CommitmentLevelProto::Finalized => (
+            350,
+            &[
+                SlotStatus::SlotProcessed,
+                SlotStatus::SlotConfirmed,
+                SlotStatus::SlotFinalized,
+            ],
+        ),
+    };
+    let reached_status = *expected_statuses
+        .last()
+        .context("every commitment expects a slot status")?;
     let mut client = new_client(config).await?;
 
     let resp = client.get_slot(None).await.context("get_slot")?;
@@ -78,7 +116,7 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
         account: MUST_HAVE_SYSVAR_ACCOUNTS.map(str::to_string).to_vec(),
         ..Default::default()
     };
-    let from_slot = tip.saturating_sub(10);
+    let from_slot = tip.saturating_sub(replay_depth);
     let subscription = SubscribeRequest {
         slots: HashMap::from([(
             "test".to_string(),
@@ -89,6 +127,7 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
         )]),
         accounts: HashMap::from([("test".to_string(), account_filter)]),
         blocks_meta: HashMap::from([("test".to_string(), Default::default())]),
+        commitment: Some(commitment as i32),
         from_slot: Some(from_slot),
         ..Default::default()
     };
@@ -99,20 +138,17 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
         .context("subscription should succeed")?;
     let mut count = 0usize;
     const MAX_UPDATES: usize = 10;
-    log::info!(
-        "current tip slot is {}, subscribing from slot {}",
-        tip,
-        from_slot
-    );
-    let mut remaining_slot_to_visit = Vec::from_iter(from_slot..tip);
+    log::info!("current tip slot is {tip}, subscribing at {commitment:?} from slot {from_slot}");
+    // Slots whose status reached `commitment`.
+    let mut reached_slots = HashSet::new();
     let mut block_visited = HashSet::new();
     let mut block_meta_received = HashSet::new();
-    let mut slot_status_received = HashMap::new();
+    let mut slot_status_received: HashMap<u64, HashSet<SlotStatus>> = HashMap::new();
     // Keyed by (slot, bank_id): a slot can have more than one bank across forks.
     let mut created_banks = HashSet::new();
     let mut musthave_seen: HashMap<(u64, u64), HashSet<Pubkey>> = HashMap::new();
     while let Some(update) = stream.next().await {
-        if remaining_slot_to_visit.is_empty() {
+        if reached_slots.len() >= REPLAY_SLOTS_TO_CHECK {
             break;
         }
         let update = update.context("stream should yield updates without error")?;
@@ -134,11 +170,28 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
                     created_banks.insert((slot.slot, bank_id));
                     continue;
                 }
-                slot_status_received.insert(slot.slot, slot.status());
+                let statuses = slot_status_received.entry(slot.slot).or_default();
+                statuses.insert(slot.status());
                 if block_visited.contains(&slot.slot) {
                     count += 1;
                 }
-                remaining_slot_to_visit.retain(|s| *s != slot.slot);
+                if slot.status() == reached_status {
+                    ensure!(
+                        slot.slot >= from_slot,
+                        "slot {}: replay sent a slot before from_slot {from_slot}",
+                        slot.slot
+                    );
+                    let missing: Vec<&SlotStatus> = expected_statuses
+                        .iter()
+                        .filter(|status| !statuses.contains(status))
+                        .collect();
+                    ensure!(
+                        missing.is_empty(),
+                        "slot {}: reached {commitment:?} without first receiving slot statuses {missing:?}",
+                        slot.slot
+                    );
+                    reached_slots.insert(slot.slot);
+                }
             }
             UpdateOneof::Account(subscribe_update_account) => {
                 let account = subscribe_update_account
@@ -203,24 +256,24 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
         }
     }
     ensure!(
-        slot_status_received.len() == (tip - from_slot) as usize,
-        "should receive slot status updates for all slots in the replay"
-    );
-    ensure!(
-        remaining_slot_to_visit.is_empty(),
-        "should have received updates for all expected slots in the replay"
+        reached_slots.len() >= REPLAY_SLOTS_TO_CHECK,
+        "stream ended after {} of {REPLAY_SLOTS_TO_CHECK} slots reached {commitment:?}",
+        reached_slots.len()
     );
     let created_bank_slots: HashSet<u64> = created_banks.iter().map(|(slot, _)| *slot).collect();
-    let slots_without_created_bank: Vec<u64> = (from_slot..tip)
+    let mut slots_without_created_bank: Vec<u64> = reached_slots
+        .iter()
         .filter(|slot| !created_bank_slots.contains(slot))
+        .copied()
         .collect();
+    slots_without_created_bank.sort_unstable();
     ensure!(
         slots_without_created_bank.is_empty(),
-        "should receive CreatedBank for every slot in the replay, missing for slots {slots_without_created_bank:?}"
+        "should receive CreatedBank for every slot that reached {commitment:?}, missing for slots {slots_without_created_bank:?}"
     );
     let mut banks_missing_musthave: Vec<(u64, u64, Vec<Pubkey>)> = created_banks
         .iter()
-        .filter(|(slot, _)| (from_slot..tip).contains(slot))
+        .filter(|(slot, _)| reached_slots.contains(slot))
         .filter_map(|&(slot, bank_id)| {
             let seen = musthave_seen.get(&(slot, bank_id));
             let missing: Vec<Pubkey> = musthave_pubkeys
@@ -237,6 +290,9 @@ pub async fn it_should_support_replay(config: &RunConfig) -> Result<()> {
         "every replayed bank should bring all must-have sysvar accounts, missing (slot, bank_id, accounts): {banks_missing_musthave:?}"
     );
 
+    if commitment != CommitmentLevelProto::Processed {
+        return Ok(());
+    }
     // Several connects: each one lands in a different part of the bank in progress.
     for round in 0..PROCESSED_REPLAY_ROUNDS {
         tokio::time::timeout(
