@@ -39,6 +39,31 @@ pub(crate) const MUST_HAVE_SYSVAR_ACCOUNTS: [Pubkey; 4] = [
     Pubkey::from_str_const("SysvarRecentB1ockHashes11111111111111111111"),
 ];
 
+// Fixed-address accounts written by the first bank of a new epoch on its fork (not
+// necessarily the epoch's first slot), during bank construction and so before `CreatedBank`.
+// Accounts whose address varies are left out: the feature accounts activated at that epoch,
+// builtin/core-BPF migration targets, and the vote accounts charged the VAT and paid
+// commission on Alpenglow. So is the Rent sysvar, which is only rewritten when a feature that
+// changes rent activates at that epoch.
+// NOTE: THIS CONSTANT IS NOT USED ANYWHERE, BESIDES TESTS, IT'S ONLY FOR DOCUMENTATION PURPOSES.
+// PERHAPS SOMEDAY THIS CONSTANT WILL BE USED IN THE MAIN LOGIC, BUT FOR NOW IT'S PURELY DOCUMENTATION TO HELP AGENT.
+#[allow(dead_code)]
+pub(crate) const SYSVAR_ON_EPOCH_CROSSING: [Pubkey; 5] = [
+    // Every epoch crossing: updated when the epoch is activated.
+    Pubkey::from_str_const("SysvarStakeHistory1111111111111111111111111"),
+    // Every epoch crossing: created active by `begin_partitioned_rewards`.
+    Pubkey::from_str_const("SysvarEpochRewards1111111111111111111111111"),
+    // Alpenglow or migration epoch: `REWARD_EPOCH_DELEGATED_STAKES_ACCOUNT`, the PDA of seed
+    // `reward_epoch_delegated_stakes` under the alpenglow feature id.
+    Pubkey::from_str_const("CHfmHwNcskfxg1ZnLatbHbmVvYbA6rLDz3Xok5a3Ku8i"),
+    // Alpenglow: the incinerator receives the VAT burned from staked vote accounts. Banks also
+    // write it at freeze, after `CreatedBank`, when they burn fees.
+    Pubkey::from_str_const("1nc1nerator11111111111111111111111111111111"),
+    // Alpenglow: `VOTE_REWARD_ACCOUNT_ADDR`, the PDA of seed `vote_reward_account` under the
+    // alpenglow feature id.
+    Pubkey::from_str_const("3vJzniWALu2qGFJ1ZY6JD3Y2ZmA5zWqmVdDX7yBXHgu7"),
+];
+
 // Agave writes this account only on Alpenglow, while it applies the footer and before
 // BlockMeta. A bank that writes it waits for its footer before it seals.
 static ALPENGLOW_CLOCK_ACCOUNT: LazyLock<Pubkey> = LazyLock::new(|| {
@@ -82,11 +107,11 @@ struct BankBuffer {
     bank_id: BankId,
     slot: Slot,
     parent_slot: Option<Slot>,
-    // Whether a `CreatedBank` status update has been observed for this bank_id. We do not
-    // assume the first event seen for a bank_id is `CreatedBank` -- account/transaction/entry
-    // data can legitimately arrive before it -- so this is tracked explicitly and required at
-    // seal time instead.
-    created_bank_seen: bool,
+    // The bank's `CreatedBank` status, kept to replay it. We do not assume the first event
+    // seen for a bank_id is `CreatedBank` -- the bank's construction-time account writes
+    // arrive before it -- so it is also pushed into `original_messages` at its arrival
+    // position, and required at seal time.
+    created_bank: Option<Arc<MessageSlot>>,
     // Bit `i` set means `MUST_HAVE_SYSVAR_ACCOUNTS[i]` has been observed for this bank.
     musthave_sysvar_accounts_bitmask: u8,
     // Set when the bank writes `ALPENGLOW_CLOCK_ACCOUNT`; the footer is then required to seal.
@@ -107,7 +132,7 @@ impl BankBuffer {
             bank_id,
             slot,
             parent_slot: None,
-            created_bank_seen: false,
+            created_bank: None,
             musthave_sysvar_accounts_bitmask: 0,
             footer_expected: false,
             original_messages: Vec::with_capacity(4096),
@@ -153,6 +178,12 @@ impl BankBuffer {
             Message::Entry(message_entry) => {
                 self.entries.push(Arc::clone(message_entry));
             }
+            Message::Slot(message_slot)
+                if message_slot.status == SlotStatus::CreatedBank
+                    && self.created_bank.is_none() =>
+            {
+                self.created_bank = Some(Arc::clone(message_slot));
+            }
             _ => return,
         }
         self.original_messages.push(event);
@@ -162,7 +193,7 @@ impl BankBuffer {
         if self.is_sealed {
             return Err(TrySealError::AlreadySealed);
         }
-        if !self.created_bank_seen {
+        if self.created_bank.is_none() {
             return Err(TrySealError::NotSealable);
         }
         if self.musthave_sysvar_accounts_bitmask != (1 << MUST_HAVE_SYSVAR_ACCOUNTS.len()) - 1 {
@@ -200,20 +231,31 @@ impl BankBuffer {
                 (*write_version == account.account.write_version).then_some(account)
             })
             .collect::<Vec<_>>();
-        let dedup_messages = self
-            .original_messages
-            .into_iter()
-            .filter_map(|message| {
-                if let Message::Account(account) = &message {
-                    let write_version = self
-                        .account_write_version_map
-                        .get(&account.account.pubkey)?;
-                    (*write_version == account.account.write_version).then_some(message)
-                } else {
-                    Some(message)
+        let created_bank = self.created_bank.expect("should be sealable");
+        // The bank's content without its `CreatedBank`, which is kept apart: live
+        // Confirmed/Finalized clients already got it when the bank was created.
+        let mut dedup_messages = Vec::with_capacity(self.original_messages.len());
+        let mut created_bank_index = 0;
+        for message in self.original_messages {
+            match &message {
+                Message::Slot(_) => {
+                    created_bank_index = dedup_messages.len();
+                    continue;
                 }
-            })
-            .collect::<Vec<_>>();
+                Message::Account(account) => {
+                    let Some(write_version) =
+                        self.account_write_version_map.get(&account.account.pubkey)
+                    else {
+                        continue;
+                    };
+                    if *write_version != account.account.write_version {
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            dedup_messages.push(message);
+        }
 
         if self.transactions.len() != block_meta.executed_transaction_count as usize {
             metrics::incr_geyser_block_mismatch_transaction();
@@ -227,6 +269,7 @@ impl BankBuffer {
 
         let pre_computed_message_block = Arc::new(MessageBlock::new(
             Arc::clone(&block_meta),
+            Arc::clone(&created_bank),
             self.transactions,
             account_info_vec,
             self.entries,
@@ -236,6 +279,8 @@ impl BankBuffer {
             bank_id: self.bank_id,
             slot: self.slot,
             original_messages: Arc::new(dedup_messages),
+            created_bank,
+            created_bank_index,
             block_meta,
             block_footer: self.footer,
             pre_computed_message_block,
@@ -246,7 +291,12 @@ impl BankBuffer {
 pub struct FrozenBank {
     bank_id: BankId,
     slot: Slot,
+    // The bank's content in arrival order, without its `CreatedBank`.
     original_messages: Arc<Vec<Message>>,
+    // The `CreatedBank` the plugin received, and where it arrived in `original_messages`:
+    // after the bank's construction-time account writes.
+    created_bank: Arc<MessageSlot>,
+    created_bank_index: usize,
     block_meta: Arc<MessageBlockMeta>,
     block_footer: Option<Arc<MessageBlockFooter>>,
     pre_computed_message_block: Arc<MessageBlock>,
@@ -257,8 +307,34 @@ impl FrozenBank {
         Arc::clone(&self.pre_computed_message_block)
     }
 
+    /// The bank's content in arrival order, without its `CreatedBank`. See
+    /// [`Self::created_bank`] and [`Self::created_bank_index`] to put it back.
     pub fn messages(&self) -> Arc<Vec<Message>> {
         Arc::clone(&self.original_messages)
+    }
+
+    /// The `CreatedBank` status the plugin received for this bank.
+    pub fn created_bank(&self) -> Arc<MessageSlot> {
+        Arc::clone(&self.created_bank)
+    }
+
+    /// Returns where the bank's [`SlotStatus::CreatedBank`] arrived among [`Self::messages`].
+    ///
+    /// Agave stores some accounts while it constructs a bank, before it sends
+    /// [`SlotStatus::CreatedBank`]: SlotHashes and Clock for every bank, plus the
+    /// epoch-crossing and partitioned-rewards accounts on some banks. Those writes are the
+    /// messages before this index. A replay splits [`Self::messages`] here and sends
+    /// [`Self::created_bank`] in between, so a replayed bank keeps the order of the live
+    /// stream without copying its messages. An account written both before and after the
+    /// [`SlotStatus::CreatedBank`], such as the Alpenglow Clock, only appears at its last
+    /// write.
+    ///
+    /// # Returns
+    ///
+    /// The index in [`Self::messages`] of the first message that arrived after the
+    /// [`SlotStatus::CreatedBank`], or the length of [`Self::messages`] if none did.
+    pub const fn created_bank_index(&self) -> usize {
+        self.created_bank_index
     }
 
     pub fn get_block_meta(&self) -> Arc<MessageBlockMeta> {
@@ -483,7 +559,7 @@ impl BlockMachineStorage {
             .retain(|_, &mut slot| slot >= cutoff);
     }
 
-    fn handle_slot_status(&mut self, message_slot: &MessageSlot) {
+    fn handle_slot_status(&mut self, message_slot: &Arc<MessageSlot>) {
         match message_slot.status {
             // Neither carries a bank_id, and neither is needed: buffering is keyed by
             // bank_id and starts on first sight of any bank-scoped event, not on
@@ -505,7 +581,7 @@ impl BlockMachineStorage {
         }
     }
 
-    fn handle_created_bank(&mut self, message_slot: &MessageSlot) {
+    fn handle_created_bank(&mut self, message_slot: &Arc<MessageSlot>) {
         let Some(bank_id) = message_slot.bank_id else {
             log::warn!(
                 "CreatedBank status for slot {} carries no bank_id; ignoring",
@@ -522,7 +598,7 @@ impl BlockMachineStorage {
             .banks
             .entry(bank_id)
             .or_insert_with(|| BankBuffer::new(bank_id, slot));
-        bank.created_bank_seen = true;
+        bank.add_event(Message::Slot(Arc::clone(message_slot)));
         if bank.parent_slot.is_none() {
             bank.parent_slot = message_slot.parent;
         }
@@ -1252,6 +1328,59 @@ mod tests {
         assert_eq!(confirmed, vec![(10, 2), (11, 3)]);
         assert!(!storage.banks.contains_key(&1));
         assert_eq!(storage.discarded_bank_ids.get(&1), Some(&10));
+    }
+
+    /// A sealed bank keeps the CreatedBank the plugin received, and where it arrived, apart
+    /// from `messages()`: live Confirmed/Finalized clients got it when the bank was created,
+    /// so the bank's content broadcast at those levels must not repeat it.
+    #[test]
+    fn sealed_bank_keeps_its_created_bank_apart_from_its_messages() {
+        let mut storage = BlockMachineStorage::new(10);
+        let created_bank = Arc::new(MessageSlot {
+            slot: 1,
+            parent: Some(0),
+            status: SlotStatus::CreatedBank,
+            dead_error: None,
+            created_at: ts(),
+            bank_id: Some(7),
+        });
+        // Agave sends the writes made while the bank is constructed before CreatedBank.
+        storage.add(make_account_msg(1, 7, MUST_HAVE_SYSVAR_ACCOUNTS[0], 1));
+        storage.add(make_account_msg(1, 7, MUST_HAVE_SYSVAR_ACCOUNTS[1], 1));
+        storage.add(Message::Slot(Arc::clone(&created_bank)));
+        storage.add(make_account_msg(1, 7, MUST_HAVE_SYSVAR_ACCOUNTS[2], 1));
+        storage.add(make_account_msg(1, 7, MUST_HAVE_SYSVAR_ACCOUNTS[3], 1));
+        storage.add(make_entry_msg(1, 0, 7));
+        storage.add(make_block_meta_msg(1, 0, 7));
+        storage.add(make_commitment_msg(1, Some(0), SlotStatus::Processed, 7));
+
+        let (_, frozen) = storage.pop_ready_block().expect("bank 7 should seal");
+        assert!(frozen
+            .messages()
+            .iter()
+            .all(|message| !matches!(message, Message::Slot(_))));
+        assert!(Arc::ptr_eq(&frozen.created_bank(), &created_bank));
+        assert!(Arc::ptr_eq(
+            &frozen.get_message_block().created_bank,
+            &created_bank
+        ));
+        assert_eq!(frozen.created_bank_index(), 2);
+    }
+
+    #[test]
+    fn epoch_crossing_pdas_match_their_alpenglow_seeds() {
+        for seed in [
+            &b"reward_epoch_delegated_stakes"[..],
+            b"vote_reward_account",
+        ] {
+            let (pda, _) =
+                Pubkey::find_program_address(&[seed], &agave_feature_set::alpenglow::id());
+            assert!(
+                SYSVAR_ON_EPOCH_CROSSING.contains(&pda),
+                "missing PDA {pda} of seed {:?}",
+                String::from_utf8_lossy(seed)
+            );
+        }
     }
 
     #[test]
