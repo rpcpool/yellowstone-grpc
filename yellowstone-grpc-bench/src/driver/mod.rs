@@ -98,6 +98,9 @@ pub struct RunArgs {
     /// Passed to the fleet: first N `deshred` subscribers
     #[clap(long)]
     pub max_deshred: Option<usize>,
+    /// `KEY=VALUE` set in the environment before the plugin loads, for experiment switches
+    #[clap(long = "plugin-env")]
+    pub plugin_env: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -121,6 +124,12 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
     let started_unix_ns = sys::unix_ns();
     // A plugin built with `latency-trace` writes its checkpoints here; others ignore it.
     std::env::set_var("YELLOWSTONE_LATENCY_TRACE_DIR", args.out.join("trace"));
+    for pair in &args.plugin_env {
+        let (key, value) = pair
+            .split_once('=')
+            .with_context(|| format!("--plugin-env must be KEY=VALUE: {pair}"))?;
+        std::env::set_var(key, value);
+    }
     let plugin = plugin::load(&args.plugin, &config_path)?;
 
     let (main_tx, main_rx) = crossbeam_channel::bounded(LANE_CAPACITY);
