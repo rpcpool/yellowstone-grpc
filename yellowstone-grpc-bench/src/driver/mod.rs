@@ -6,7 +6,7 @@ mod plugin;
 mod schedule;
 
 use {
-    crate::{fixture::Manifest, sys},
+    crate::{cpu, fixture::Manifest, sys},
     anyhow::Context,
     log::info,
     serde::Serialize,
@@ -119,6 +119,8 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
     let config_path = args.out.join("geyser.json");
     write_plugin_config(&args, &config_path)?;
     let started_unix_ns = sys::unix_ns();
+    // A plugin built with `latency-trace` writes its checkpoints here; others ignore it.
+    std::env::set_var("YELLOWSTONE_LATENCY_TRACE_DIR", args.out.join("trace"));
     let plugin = plugin::load(&args.plugin, &config_path)?;
 
     let (main_tx, main_rx) = crossbeam_channel::bounded(LANE_CAPACITY);
@@ -128,6 +130,8 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
     let driver_cpus = parse_cpus(args.driver_cpus.as_deref())?;
     let decoder_cpus = parse_cpus(args.decoder_cpus.as_deref())?;
     let fleet_child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
+    let cpu_sampler: Arc<Mutex<Option<cpu::CpuSampler>>> = Arc::new(Mutex::new(None));
+    let plugin_cpus = parse_cpus(args.plugin_cpus.as_deref())?;
 
     let lanes = [("ygbLaneMain", true, main_rx), ("ygbLaneDeshred", false, deshred_rx)]
         .into_iter()
@@ -136,6 +140,8 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
             let paced_start_unix_ns = Arc::clone(&paced_start_unix_ns);
             let fleet_child = Arc::clone(&fleet_child);
             let fleet_command = fleet_command(&args);
+            let cpu_sampler = Arc::clone(&cpu_sampler);
+            let plugin_cpus = plugin_cpus.clone();
             let config = lane::LaneConfig {
                 name,
                 leader,
@@ -149,6 +155,8 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
                     let on_attach = || {
                         info!("prefill complete: subscribers have {attach_secs} s to attach");
                         let _ = paced_start_unix_ns.set(sys::unix_ns() + attach_secs * 1_000_000_000);
+                        *cpu_sampler.lock().expect("cpu sampler lock") =
+                            Some(cpu::CpuSampler::start(plugin_cpus.clone()));
                         if let Some(mut command) = fleet_command.take_command() {
                             match command.spawn() {
                                 Ok(child) => *fleet_child.lock().expect("fleet lock") = Some(child),
@@ -190,8 +198,25 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
         .collect::<Result<Vec<_>, _>>()?;
     let deshred_stats = lane_stats.pop().expect("two lanes");
     let main_stats = lane_stats.pop().expect("two lanes");
+    let cpu = cpu_sampler
+        .lock()
+        .expect("cpu sampler lock")
+        .take()
+        .map(cpu::CpuSampler::finish);
     if let Some(child) = fleet_child.lock().expect("fleet lock").take() {
         stop_fleet(child)?;
+    }
+    if let Some(cpu) = &cpu {
+        fs::write(args.out.join("cpu.json"), serde_json::to_vec_pretty(cpu)?)?;
+        println!(
+            "cpu (attach to end): plugin workers mean {:.2} peak {:.2} cores; plugin CPUs busy mean {:.2} peak {:.2}, foreign mean {:.2} peak {:.2}",
+            cpu.groups.get("plugin_workers").map_or(0.0, |v| v.0),
+            cpu.groups.get("plugin_workers").map_or(0.0, |v| v.1),
+            cpu.plugin_cpus_busy.0,
+            cpu.plugin_cpus_busy.1,
+            cpu.plugin_cpus_foreign.0,
+            cpu.plugin_cpus_foreign.1,
+        );
     }
 
     let report = RunReport {

@@ -11,7 +11,8 @@
 | `ygb run` | Loads a plugin `.so`, replays a fixture window into it, and writes `driver.json` with lane lag and callback durations. With `--fleet-profile`, it starts `ygb fleet` when prefill ends and stops it when the replay ends. |
 | `ygb fleet` | Runs subscribers on a raw HTTP/2 gRPC client. Probes timestamp each message when its last DATA frame arrives, before decompression, and write `samples.bin`. Load subscribers only count bytes. |
 | `ygb profiles` | Generates a production-shaped subscriber profile. Filter shapes come from fra215 `filter_stats`, and pubkeys are drawn from the fixture. It picks the sampling exponent whose predicted per-stream rates best match production. |
-| `ygb report` | Prints probe latency (`t_recv - created_at`) by probe class, compression, and kind, plus per-slot p99 and stall counts. |
+| `ygb report` | Prints probe latency by probe class, compression, and kind, plus per-slot p99 and stall counts. With a traced plugin it also prints the plugin's stage waterfall. Reference times: processed data uses `created_at`. Slot statuses, and everything on confirmed or finalized streams, use the driver's callback time for that slot's status (`driver-statuses.json`). |
+| `ygb compare` | Paired A/B of two runs over the same window. The unit is the slot: per-slot p99 per probe group, paired by slot, with a 95% CI from a 10-slot block bootstrap on the median difference. |
 
 Record from nyc226 (the endpoint needs TLS with SNI `nyc226.nodes.rpcpool.com`). From the codespace, `--split-accounts` puts accounts on their own connection, because one connection's receive window (about 2.8 MB at 98 ms) caps it near 28 MB/s:
 
@@ -31,6 +32,22 @@ YGB=target/bench-fork/release/ygb PLUGIN=target/bench-fork/release/libyellowston
 ```
 
 Build `ygb` and the plugin in one cargo invocation, as `build-plugin.sh` does. The plugin's trait objects cross the library boundary, so both sides need the same rustc and the same dependency builds. Rank changes only on `public-fork` builds. Upstream tonic creates a zstd context per message, which adds about 0.6 ms per compressed message.
+
+## Plugin checkpoints (`latency-trace`)
+
+`TRACE=1 build-plugin.sh public-fork` builds the plugin with the `latency-trace` feature into `target/bench-fork-trace`. `ygb run` sets `YELLOWSTONE_LATENCY_TRACE_DIR` to `<run>/trace`. The plugin then writes per-stage histograms there every second. Most stages record a message's age (`now - created_at`), so the stages line up as a waterfall:
+
+| Stage | Where | Meaning |
+|---|---|---|
+| `dequeue_age_ns` | geyser_loop | callback to taken off the plugin channel |
+| `batch_size`, `broadcast_send_ns` | geyser_loop | processed batch size; time of the send that wakes every processed subscriber |
+| `client_recv_age_ns` | client_loop | callback to a subscriber task receiving the batch (1 in 16 batches) |
+| `client_batch_loop_ns` | client_loop | one subscriber's pass over a batch (same sample) |
+| `queue_residence_ns` | subscriber queue | time an update waited before the response stream took it |
+| `reconstruction_pass_ns` | block reconstruction | one pass of the reconstruction loop |
+| `worker_busy_permille`, `global_queue_depth` | runtime sampler | worker busy share and inject queue depth every 100 ms |
+
+`ygb run` also writes `cpu.json`: cores used per thread group, busy cores on the plugin CPUs, and the share not explained by the plugin's own threads (other tenants).
 
 ## Fixture format
 

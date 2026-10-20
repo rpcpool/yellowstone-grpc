@@ -10,6 +10,7 @@ use {
         contact_info::{self, ContactInfoState},
         file_watcher::FileWatcher,
         metered::PrometheusMeteredManager,
+        trace,
         metrics::{
             self, incr_grpc_method_call_count, observe_subscriber_queue_size,
             subscription_limit_exceeded_inc,
@@ -1398,11 +1399,22 @@ impl GrpcService {
                 info!("Geyser loop: messages channel closed");
                 break;
             };
+            if trace::ENABLED {
+                let now = trace::unix_ns();
+                for message in buffer.message_batch.iter().chain(buffer.seal_gated.as_ref()) {
+                    trace::record(trace::Stage::DequeueAge, trace::age_ns(now, message));
+                }
+                trace::record(trace::Stage::BatchSize, buffer.message_batch.len() as u64);
+            }
 
             if !buffer.message_batch.is_empty() {
                 metrics::message_queue_size_dec_by(buffer.message_batch.len() as i64);
                 let message_batch_arc = Arc::new(std::mem::take(&mut buffer.message_batch));
+                let send_start = trace::mono_ns();
                 broadcast.send(CommitmentLevel::Processed, Arc::clone(&message_batch_arc));
+                if trace::ENABLED {
+                    trace::record(trace::Stage::BroadcastSend, trace::mono_ns() - send_start);
+                }
                 buffer.message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
                 if block_reconstruction_tx
                     .send(BlockReconstructionMessage::Batch(message_batch_arc))
@@ -1454,6 +1466,7 @@ impl GrpcService {
                         info!("Block reconstruction loop: messages channel closed");
                         break;
                     };
+                    let pass_start = trace::mono_ns();
 
                     metrics::block_reconstruction_queue_size_dec_by(buffered_size as i64);
 
@@ -1521,6 +1534,9 @@ impl GrpcService {
                     let min_replayable_slot = block_machine.min_replayable_slot();
                     if let (Some(min_slot), Some(replay_first_available_slot)) = (min_replayable_slot, replay_first_available_slot.as_ref()) {
                         replay_first_available_slot.store(min_slot, Ordering::Relaxed);
+                    }
+                    if trace::ENABLED {
+                        trace::record(trace::Stage::ReconstructionPass, trace::mono_ns() - pass_start);
                     }
                 },
                 Some((commitment, replay_slot, tx)) = replay_stored_slots_rx.recv() => {
@@ -1791,6 +1807,14 @@ impl GrpcService {
                             break 'outer;
                         }
                     };
+                    let traced = trace::ENABLED && messages.first().is_some_and(trace::sampled);
+                    let loop_start = if traced {
+                        let first = messages.first().expect("sampled batch is non-empty");
+                        trace::record(trace::Stage::ClientRecvAge, trace::age_ns(trace::unix_ns(), first));
+                        trace::mono_ns()
+                    } else {
+                        0
+                    };
 
                     for message in messages.iter() {
                         let sealed_block = if held_banks.is_empty() {
@@ -1843,6 +1867,9 @@ impl GrpcService {
                                 break 'outer;
                             }
                         }
+                    }
+                    if traced {
+                        trace::record(trace::Stage::ClientBatchLoop, trace::mono_ns() - loop_start);
                     }
                 }
             }

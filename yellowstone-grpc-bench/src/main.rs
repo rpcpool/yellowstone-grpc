@@ -2,6 +2,8 @@
 //! See README.md for the fixture format and the measurement rules.
 
 mod codec;
+mod compare;
+mod cpu;
 mod driver;
 mod fixture;
 mod fleet;
@@ -41,6 +43,8 @@ enum Command {
     Report(report::ReportArgs),
     /// Generate a production-shaped subscriber profile from a fixture
     Profiles(profiles::GenArgs),
+    /// Paired A/B of two runs over the same window, by per-slot p99
+    Compare(compare::CompareArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -52,5 +56,6 @@ fn main() -> anyhow::Result<()> {
         Command::Fleet(args) => fleet::run(args),
         Command::Report(args) => report::run(args),
         Command::Profiles(args) => profiles::run(args),
+        Command::Compare(args) => compare::run(args),
     }
 }

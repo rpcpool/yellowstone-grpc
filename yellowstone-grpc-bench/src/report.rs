@@ -98,10 +98,96 @@ pub fn run(args: ReportArgs) -> anyhow::Result<()> {
         );
     }
     fs::write(args.run.join("report.json"), serde_json::to_vec_pretty(&report)?)?;
+    print_trace(&args.run)?;
     Ok(())
 }
 
+/// Prints the plugin's latency-trace stages, when the run used a traced build.
+fn print_trace(run: &Path) -> anyhow::Result<()> {
+    let Ok(entries) = fs::read_dir(run.join("trace")) else {
+        return Ok(());
+    };
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        let trace: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+        println!("\nplugin trace {} (whole run, prefill included):", path.display());
+        println!(
+            "{:<26} {:>12} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            "stage", "count", "p50", "p90", "p99", "p99.9", "max"
+        );
+        if let Some(stages) = trace["stages"].as_object() {
+            for (name, stage) in stages {
+                let value = |key: &str| stage[key].as_u64().unwrap_or_default();
+                let unit = |v: u64| {
+                    if name.ends_with("_ns") {
+                        format!("{:.1}us", v as f64 / 1e3)
+                    } else {
+                        v.to_string()
+                    }
+                };
+                println!(
+                    "{:<26} {:>12} {:>10} {:>10} {:>10} {:>10} {:>10}",
+                    name,
+                    value("count"),
+                    unit(value("p50")),
+                    unit(value("p90")),
+                    unit(value("p99")),
+                    unit(value("p999")),
+                    unit(value("max")),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+type Groups = BTreeMap<(String, String, String), Vec<(u64, u64)>>;
+
 pub fn build(run: &Path, warmup_secs: u64) -> anyhow::Result<Report> {
+    let (fleet, groups) = grouped(run, warmup_secs)?;
+    let rows = groups
+        .into_iter()
+        .map(|((class, compression, kind), values)| row(class, compression, kind, &values))
+        .collect();
+    Ok(Report {
+        run: run.display().to_string(),
+        warmup_secs,
+        disconnects: fleet.disconnects,
+        rows,
+    })
+}
+
+/// Per probe group (`class/compression/kind`), the p99 of each slot with at least `min_samples`.
+pub fn slot_p99s(
+    run: &Path,
+    warmup_secs: u64,
+    min_samples: usize,
+) -> anyhow::Result<BTreeMap<String, BTreeMap<u64, u64>>> {
+    let (_, groups) = grouped(run, warmup_secs)?;
+    Ok(groups
+        .into_iter()
+        .map(|((class, compression, kind), values)| {
+            let mut by_slot: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+            for (slot, latency) in values {
+                by_slot.entry(slot).or_default().push(latency);
+            }
+            let p99s = by_slot
+                .into_iter()
+                .filter(|(_, latencies)| latencies.len() >= min_samples)
+                .map(|(slot, mut latencies)| {
+                    latencies.sort_unstable();
+                    (slot, latencies[((latencies.len() - 1) as f64 * 0.99).round() as usize])
+                })
+                .collect();
+            (format!("{class}/{compression}/{kind}"), p99s)
+        })
+        .collect())
+}
+
+fn grouped(run: &Path, warmup_secs: u64) -> anyhow::Result<(FleetReport, Groups)> {
     let driver: DriverTimes = serde_json::from_slice(
         &fs::read(run.join("driver.json")).context("driver.json missing; did the run finish?")?,
     )?;
@@ -122,7 +208,7 @@ pub fn build(run: &Path, warmup_secs: u64) -> anyhow::Result<Report> {
         }
     }
 
-    let mut groups: BTreeMap<(String, String, String), Vec<(u64, u64)>> = BTreeMap::new();
+    let mut groups: Groups = BTreeMap::new();
     let mut unreferenced = 0usize;
     for sample in samples.iter().filter(|sample| sample.recv_ns >= measure_from) {
         let Some(subscriber) = fleet.subscribers.get(usize::from(sample.subscriber)) else {
@@ -155,17 +241,7 @@ pub fn build(run: &Path, warmup_secs: u64) -> anyhow::Result<Report> {
     if unreferenced > 0 {
         log::warn!("{unreferenced} samples had no driver reference time and were skipped");
     }
-
-    let rows = groups
-        .into_iter()
-        .map(|((class, compression, kind), values)| row(class, compression, kind, &values))
-        .collect();
-    Ok(Report {
-        run: run.display().to_string(),
-        warmup_secs,
-        disconnects: fleet.disconnects,
-        rows,
-    })
+    Ok((fleet, groups))
 }
 
 fn row(class: String, compression: String, kind: String, values: &[(u64, u64)]) -> Row {

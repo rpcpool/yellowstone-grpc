@@ -177,7 +177,7 @@ impl Shared {
 /// clone of the [`Weigher`] `W`.
 pub struct LoadAwareSender<T, W> {
     shared: Arc<Shared>,
-    inner: UnboundedSender<(u32, T)>,
+    inner: UnboundedSender<(u32, EnqueuedAt, T)>,
     weigher: W,
 }
 
@@ -204,8 +204,31 @@ impl<T, W: Clone> Clone for LoadAwareSender<T, W> {
 /// Dropping it closes the channel and wakes every sender waiting for capacity.
 pub struct LoadAwareReceiver<T> {
     shared: Arc<Shared>,
-    inner: UnboundedReceiver<(u32, T)>,
+    inner: UnboundedReceiver<(u32, EnqueuedAt, T)>,
 }
+
+/// Enqueue time of an item, kept only with the `latency-trace` feature.
+#[cfg(feature = "latency-trace")]
+type EnqueuedAt = u64;
+#[cfg(not(feature = "latency-trace"))]
+type EnqueuedAt = ();
+
+#[cfg(feature = "latency-trace")]
+fn enqueued_at() -> EnqueuedAt {
+    crate::trace::mono_ns()
+}
+#[cfg(not(feature = "latency-trace"))]
+const fn enqueued_at() -> EnqueuedAt {}
+
+#[cfg(feature = "latency-trace")]
+fn record_residence(enqueued: EnqueuedAt) {
+    crate::trace::record(
+        crate::trace::Stage::QueueResidence,
+        crate::trace::mono_ns().saturating_sub(enqueued),
+    );
+}
+#[cfg(not(feature = "latency-trace"))]
+const fn record_residence(_enqueued: EnqueuedAt) {}
 
 impl<T> Drop for LoadAwareReceiver<T> {
     fn drop(&mut self) {
@@ -309,8 +332,8 @@ where
             }
         }
         self.inner
-            .send((weight, item))
-            .map_err(|err| SendError(err.0 .1))
+            .send((weight, enqueued_at(), item))
+            .map_err(|err| SendError(err.0 .2))
     }
 
     /// Sends an item without waiting.
@@ -339,8 +362,8 @@ where
             Err(TryAcquireError::Closed) => return Err(TrySendError::Closed(item)),
         }
         self.inner
-            .send((weight, item))
-            .map_err(|err| TrySendError::Closed(err.0 .1))
+            .send((weight, enqueued_at(), item))
+            .map_err(|err| TrySendError::Closed(err.0 .2))
     }
 
     /// Returns the weight currently held by the channel.
@@ -380,7 +403,8 @@ impl<T> LoadAwareReceiver<T> {
     /// [`LoadAwareSender`] is dropped. [`Poll::Pending`] otherwise.
     pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<T>> {
         self.inner.poll_recv(cx).map(|maybe| {
-            maybe.map(|(weight, item)| {
+            maybe.map(|(weight, enqueued, item)| {
+                record_residence(enqueued);
                 self.shared.semaphore.add_permits(weight as usize);
                 item
             })

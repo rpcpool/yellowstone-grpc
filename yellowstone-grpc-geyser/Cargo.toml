@@ -19,6 +19,8 @@ name = "config-check"
 [features]
 default = []
 bench = ["dep:solana-storage-proto"]
+# Pipeline latency checkpoints, written to $YELLOWSTONE_LATENCY_TRACE_DIR; see src/trace.rs.
+latency-trace = []
 
 [dependencies]
 foldhash = { workspace = true }
