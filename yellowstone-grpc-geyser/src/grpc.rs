@@ -8,6 +8,7 @@ use {
         block_reconstruction_v2::BlockMachineStorage,
         config::{AuthConfig, AuthKind, BillingConfig, ConfigGrpc, GrpcAddress, GrpcTlsConfig},
         contact_info::{self, ContactInfoState},
+        fanout::{FanoutShards, LiveReceiver},
         file_watcher::FileWatcher,
         metered::PrometheusMeteredManager,
         metrics::{
@@ -356,14 +357,28 @@ pub struct SubscriberChannels {
     processed: broadcast::Sender<BroadcastedMessage>,
     confirmed: broadcast::Sender<BroadcastedMessage>,
     finalized: broadcast::Sender<BroadcastedMessage>,
+    fanout: Option<Arc<FanoutShards>>,
 }
 
 impl SubscriberChannels {
     pub fn new(processed: usize, confirmed: usize, finalized: usize) -> Self {
+        let processed = broadcast::channel(processed).0;
+        let fanout = FanoutShards::from_env(&processed);
         Self {
-            processed: broadcast::channel(processed).0,
+            processed,
             confirmed: broadcast::channel(confirmed).0,
             finalized: broadcast::channel(finalized).0,
+            fanout,
+        }
+    }
+
+    /// Live batches for a client loop; processed subscribers go through the fan-out shards when enabled.
+    pub fn subscribe_live(&self, commitment: CommitmentLevel, filter: &Filter) -> LiveReceiver {
+        match (&self.fanout, commitment) {
+            (Some(fanout), CommitmentLevel::Processed) => {
+                LiveReceiver::Sharded(fanout.register(filter.clone()))
+            }
+            _ => LiveReceiver::Broadcast(self.subscribe(commitment)),
         }
     }
 
@@ -1663,10 +1678,11 @@ impl GrpcService {
         }
 
         let mut commitment = session.filter.get_commitment_level();
-        let mut messages_rx = broadcast.subscribe(commitment);
+        let mut messages_rx = broadcast.subscribe_live(commitment, &session.filter);
         let mut held_banks: Vec<BankId> = Vec::new();
 
         'outer: loop {
+            messages_rx.set_forward_all(!held_banks.is_empty());
             observe_subscriber_queue_size(
                 &session.subscriber_id,
                 stream_tx.current_weight() as u64,
@@ -1698,12 +1714,13 @@ impl GrpcService {
                     match message {
                         Some(Some((from_slot, filter_new))) => {
                             session.set_filter(filter_new);
+                            messages_rx.set_filter(&session.filter);
                             info!("client #{}: filter updated", session.subscriber_id);
 
                             let commitment_new = session.filter.get_commitment_level();
                             if commitment_new != commitment {
                                 commitment = commitment_new;
-                                messages_rx = broadcast.subscribe(commitment);
+                                messages_rx = broadcast.subscribe_live(commitment, &session.filter);
                                 held_banks.clear();
                             }
 
