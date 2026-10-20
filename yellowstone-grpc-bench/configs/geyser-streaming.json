@@ -1,0 +1,30 @@
+{
+  "libpath": "unused-by-ygb",
+  "log": {
+    "level": "info"
+  },
+  "tokio": {
+    "worker_threads": 8
+  },
+  "grpc": {
+    "address": "127.0.0.1:10000",
+    "channel_capacity": "1_000_000",
+    "max_decoding_message_size": "8_388_608",
+    "unary_concurrency_limit": 100,
+    "replay_stored_slots": 1000,
+    "subscription_limit": 100,
+    "subscription_limit_enforce": false,
+    "compression": {
+      "accept": ["gzip", "zstd"],
+      "send": ["gzip", "zstd"]
+    },
+    "filters": {
+      "accounts": {
+        "owner_reject": ["compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq"]
+      }
+    }
+  },
+  "prometheus": {
+    "address": "127.0.0.1:9123"
+  }
+}

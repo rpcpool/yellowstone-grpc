@@ -8,7 +8,8 @@ members = [
     "yellowstone-grpc-geyser",
     "yellowstone-grpc-proto",
     "yellowstone-grpc-e2e-test",
-    "yellowstone-grpc-tools"
+    "yellowstone-grpc-tools",
+    "yellowstone-grpc-bench"
 ]
 
 [workspace.package]
@@ -101,6 +102,7 @@ uuid = "1"
 vergen = "9.0.6"
 wincode = "0.6.1"
 notify = "8.2.0"
+zstd = "0.13.3"
 
 # Agave Monorepo
 agave-feature-set = "4.3.2"

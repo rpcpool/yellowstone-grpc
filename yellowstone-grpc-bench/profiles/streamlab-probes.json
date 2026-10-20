@@ -1,0 +1,71 @@
+{
+  "description": "Streamlab subscription from nyc289, 2026-10-20",
+  "subscribers": [
+    {
+      "name": "streamlab-none",
+      "class": "streamlab",
+      "role": "probe",
+      "compression": "none",
+      "count": 4,
+      "request": {
+        "accounts": {
+          "streamlab_ping": {
+            "account": [
+              "ping6gwBZx1ccMMFyLgkVSupUmujYrFidEXuNRPq989"
+            ]
+          },
+          "streamlab_owner": {
+            "owner": [
+              "9H6tua7jkLhdm3w8BvgpTn5LZNU7g4ZynDmCiNN3q6Rp"
+            ]
+          }
+        },
+        "transactions": {
+          "streamlab": {
+            "account_include": [
+              "9H6tua7jkLhdm3w8BvgpTn5LZNU7g4ZynDmCiNN3q6Rp",
+              "HEvSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEmJWHny",
+              "ping6gwBZx1ccMMFyLgkVSupUmujYrFidEXuNRPq989",
+              "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ"
+            ]
+          }
+        },
+        "entries": true,
+        "slots": false
+      }
+    },
+    {
+      "name": "streamlab-zstd",
+      "class": "streamlab",
+      "role": "probe",
+      "compression": "zstd",
+      "count": 4,
+      "request": {
+        "accounts": {
+          "streamlab_ping": {
+            "account": [
+              "ping6gwBZx1ccMMFyLgkVSupUmujYrFidEXuNRPq989"
+            ]
+          },
+          "streamlab_owner": {
+            "owner": [
+              "9H6tua7jkLhdm3w8BvgpTn5LZNU7g4ZynDmCiNN3q6Rp"
+            ]
+          }
+        },
+        "transactions": {
+          "streamlab": {
+            "account_include": [
+              "9H6tua7jkLhdm3w8BvgpTn5LZNU7g4ZynDmCiNN3q6Rp",
+              "HEvSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEmJWHny",
+              "ping6gwBZx1ccMMFyLgkVSupUmujYrFidEXuNRPq989",
+              "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ"
+            ]
+          }
+        },
+        "entries": true,
+        "slots": false
+      }
+    }
+  ]
+}
