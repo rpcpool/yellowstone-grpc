@@ -10,11 +10,23 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
-- yellowstone-grpc-client 15.0.1
+- yellowstone-grpc-client 16.0.0
+- yellowstone-grpc-napi 0.3.1
+- @triton-one/yellowstone-grpc@9.0.1
+
+### Breaking
+
+- client: `subscribe_with_reconnect` returns `ReconnectGeyserStream` instead of `ReconnectStream<AutoReconnect<Streaming<SubscribeUpdate>, TonicGrpcConnector>>`. It yields the same `ReconnectEvent`s. `ReconnectStream` is public only with the `test-tools` feature.
 
 ### Fixes
 
 - client: `DedupStream` drops a replayed `CreatedBank` of a bank it already delivered. It used to read it as a rollback and forget the bank, so the replayed copy of the block reached the client a second time. A `CreatedBank` of a new bank, or one without a `bank_id`, still resets the slot.
+
+### Misc
+
+- client: `ReconnectGeyserStream`, `ReconnectStream`, `ReconnectEvent` and `BankRef` move from `lib.rs` to the `reconnect_geyser_stream` module. `ReconnectEvent` and `BankRef` keep their crate-root paths.
+- ts-client: `@triton-one/yellowstone-grpc@9.0.1` depends on the napi 0.3.1 binaries, rebuilt against yellowstone-grpc-client 16.0.0 and the current proto.
+- e2e: the reconnect scenarios are faster and no longer fail at random. They cut the first connection after three block metas, mid-bank, instead of on a 4s timer. `reconnect-blockmachine` discards and replaces a partially delivered bank through `ReconnectStream` instead of patching it with `DedupStream`. The bank scenarios narrow their filters to sysvar accounts and vote transactions, and `reconnect-bank-integrity` checks the rebuilt bank against the finalized winner instead of a second full-block stream.
 
 ## 2026-10-17
 

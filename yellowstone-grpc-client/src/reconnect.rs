@@ -2976,7 +2976,7 @@ mod reconnect_stream_tests {
             }
             let mut client = builder.connect().await.unwrap();
             let (_sink, mut stream) = client.subscribe_with_reconnect(None).await.unwrap();
-            assert!(stream.inner.bank_replay);
+            assert!(stream.inner.inner.bank_replay);
             let metadata = SubscribeUpdate {
                 filters: vec!["user".into()],
                 update_oneof: Some(UpdateOneof::BlockMeta(Default::default())),
@@ -3226,7 +3226,7 @@ mod reconnect_stream_tests {
                 ..Default::default()
             };
             let (_sink, public_stream) = client.subscribe_with_reconnect(Some(request)).await.unwrap();
-            let auto = public_stream.inner;
+            let auto = public_stream.inner.inner;
             let interrupt = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let requests = Arc::new(Mutex::new(Vec::new()));
             let mut stream = ReconnectStream::new(AutoReconnect::new(
