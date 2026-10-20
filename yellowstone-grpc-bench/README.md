@@ -24,11 +24,11 @@ ygb inspect --fixture /workspaces/fixtures/ygb/<name>
 Build, generate a profile, and sweep the subscriber count:
 
 ```bash
-yellowstone-grpc-bench/scripts/build-plugin.sh public-fork   # rpcpool tonic fork, as in production
+yellowstone-grpc-bench/tools/build-plugin.sh public-fork   # rpcpool tonic fork, as in production
 ygb profiles --fixture <fixture> --streams 600 --out profiles/prod-600.json
 YGB=target/bench-fork/release/ygb PLUGIN=target/bench-fork/release/libyellowstone_grpc_geyser.so \
   FIXTURE=<fixture> PROFILE=profiles/prod-600.json RUNS=<runs dir> \
-  yellowstone-grpc-bench/scripts/sweep.sh base "1 50 150 400" --replay-stored-slots 300 --slots 1500
+  yellowstone-grpc-bench/tools/sweep.sh base "1 50 150 400" --replay-stored-slots 300 --slots 1500
 ```
 
 Build `ygb` and the plugin in one cargo invocation, as `build-plugin.sh` does. The plugin's trait objects cross the library boundary, so both sides need the same rustc and the same dependency builds. Rank changes only on `public-fork` builds. Upstream tonic creates a zstd context per message, which adds about 0.6 ms per compressed message.
