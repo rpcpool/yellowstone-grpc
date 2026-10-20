@@ -1680,14 +1680,11 @@ impl GrpcService {
         let mut commitment = session.filter.get_commitment_level();
         let mut messages_rx = broadcast.subscribe_live(commitment, &session.filter);
         let mut held_banks: Vec<BankId> = Vec::new();
+        let subscriber_metrics = metrics::SubscriberMetrics::new(&session.subscriber_id, "normal");
 
         'outer: loop {
             messages_rx.set_forward_all(!held_banks.is_empty());
-            observe_subscriber_queue_size(
-                &session.subscriber_id,
-                stream_tx.current_weight() as u64,
-                "normal",
-            );
+            subscriber_metrics.observe_queue_size(stream_tx.current_weight() as u64);
 
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -1849,7 +1846,7 @@ impl GrpcService {
                         };
                         let try_send = |update: FilteredUpdate| match stream_tx.try_send(Ok(update)) {
                             Ok(()) => {
-                                metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+                                subscriber_metrics.incr_sent();
                                 Ok(())
                             }
                             Err(TrySendError::Full(_)) => Err(TrySendFailure::Full),
@@ -2154,12 +2151,9 @@ impl GrpcService {
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
     ) {
+        let subscriber_metrics = metrics::SubscriberMetrics::new(&session.subscriber_id, "deshred");
         'outer: loop {
-            observe_subscriber_queue_size(
-                &session.subscriber_id,
-                stream_tx.current_weight() as u64,
-                "deshred",
-            );
+            subscriber_metrics.observe_queue_size(stream_tx.current_weight() as u64);
 
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -2220,7 +2214,7 @@ impl GrpcService {
                     for update in session.filter.get_updates(&message, None) {
                         match stream_tx.try_send(Ok(update)) {
                             Ok(()) => {
-                                metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+                                subscriber_metrics.incr_sent();
                             }
                             Err(TrySendError::Full(_)) => {
                                 error!("deshred client #{}/{}: lagged to send an update", session.subscriber_id, session.id);

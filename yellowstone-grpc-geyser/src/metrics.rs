@@ -124,6 +124,11 @@ lazy_static::lazy_static! {
         &["type"]
     ).unwrap();
 
+    static ref PRE_ENCODED_CACHE_HIT_ACCOUNT: IntCounter = PRE_ENCODED_CACHE_HIT.with_label_values(&["account"]);
+    static ref PRE_ENCODED_CACHE_HIT_TXN: IntCounter = PRE_ENCODED_CACHE_HIT.with_label_values(&["txn"]);
+    static ref PRE_ENCODED_CACHE_MISS_ACCOUNT: IntCounter = PRE_ENCODED_CACHE_MISS.with_label_values(&["account"]);
+    static ref PRE_ENCODED_CACHE_MISS_TXN: IntCounter = PRE_ENCODED_CACHE_MISS.with_label_values(&["txn"]);
+
     static ref GRPC_CONCURRENT_SUBSCRIBE_PER_SUBSCRIBER_ID: IntGaugeVec = IntGaugeVec::new(
         Opts::new(
             "yellowstone_grpc_geyser_concurrent_subscribe_per_subscriber_id",
@@ -469,6 +474,29 @@ pub fn incr_geyser_untrack_slot_event_dropped() {
     GEYSER_UNTRACK_SLOT_EVENT_DROPPED.inc();
 }
 
+/// Per-session metric children, resolved once so hot loops skip the label lookup and its lock.
+pub struct SubscriberMetrics {
+    queue_size: Histogram,
+    sent: IntCounter,
+}
+
+impl SubscriberMetrics {
+    pub fn new(subscriber_id: &str, kind: &'static str) -> Self {
+        Self {
+            queue_size: GRPC_SUBSCRIBER_QUEUE_SIZE.with_label_values(&[subscriber_id, kind]),
+            sent: GRPC_MESSAGE_SENT.with_label_values(&[subscriber_id]),
+        }
+    }
+
+    pub fn observe_queue_size(&self, size: u64) {
+        self.queue_size.observe(size as f64);
+    }
+
+    pub fn incr_sent(&self) {
+        self.sent.inc();
+    }
+}
+
 pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
     GRPC_MESSAGE_SENT
         .with_label_values(&[remote_id.as_ref()])
@@ -577,11 +605,19 @@ pub fn incr_client_disconnect<S: AsRef<str>>(subscriber_id: S, reason: &str) {
 }
 
 pub fn pre_encoded_cache_hit(msg_type: &str) {
-    PRE_ENCODED_CACHE_HIT.with_label_values(&[msg_type]).inc();
+    match msg_type {
+        "account" => PRE_ENCODED_CACHE_HIT_ACCOUNT.inc(),
+        "txn" => PRE_ENCODED_CACHE_HIT_TXN.inc(),
+        other => PRE_ENCODED_CACHE_HIT.with_label_values(&[other]).inc(),
+    }
 }
 
 pub fn pre_encoded_cache_miss(msg_type: &str) {
-    PRE_ENCODED_CACHE_MISS.with_label_values(&[msg_type]).inc();
+    match msg_type {
+        "account" => PRE_ENCODED_CACHE_MISS_ACCOUNT.inc(),
+        "txn" => PRE_ENCODED_CACHE_MISS_TXN.inc(),
+        other => PRE_ENCODED_CACHE_MISS.with_label_values(&[other]).inc(),
+    }
 }
 
 pub fn incr_grpc_method_call_count<S: AsRef<str>>(method: S) {
