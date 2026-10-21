@@ -7457,6 +7457,7 @@ dependencies = [
  "solana-transaction-status",
  "tikv-jemallocator",
  "tokio",
+ "toml 0.8.23",
  "tonic",
  "yellowstone-grpc-geyser",
  "yellowstone-grpc-proto",

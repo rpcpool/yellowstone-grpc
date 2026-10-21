@@ -83,8 +83,16 @@ pub fn run(args: InspectArgs) -> anyhow::Result<()> {
         *totals.bytes.entry(key).or_default() += frame.data.len() as u64;
         if let Some(created_ns) = info.created_at_ns {
             if info.kind != "ping" && info.kind != "pong" {
-                totals.first_created_ns = Some(totals.first_created_ns.map_or(created_ns, |v| v.min(created_ns)));
-                totals.last_created_ns = Some(totals.last_created_ns.map_or(created_ns, |v| v.max(created_ns)));
+                totals.first_created_ns = Some(
+                    totals
+                        .first_created_ns
+                        .map_or(created_ns, |v| v.min(created_ns)),
+                );
+                totals.last_created_ns = Some(
+                    totals
+                        .last_created_ns
+                        .map_or(created_ns, |v| v.max(created_ns)),
+                );
                 totals
                     .lag_ms
                     .entry(frame.stream)
@@ -155,7 +163,12 @@ fn bank_mut(banks: &mut BTreeMap<u64, Bank>, bank_id: u64, slot: u64) -> &mut Ba
     bank
 }
 
-fn record_status(banks: &mut BTreeMap<u64, Bank>, msg: &SubscribeUpdateSlot, created_ns: u64, deshred: bool) {
+fn record_status(
+    banks: &mut BTreeMap<u64, Bank>,
+    msg: &SubscribeUpdateSlot,
+    created_ns: u64,
+    deshred: bool,
+) {
     let Some(bank_id) = msg.bank_id else {
         return;
     };
@@ -177,7 +190,10 @@ fn print_totals(totals: &Totals) {
         _ => 0.0,
     };
     println!("\ncreated_at span: {span_s:.1} s");
-    println!("{:<32} {:>12} {:>10} {:>12}", "kind", "count", "per s", "MiB");
+    println!(
+        "{:<32} {:>12} {:>10} {:>12}",
+        "kind", "count", "per s", "MiB"
+    );
     for (key, count) in &totals.counts {
         let bytes = totals.bytes.get(key).copied().unwrap_or_default();
         println!(
@@ -204,12 +220,15 @@ fn check_banks(banks: &BTreeMap<u64, Bank>, totals: &Totals, examples: usize) {
     let created = SlotStatus::SlotCreatedBank as usize;
     let processed = SlotStatus::SlotProcessed as usize;
     let any_footer = banks.values().any(|bank| bank.footer);
-    let any_deshred = banks.values().any(|bank| bank.deshred_status_ns.iter().any(Option::is_some));
+    let any_deshred = banks
+        .values()
+        .any(|bank| bank.deshred_status_ns.iter().any(Option::is_some));
     let complete: Vec<(&u64, &Bank)> = banks
         .iter()
         .filter(|(_, bank)| {
             bank.block_meta.is_some()
-                && (bank.main_status_ns[created].is_some() || bank.deshred_status_ns[created].is_some())
+                && (bank.main_status_ns[created].is_some()
+                    || bank.deshred_status_ns[created].is_some())
         })
         .collect();
     println!(
@@ -230,10 +249,16 @@ fn check_banks(banks: &BTreeMap<u64, Bank>, totals: &Totals, examples: usize) {
                 .push(format!("bank {bank_id} slot {}: {detail}", bank.slot));
         };
         if bank.txs != executed {
-            fail("tx count", format!("{} txs, BlockMeta says {executed}", bank.txs));
+            fail(
+                "tx count",
+                format!("{} txs, BlockMeta says {executed}", bank.txs),
+            );
         }
         if entries_count > 0 && bank.entries != entries_count {
-            fail("entry count", format!("{} entries, BlockMeta says {entries_count}", bank.entries));
+            fail(
+                "entry count",
+                format!("{} entries, BlockMeta says {entries_count}", bank.entries),
+            );
         }
         if any_footer && !bank.footer {
             fail("footer", "missing".to_owned());
@@ -244,7 +269,15 @@ fn check_banks(banks: &BTreeMap<u64, Bank>, totals: &Totals, examples: usize) {
         if bank.main_status_ns[processed].is_none() {
             fail("main Processed", "missing".to_owned());
         }
-        if any_deshred && totals.deshred_txs_by_slot.get(&bank.slot).copied().unwrap_or_default() == 0 && bank.txs > 0 {
+        if any_deshred
+            && totals
+                .deshred_txs_by_slot
+                .get(&bank.slot)
+                .copied()
+                .unwrap_or_default()
+                == 0
+            && bank.txs > 0
+        {
             fail("deshred txs", "none recorded for the slot".to_owned());
         }
     }
@@ -269,7 +302,8 @@ fn print_timing(banks: &BTreeMap<u64, Bank>) {
         if let (Some(meta), Some(status)) = (bank.block_meta_ns, deshred_processed) {
             meta_to_processed.push((status as f64 - meta as f64) / 1e6);
         }
-        if let (Some(callback), Some(emitted)) = (deshred_processed, bank.main_status_ns[processed]) {
+        if let (Some(callback), Some(emitted)) = (deshred_processed, bank.main_status_ns[processed])
+        {
             seal_delay.push((emitted as f64 - callback as f64) / 1e6);
         }
     }

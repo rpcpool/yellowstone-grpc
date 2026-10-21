@@ -1,0 +1,33 @@
+# What compression costs the plugin: the same 300 local streams with each encoding.
+# Probes keep their own split (half none, half zstd), so their numbers stay comparable.
+name = "compression"
+description = "Same 300 local streams uncompressed, all zstd, all gzip, and the production split."
+
+[window]
+slots = 1000
+prefill_slots = 300
+warmup_secs = 60
+
+[plugin]
+replay_stored_slots = 300
+
+[mix]
+streams = 300
+deshred = 4
+# tyo236's unary load, 30-minute average on 2026-10-21.
+unary = { get_slot = 120, get_latest_blockhash = 120, get_block_height = 120, ping = 1 }
+
+[[cases]]
+name = "none"
+mix = { compression = { none = 100 } }
+
+[[cases]]
+name = "zstd"
+mix = { compression = { zstd = 100 } }
+
+[[cases]]
+name = "gzip"
+mix = { compression = { gzip = 100 } }
+
+[[cases]]
+name = "split"

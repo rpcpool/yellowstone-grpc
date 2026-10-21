@@ -1,0 +1,70 @@
+# How subscriber networks change everyone's latency, at a fixed 300 streams.
+# Each case replaces mix.network or mix.slow; the filters stay the same in every case.
+name = "network"
+description = "Same fleet on different networks: all local, geographic mix, all far away, stalling links, slow readers."
+
+[window]
+slots = 1000
+prefill_slots = 300
+warmup_secs = 60
+
+[plugin]
+replay_stored_slots = 300
+
+[mix]
+streams = 300
+deshred = 4
+# tyo236's unary load, 30-minute average on 2026-10-21.
+unary = { get_slot = 120, get_latest_blockhash = 120, get_block_height = 120, ping = 1 }
+
+[[cases]]
+name = "local"
+
+[[cases]]
+name = "geo"
+[[cases.mix.network]]
+name = "metro"
+weight = 45
+[[cases.mix.network]]
+name = "us"
+weight = 32
+delay_ms = [2, 35]
+jitter_ms = 1
+bandwidth_mbps = [500, 5000]
+[[cases.mix.network]]
+name = "europe"
+weight = 15
+delay_ms = [35, 45]
+jitter_ms = 1.5
+bandwidth_mbps = [200, 1000]
+[[cases.mix.network]]
+name = "asia"
+weight = 8
+delay_ms = [80, 120]
+jitter_ms = 3
+bandwidth_mbps = [100, 500]
+
+[[cases]]
+name = "far"
+[[cases.mix.network]]
+name = "asia"
+delay_ms = [80, 120]
+jitter_ms = 3
+bandwidth_mbps = [100, 500]
+
+[[cases]]
+name = "stalls"
+[[cases.mix.network]]
+name = "stalling"
+delay_ms = [10, 40]
+jitter_ms = 5
+bandwidth_mbps = [50, 500]
+stall_every_secs = 10
+stall_ms = 300
+
+[[cases]]
+name = "slow10"
+[cases.mix.slow]
+share = 10
+bandwidth_mbps = 2
+delay_ms = 20

@@ -240,7 +240,9 @@ mod imp {
     fn run(runtime: &tokio::runtime::Handle, path: &std::path::Path) {
         let metrics = runtime.metrics();
         let workers = metrics.num_workers();
-        let mut busy: Vec<Duration> = (0..workers).map(|i| metrics.worker_total_busy_duration(i)).collect();
+        let mut busy: Vec<Duration> = (0..workers)
+            .map(|i| metrics.worker_total_busy_duration(i))
+            .collect();
         let mut last_flush = Instant::now();
         loop {
             std::thread::sleep(Duration::from_millis(100));
@@ -262,8 +264,16 @@ mod imp {
 
     fn flush(path: &std::path::Path) -> std::io::Result<()> {
         let mut merged = vec![Hist::default(); STAGE_NAMES.len()];
-        for shard in SHARDS.get_or_init(Default::default).lock().expect("trace registry").iter() {
-            for (total, hist) in merged.iter_mut().zip(shard.lock().expect("trace shard").iter()) {
+        for shard in SHARDS
+            .get_or_init(Default::default)
+            .lock()
+            .expect("trace registry")
+            .iter()
+        {
+            for (total, hist) in merged
+                .iter_mut()
+                .zip(shard.lock().expect("trace shard").iter())
+            {
                 total.merge(hist);
             }
         }

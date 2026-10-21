@@ -25,7 +25,7 @@ pub struct CompareArgs {
     pub min_samples: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CompareRow {
     pub group: String,
     pub slots: usize,
@@ -38,8 +38,28 @@ pub struct CompareRow {
 }
 
 pub fn run(args: CompareArgs) -> anyhow::Result<()> {
-    let a = report::slot_p99s(&args.a, args.warmup_secs, args.min_samples)?;
-    let b = report::slot_p99s(&args.b, args.warmup_secs, args.min_samples)?;
+    let rows = compare_dirs(&args.a, &args.b, args.warmup_secs, args.min_samples)?;
+    print_rows(&args.a, &args.b, &rows);
+    let out = args.b.join(format!(
+        "compare-vs-{}.json",
+        args.a
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    ));
+    fs::write(out, serde_json::to_vec_pretty(&rows)?)?;
+    Ok(())
+}
+
+/// Per probe group: median of paired per-slot p99 differences (b - a) with a block-bootstrap CI.
+pub fn compare_dirs(
+    a: &std::path::Path,
+    b: &std::path::Path,
+    warmup_secs: u64,
+    min_samples: usize,
+) -> anyhow::Result<Vec<CompareRow>> {
+    let a = report::slot_p99s(a, warmup_secs, min_samples)?;
+    let b = report::slot_p99s(b, warmup_secs, min_samples)?;
     let mut rows = Vec::new();
     for (group, a_slots) in &a {
         let Some(b_slots) = b.get(group) else {
@@ -47,7 +67,11 @@ pub fn run(args: CompareArgs) -> anyhow::Result<()> {
         };
         let pairs: Vec<(f64, f64)> = a_slots
             .iter()
-            .filter_map(|(slot, a_p99)| b_slots.get(slot).map(|b_p99| (*a_p99 as f64, *b_p99 as f64)))
+            .filter_map(|(slot, a_p99)| {
+                b_slots
+                    .get(slot)
+                    .map(|b_p99| (*a_p99 as f64, *b_p99 as f64))
+            })
             .collect();
         if pairs.len() < BLOCK_SLOTS * 3 {
             continue;
@@ -66,12 +90,16 @@ pub fn run(args: CompareArgs) -> anyhow::Result<()> {
             change_pct: median(diffs) / a_median.max(1.0) * 100.0,
         });
     }
-    println!("A = {}\nB = {}", args.a.display(), args.b.display());
+    Ok(rows)
+}
+
+fn print_rows(a: &std::path::Path, b: &std::path::Path, rows: &[CompareRow]) {
+    println!("A = {}\nB = {}", a.display(), b.display());
     println!(
         "{:<44} {:>6} {:>12} {:>12} {:>12} {:>22} {:>8}",
         "group", "slots", "A slot p99", "B slot p99", "B-A median", "95% CI", "change"
     );
-    for row in &rows {
+    for row in rows {
         println!(
             "{:<44} {:>6} {:>10.0}us {:>10.0}us {:>10.0}us {:>9.0}..{:<9.0}us {:>7.1}%",
             row.group,
@@ -84,12 +112,6 @@ pub fn run(args: CompareArgs) -> anyhow::Result<()> {
             row.change_pct
         );
     }
-    let out = args.b.join(format!(
-        "compare-vs-{}.json",
-        args.a.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
-    ));
-    fs::write(out, serde_json::to_vec_pretty(&rows)?)?;
-    Ok(())
 }
 
 fn median(mut values: Vec<f64>) -> f64 {
@@ -116,7 +138,6 @@ fn bootstrap_ci(diffs: &[f64]) -> (f64, f64) {
     let at = |q: f64| medians[((medians.len() - 1) as f64 * q).round() as usize];
     (at(0.025), at(0.975))
 }
-
 
 #[cfg(test)]
 mod tests {

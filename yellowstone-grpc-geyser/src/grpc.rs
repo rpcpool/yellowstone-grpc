@@ -10,7 +10,6 @@ use {
         contact_info::{self, ContactInfoState},
         file_watcher::FileWatcher,
         metered::PrometheusMeteredManager,
-        trace,
         metrics::{
             self, incr_grpc_method_call_count, observe_subscriber_queue_size,
             subscription_limit_exceeded_inc,
@@ -31,6 +30,7 @@ use {
         },
         ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
         stream::{tokio::BatchStreamUnboundedReceiver, BatchStream, BatchStreamExt, Buffer},
+        trace,
         util::stream::{
             load_aware_channel, LoadAwareReceiver, LoadAwareSender, SendError, TrySendError,
             UnitWeigher, Weigher,
@@ -1401,7 +1401,11 @@ impl GrpcService {
             };
             if trace::ENABLED {
                 let now = trace::unix_ns();
-                for message in buffer.message_batch.iter().chain(buffer.seal_gated.as_ref()) {
+                for message in buffer
+                    .message_batch
+                    .iter()
+                    .chain(buffer.seal_gated.as_ref())
+                {
                     trace::record(trace::Stage::DequeueAge, trace::age_ns(now, message));
                 }
                 trace::record(trace::Stage::BatchSize, buffer.message_batch.len() as u64);

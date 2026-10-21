@@ -264,12 +264,17 @@ impl FixtureReader {
                 };
                 let path = self.dir.join(file);
                 let decoder = zstd::stream::read::Decoder::new(
-                    File::open(&path).with_context(|| format!("failed to open {}", path.display()))?,
+                    File::open(&path)
+                        .with_context(|| format!("failed to open {}", path.display()))?,
                 )?;
                 let mut reader = BufReader::with_capacity(1 << 20, decoder);
                 let mut magic = [0u8; 4];
                 reader.read_exact(&mut magic)?;
-                anyhow::ensure!(&magic == CHUNK_MAGIC, "bad chunk magic in {}", path.display());
+                anyhow::ensure!(
+                    &magic == CHUNK_MAGIC,
+                    "bad chunk magic in {}",
+                    path.display()
+                );
                 self.current = Some(reader);
                 self.next += 1;
             }
@@ -320,8 +325,14 @@ mod tests {
         let mut writer = FixtureWriter::create(&dir, 64, 1).unwrap();
         let payloads: Vec<Vec<u8>> = (0..50u8).map(|i| vec![i; usize::from(i) * 3]).collect();
         for (i, payload) in payloads.iter().enumerate() {
-            let stream = if i % 2 == 0 { StreamId::Main } else { StreamId::Deshred };
-            writer.write(stream, i as u64, payload, Some(i as u64)).unwrap();
+            let stream = if i % 2 == 0 {
+                StreamId::Main
+            } else {
+                StreamId::Deshred
+            };
+            writer
+                .write(stream, i as u64, payload, Some(i as u64))
+                .unwrap();
         }
         let chunks = writer.finish().unwrap();
         assert!(chunks.len() > 1, "small target must rotate chunks");

@@ -35,6 +35,15 @@ pub struct Summary {
 }
 
 impl LogHist {
+    pub fn merge(&mut self, other: &Self) {
+        for (bucket, count) in self.buckets.iter_mut().zip(&other.buckets) {
+            *bucket += count;
+        }
+        self.count += other.count;
+        self.sum += other.sum;
+        self.max = self.max.max(other.max);
+    }
+
     pub fn record(&mut self, value: u64) {
         let index = Self::index(value).min(self.buckets.len() - 1);
         self.buckets[index] += 1;
@@ -108,7 +117,10 @@ mod tests {
         }
         for (q, expected) in [(0.5, 50_000_000f64), (0.99, 99_000_000f64)] {
             let got = hist.quantile(q) as f64;
-            assert!((got - expected).abs() / expected < 0.07, "q{q}: {got} vs {expected}");
+            assert!(
+                (got - expected).abs() / expected < 0.07,
+                "q{q}: {got} vs {expected}"
+            );
         }
         assert_eq!(hist.quantile(1.0), 100_000_000);
     }

@@ -1,7 +1,7 @@
 //! `ygb report`: latency of probe subscribers in one run, by probe class, compression and kind.
 
 use {
-    crate::fleet::{scan::Kind, FleetReport, Sample, SAMPLE_LEN},
+    crate::fleet::{scan::Kind, FleetReport, Sample, SAMPLES_FILE, SAMPLE_LEN},
     anyhow::Context,
     serde::{Deserialize, Serialize},
     std::{
@@ -20,6 +20,9 @@ pub struct ReportArgs {
     /// Seconds after the start of pacing excluded as warm-up
     #[clap(long, default_value_t = 60)]
     pub warmup_secs: u64,
+    /// Also print a timeline of processed-probe stalls longer than this many milliseconds
+    #[clap(long)]
+    pub stalls: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -45,7 +48,7 @@ const STATUS_NAMES: [&str; 7] = [
     "dead",
 ];
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Row {
     pub class: String,
     pub compression: String,
@@ -62,7 +65,7 @@ pub struct Row {
     pub stalls_over_20ms: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Report {
     pub run: String,
     pub warmup_secs: u64,
@@ -78,7 +81,18 @@ pub fn run(args: ReportArgs) -> anyhow::Result<()> {
     );
     println!(
         "{:<14} {:<6} {:<14} {:>8} {:>9} {:>9} {:>9} {:>9} {:>9} {:>10} {:>6} {:>6}",
-        "class", "comp", "kind", "n", "p50 us", "p90 us", "p99 us", "p99.9 us", "max us", "slot p99", ">5ms", ">20ms"
+        "class",
+        "comp",
+        "kind",
+        "n",
+        "p50 us",
+        "p90 us",
+        "p99 us",
+        "p99.9 us",
+        "max us",
+        "slot p99",
+        ">5ms",
+        ">20ms"
     );
     for row in &report.rows {
         println!(
@@ -92,14 +106,124 @@ pub fn run(args: ReportArgs) -> anyhow::Result<()> {
             row.p99_us,
             row.p999_us,
             row.max_us,
-            row.slot_p99_median_us.map_or("-".to_owned(), |v| format!("{v:.0}")),
+            row.slot_p99_median_us
+                .map_or("-".to_owned(), |v| format!("{v:.0}")),
             row.stalls_over_5ms,
             row.stalls_over_20ms,
         );
     }
-    fs::write(args.run.join("report.json"), serde_json::to_vec_pretty(&report)?)?;
+    fs::write(
+        args.run.join("report.json"),
+        serde_json::to_vec_pretty(&report)?,
+    )?;
     print_trace(&args.run)?;
+    if let Some(threshold_ms) = args.stalls {
+        print_stalls(&args.run, args.warmup_secs, threshold_ms)?;
+    }
     Ok(())
+}
+
+/// Prints 100 ms windows in which processed probes waited longer than `threshold_ms`, with what
+/// happened just before: fleet reconnects, stream ends and scrapes (1 s), Confirmed callbacks (150 ms).
+fn print_stalls(run: &Path, warmup_secs: u64, threshold_ms: f64) -> anyhow::Result<()> {
+    const WINDOW_NS: u64 = 100_000_000;
+    const FLEET_LOOKBACK_NS: u64 = 1_000_000_000;
+    // Confirmed seals full blocks for block subscribers; their encode follows within milliseconds.
+    const CONFIRMED_LOOKBACK_NS: u64 = 150_000_000;
+    let (fleet, groups) = grouped(run, warmup_secs)?;
+    let threshold = (threshold_ms * 1e6) as u64;
+    let mut windows: BTreeMap<u64, (usize, u64, std::collections::BTreeSet<String>)> =
+        BTreeMap::new();
+    for ((class, compression, kind), points) in &groups {
+        if class.contains("confirmed") {
+            continue;
+        }
+        for point in points.iter().filter(|point| point.latency > threshold) {
+            let window = windows.entry(point.recv_ns / WINDOW_NS).or_default();
+            window.0 += 1;
+            window.1 = window.1.max(point.latency);
+            window.2.insert(format!("{class}/{compression}/{kind}"));
+        }
+    }
+    let statuses: Vec<StatusRecord> = fs::read(run.join("driver-statuses.json"))
+        .ok()
+        .and_then(|data| serde_json::from_slice(&data).ok())
+        .unwrap_or_default();
+    let mut events: Vec<(u64, u64, String)> = fleet
+        .subscribers
+        .iter()
+        .flat_map(|sub| {
+            sub.events.iter().map(|event| {
+                (
+                    event.unix_ns,
+                    FLEET_LOOKBACK_NS,
+                    format!("{} {}", sub.name, event.what),
+                )
+            })
+        })
+        .chain(fleet.scrapes.iter().map(|scrape| {
+            (
+                scrape.unix_ns,
+                FLEET_LOOKBACK_NS,
+                format!(
+                    "metrics scrape {:.1} ms, {} KiB",
+                    scrape.millis,
+                    scrape.bytes / 1024
+                ),
+            )
+        }))
+        .chain(
+            statuses
+                .iter()
+                .filter(|record| record.status == "confirmed")
+                .map(|record| {
+                    (
+                        record.unix_ns,
+                        CONFIRMED_LOOKBACK_NS,
+                        format!("confirmed {}", record.slot),
+                    )
+                }),
+        )
+        .collect();
+    events.sort();
+    println!(
+        "\nprocessed-probe stalls over {threshold_ms} ms: {} windows of 100 ms, {} samples",
+        windows.len(),
+        windows.values().map(|window| window.0).sum::<usize>()
+    );
+    for (index, (count, worst, groups)) in &windows {
+        let start = index * WINDOW_NS;
+        let nearby: Vec<&str> = events
+            .iter()
+            .filter(|(time, lookback, _)| *time + lookback >= start && *time < start + WINDOW_NS)
+            .map(|(_, _, what)| what.as_str())
+            .collect();
+        println!(
+            "{} {count:>6} samples, worst {:>6.1} ms  {}{}{}",
+            clock(start),
+            *worst as f64 / 1e6,
+            groups.iter().cloned().collect::<Vec<_>>().join(" "),
+            if nearby.is_empty() {
+                ""
+            } else {
+                "  | before: "
+            },
+            nearby.join("; ")
+        );
+    }
+    Ok(())
+}
+
+/// UTC time of day with tenths of a second.
+fn clock(unix_ns: u64) -> String {
+    let secs = unix_ns / 1_000_000_000;
+    format!(
+        "{:02}:{:02}:{:02}.{}",
+        secs / 3600 % 24,
+        secs / 60 % 60,
+        secs % 60,
+        unix_ns / 100_000_000 % 10
+    )
 }
 
 /// Prints the plugin's latency-trace stages, when the run used a traced build.
@@ -113,7 +237,10 @@ fn print_trace(run: &Path) -> anyhow::Result<()> {
             continue;
         }
         let trace: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
-        println!("\nplugin trace {} (whole run, prefill included):", path.display());
+        println!(
+            "\nplugin trace {} (whole run, prefill included):",
+            path.display()
+        );
         println!(
             "{:<26} {:>12} {:>10} {:>10} {:>10} {:>10} {:>10}",
             "stage", "count", "p50", "p90", "p99", "p99.9", "max"
@@ -144,7 +271,15 @@ fn print_trace(run: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-type Groups = BTreeMap<(String, String, String), Vec<(u64, u64)>>;
+/// One probe sample after the reference time is applied.
+#[derive(Debug, Clone, Copy)]
+struct Point {
+    slot: u64,
+    recv_ns: u64,
+    latency: u64,
+}
+
+type Groups = BTreeMap<(String, String, String), Vec<Point>>;
 
 pub fn build(run: &Path, warmup_secs: u64) -> anyhow::Result<Report> {
     let (fleet, groups) = grouped(run, warmup_secs)?;
@@ -171,15 +306,18 @@ pub fn slot_p99s(
         .into_iter()
         .map(|((class, compression, kind), values)| {
             let mut by_slot: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
-            for (slot, latency) in values {
-                by_slot.entry(slot).or_default().push(latency);
+            for point in values {
+                by_slot.entry(point.slot).or_default().push(point.latency);
             }
             let p99s = by_slot
                 .into_iter()
                 .filter(|(_, latencies)| latencies.len() >= min_samples)
                 .map(|(slot, mut latencies)| {
                     latencies.sort_unstable();
-                    (slot, latencies[((latencies.len() - 1) as f64 * 0.99).round() as usize])
+                    (
+                        slot,
+                        latencies[((latencies.len() - 1) as f64 * 0.99).round() as usize],
+                    )
                 })
                 .collect();
             (format!("{class}/{compression}/{kind}"), p99s)
@@ -194,7 +332,7 @@ fn grouped(run: &Path, warmup_secs: u64) -> anyhow::Result<(FleetReport, Groups)
     let fleet: FleetReport = serde_json::from_slice(
         &fs::read(run.join("fleet").join("fleet.json")).context("fleet/fleet.json missing")?,
     )?;
-    let samples = read_samples(&run.join("fleet").join("samples.bin"))?;
+    let samples = read_samples(&run.join("fleet"))?;
     let measure_from = driver
         .paced_start_unix_ns
         .map_or(0, |start| start + warmup_secs * 1_000_000_000);
@@ -203,14 +341,19 @@ fn grouped(run: &Path, warmup_secs: u64) -> anyhow::Result<(FleetReport, Groups)
     if let Ok(data) = fs::read(run.join("driver-statuses.json")) {
         let records: Vec<StatusRecord> = serde_json::from_slice(&data)?;
         for record in records {
-            let time = status_times.entry((record.slot, record.status)).or_insert(u64::MAX);
+            let time = status_times
+                .entry((record.slot, record.status))
+                .or_insert(u64::MAX);
             *time = (*time).min(record.unix_ns);
         }
     }
 
     let mut groups: Groups = BTreeMap::new();
     let mut unreferenced = 0usize;
-    for sample in samples.iter().filter(|sample| sample.recv_ns >= measure_from) {
+    for sample in samples
+        .iter()
+        .filter(|sample| sample.recv_ns >= measure_from)
+    {
         let Some(subscriber) = fleet.subscribers.get(usize::from(sample.subscriber)) else {
             continue;
         };
@@ -224,9 +367,15 @@ fn grouped(run: &Path, warmup_secs: u64) -> anyhow::Result<(FleetReport, Groups)
             _ => kind.name().to_owned(),
         };
         let reference = match (subscriber.commitment.as_str(), kind, status) {
-            ("confirmed", ..) => status_times.get(&(sample.slot, "confirmed".to_owned())).copied(),
-            ("finalized", ..) => status_times.get(&(sample.slot, "rooted".to_owned())).copied(),
-            (_, Kind::Slot, Some(status)) => status_times.get(&(sample.slot, status.to_owned())).copied(),
+            ("confirmed", ..) => status_times
+                .get(&(sample.slot, "confirmed".to_owned()))
+                .copied(),
+            ("finalized", ..) => status_times
+                .get(&(sample.slot, "rooted".to_owned()))
+                .copied(),
+            (_, Kind::Slot, Some(status)) => {
+                status_times.get(&(sample.slot, status.to_owned())).copied()
+            }
             _ => Some(sample.created_ns),
         };
         let Some(reference) = reference else {
@@ -234,9 +383,17 @@ fn grouped(run: &Path, warmup_secs: u64) -> anyhow::Result<(FleetReport, Groups)
             continue;
         };
         groups
-            .entry((subscriber.class.clone(), subscriber.compression.clone(), label))
+            .entry((
+                subscriber.class.clone(),
+                subscriber.compression.clone(),
+                label,
+            ))
             .or_default()
-            .push((sample.slot, sample.recv_ns.saturating_sub(reference)));
+            .push(Point {
+                slot: sample.slot,
+                recv_ns: sample.recv_ns,
+                latency: sample.recv_ns.saturating_sub(reference),
+            });
     }
     if unreferenced > 0 {
         log::warn!("{unreferenced} samples had no driver reference time and were skipped");
@@ -244,14 +401,14 @@ fn grouped(run: &Path, warmup_secs: u64) -> anyhow::Result<(FleetReport, Groups)
     Ok((fleet, groups))
 }
 
-fn row(class: String, compression: String, kind: String, values: &[(u64, u64)]) -> Row {
-    let mut latencies: Vec<u64> = values.iter().map(|(_, latency)| *latency).collect();
+fn row(class: String, compression: String, kind: String, values: &[Point]) -> Row {
+    let mut latencies: Vec<u64> = values.iter().map(|point| point.latency).collect();
     latencies.sort_unstable();
     let at = |q: f64| latencies[((latencies.len() - 1) as f64 * q).round() as usize] as f64 / 1e3;
 
     let mut by_slot: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
-    for (slot, latency) in values {
-        by_slot.entry(*slot).or_default().push(*latency);
+    for point in values {
+        by_slot.entry(point.slot).or_default().push(point.latency);
     }
     let mut slot_p99: Vec<u64> = by_slot
         .values_mut()
@@ -272,17 +429,31 @@ fn row(class: String, compression: String, kind: String, values: &[(u64, u64)]) 
         p99_us: at(0.99),
         p999_us: at(0.999),
         max_us: at(1.0),
-        slot_p99_median_us: (!slot_p99.is_empty()).then(|| slot_p99[slot_p99.len() / 2] as f64 / 1e3),
-        stalls_over_5ms: latencies.iter().filter(|latency| **latency > 5_000_000).count(),
-        stalls_over_20ms: latencies.iter().filter(|latency| **latency > 20_000_000).count(),
+        slot_p99_median_us: (!slot_p99.is_empty())
+            .then(|| slot_p99[slot_p99.len() / 2] as f64 / 1e3),
+        stalls_over_5ms: latencies
+            .iter()
+            .filter(|latency| **latency > 5_000_000)
+            .count(),
+        stalls_over_20ms: latencies
+            .iter()
+            .filter(|latency| **latency > 20_000_000)
+            .count(),
     }
 }
 
-pub fn read_samples(path: &Path) -> anyhow::Result<Vec<Sample>> {
+/// Reads a fleet directory's probe samples; plain `samples.bin` comes from older runs.
+pub fn read_samples(fleet_dir: &Path) -> anyhow::Result<Vec<Sample>> {
     let mut data = Vec::new();
-    fs::File::open(path)
-        .with_context(|| format!("failed to open {}", path.display()))?
-        .read_to_end(&mut data)?;
+    let compressed = fleet_dir.join(SAMPLES_FILE);
+    if compressed.exists() {
+        zstd::stream::Decoder::new(fs::File::open(&compressed)?)?.read_to_end(&mut data)?;
+    } else {
+        let path = fleet_dir.join("samples.bin");
+        fs::File::open(&path)
+            .with_context(|| format!("failed to open {}", path.display()))?
+            .read_to_end(&mut data)?;
+    }
     anyhow::ensure!(data.len() % SAMPLE_LEN == 0, "truncated samples file");
     Ok(data
         .chunks_exact(SAMPLE_LEN)

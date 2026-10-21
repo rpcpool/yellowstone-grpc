@@ -1,0 +1,8 @@
+# nyc226 (64 cores, SMT siblings at +64): the plugin on solana_notifier_cores, as in production.
+# Check the core numbering with `lscpu -e` and `ygb layout` before the first run.
+plugin = [47, 48, 49, 50, 51, 52, 111, 112, 113, 114, 115, 116]
+driver = [2, 3, 66, 67]
+decoder = [4, 5, 68, 69]
+probes = [0, 1, 64, 65]
+load = [8, 9, 10, 11, 12, 13, 14, 15, 72, 73, 74, 75, 76, 77, 78, 79]
+note = "nyc226: plugin on the production notifier cores"

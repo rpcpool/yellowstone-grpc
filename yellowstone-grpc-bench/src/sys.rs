@@ -51,6 +51,11 @@ pub fn set_min_timer_slack() {
 }
 
 pub fn pin_current_thread(cpus: &[usize]) -> io::Result<()> {
+    pin_thread(0, cpus)
+}
+
+/// Pins a thread (0 for the calling thread) to `cpus`; an empty list leaves it as it is.
+pub fn pin_thread(tid: i32, cpus: &[usize]) -> io::Result<()> {
     if cpus.is_empty() {
         return Ok(());
     }
@@ -60,17 +65,76 @@ pub fn pin_current_thread(cpus: &[usize]) -> io::Result<()> {
         for cpu in cpus {
             libc::CPU_SET(*cpu, &mut set);
         }
-        if libc::sched_setaffinity(0, mem::size_of::<libc::cpu_set_t>(), &set) != 0 {
+        if libc::sched_setaffinity(tid, mem::size_of::<libc::cpu_set_t>(), &set) != 0 {
             return Err(io::Error::last_os_error());
         }
     }
     Ok(())
 }
 
+/// Thread ids and names of this process whose names start with one of `prefixes`.
+fn threads_named(prefixes: &[&str]) -> Vec<(i32, String)> {
+    let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+        return Vec::new();
+    };
+    tasks
+        .flatten()
+        .filter_map(|task| {
+            let tid = task.file_name().to_string_lossy().parse::<i32>().ok()?;
+            let name = std::fs::read_to_string(task.path().join("comm")).ok()?;
+            let name = name.trim_end().to_owned();
+            prefixes
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+                .then_some((tid, name))
+        })
+        .collect()
+}
+
+/// Pins this process's threads whose names start with one of `prefixes`; returns how many moved.
+pub fn pin_by_name(prefixes: &[&str], cpus: &[usize]) -> usize {
+    let mut changed = 0;
+    for (tid, name) in threads_named(prefixes) {
+        match pin_thread(tid, cpus) {
+            Ok(()) => changed += 1,
+            Err(error) => log::warn!("pinning {name} failed: {error}"),
+        }
+    }
+    changed
+}
+
+/// Sets SCHED_FIFO on a thread (0 for the calling thread); needs CAP_SYS_NICE.
+pub fn set_fifo(tid: i32, priority: i32) -> io::Result<()> {
+    let param = libc::sched_param {
+        sched_priority: priority,
+    };
+    // SAFETY: param is a valid sched_param for the duration of the call.
+    if unsafe { libc::sched_setscheduler(tid, libc::SCHED_FIFO, &param) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Sets SCHED_FIFO on this process's threads whose names start with one of `prefixes`.
+pub fn set_fifo_by_name(prefixes: &[&str], priority: i32) -> usize {
+    let mut changed = 0;
+    for (tid, name) in threads_named(prefixes) {
+        match set_fifo(tid, priority) {
+            Ok(()) => changed += 1,
+            Err(error) => log::warn!("SCHED_FIFO on {name} failed: {error}"),
+        }
+    }
+    changed
+}
+
 /// Parses a CPU list such as `8-13,24-29`.
 pub fn parse_cpu_list(list: &str) -> anyhow::Result<Vec<usize>> {
     let mut cpus = Vec::new();
-    for part in list.split(',').map(str::trim).filter(|part| !part.is_empty()) {
+    for part in list
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
         match part.split_once('-') {
             Some((start, end)) => {
                 let (start, end): (usize, usize) = (start.parse()?, end.parse()?);

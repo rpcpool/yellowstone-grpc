@@ -1,0 +1,53 @@
+# Smoke test of every moving part in about 6 minutes per variant.
+# Small fleet with emulated links, zstd and gzip, churn with from_slot, a slow reader, blocks and deshred.
+name = "quick"
+description = "Smoke test: 60 load streams on emulated links, zstd and gzip, churn, a slow reader, blocks and deshred."
+
+[window]
+slots = 300
+prefill_slots = 100
+warmup_secs = 20
+
+[plugin]
+replay_stored_slots = 300
+
+[mix]
+streams = 60
+blocks = 2
+deshred = 2
+sample_slots = 150
+unary = { get_slot = 20, get_latest_blockhash = 20, get_block_height = 20, ping = 1 }
+
+[[mix.network]]
+name = "metro"
+weight = 50
+
+[[mix.network]]
+name = "regional"
+weight = 30
+delay_ms = [5, 20]
+jitter_ms = 1
+bandwidth_mbps = [200, 1000]
+
+[[mix.network]]
+name = "intercontinental"
+weight = 20
+delay_ms = [40, 90]
+jitter_ms = 3
+bandwidth_mbps = [50, 300]
+stall_every_secs = 20
+stall_ms = 150
+
+[mix.churn]
+share = 10
+every_secs = 40
+from_slot_back = 20
+
+[mix.slow]
+share = 3
+bandwidth_mbps = 4
+delay_ms = 30
+
+[[cases]]
+name = "smoke"
+blocks = [2]

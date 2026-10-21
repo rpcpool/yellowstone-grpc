@@ -9,10 +9,45 @@ use {
     serde::Serialize,
     std::{
         collections::BTreeMap,
-        sync::{Barrier, OnceLock},
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Barrier, OnceLock,
+        },
         time::Duration,
     },
 };
+
+/// Spins this long on a dependency before yielding the CPU.
+const SPIN_NS: u64 = 20_000;
+
+/// Per lane, how many events in release order it has finished; lanes wait on each other through it.
+pub struct Progress(Vec<AtomicU64>);
+
+impl Progress {
+    pub fn new(lanes: usize) -> Self {
+        Self((0..lanes).map(|_| AtomicU64::new(0)).collect())
+    }
+
+    /// Waits until every (lane, events) pair is reached; returns the nanoseconds spent waiting.
+    fn wait(&self, deps: &[(usize, u64)]) -> u64 {
+        let mut started = None;
+        for (lane, need) in deps {
+            while self.0[*lane].load(Ordering::Acquire) < *need {
+                let begin = *started.get_or_insert_with(sys::mono_ns);
+                if sys::mono_ns() - begin < SPIN_NS {
+                    std::hint::spin_loop();
+                } else {
+                    std::thread::yield_now();
+                }
+            }
+        }
+        started.map_or(0, |begin| sys::mono_ns() - begin)
+    }
+
+    fn finish(&self, lane: usize, order: u64) {
+        self.0[lane].store(order + 1, Ordering::Release);
+    }
+}
 
 /// Both lanes meet here when pacing starts; the leader holds the attach window, then sets the clock.
 pub struct PacedStart {
@@ -36,9 +71,7 @@ impl PacedStart {
         if leader {
             on_attach();
             std::thread::sleep(self.attach);
-            let _ = self
-                .clock
-                .set((created_ns, sys::mono_ns() + 50_000_000));
+            let _ = self.clock.set((created_ns, sys::mono_ns() + 50_000_000));
         }
         self.barrier.wait();
         *self.clock.get().expect("leader set the clock")
@@ -66,6 +99,8 @@ pub struct LaneStats {
     pub timer_lag: LogHist,
     /// Lag of events still queued behind earlier callbacks at their deadline.
     pub queue_lag: LogHist,
+    /// Time spent waiting for other lanes to reach an event's dependencies.
+    pub gate_wait: LogHist,
     pub callback: BTreeMap<&'static str, LogHist>,
     pub statuses: Vec<StatusRecord>,
 }
@@ -79,6 +114,7 @@ pub struct LaneReport {
     pub lag_ns: crate::hist::Summary,
     pub timer_lag_ns: crate::hist::Summary,
     pub queue_lag_ns: crate::hist::Summary,
+    pub gate_wait_ns: crate::hist::Summary,
     pub callback_ns: BTreeMap<&'static str, crate::hist::Summary>,
 }
 
@@ -92,6 +128,7 @@ impl LaneStats {
             lag_ns: self.lag.summary(),
             timer_lag_ns: self.timer_lag.summary(),
             queue_lag_ns: self.queue_lag.summary(),
+            gate_wait_ns: self.gate_wait.summary(),
             callback_ns: self
                 .callback
                 .iter()
@@ -102,10 +139,13 @@ impl LaneStats {
 }
 
 pub struct LaneConfig {
-    pub name: &'static str,
+    pub name: String,
+    pub index: usize,
     pub leader: bool,
     pub speed: f64,
     pub cpus: Vec<usize>,
+    /// Agave's notifier threads run at SCHED_FIFO on production streaming nodes.
+    pub fifo_priority: Option<i32>,
 }
 
 pub fn run(
@@ -113,12 +153,21 @@ pub fn run(
     rx: &Receiver<LaneItem>,
     plugin: &'static dyn GeyserPlugin,
     paced_start: &PacedStart,
+    progress: &Progress,
     on_attach: &dyn Fn(),
 ) -> LaneStats {
     if let Err(error) = sys::pin_current_thread(&config.cpus) {
-        warn!("{}: failed to pin to {:?}: {error}", config.name, config.cpus);
+        warn!(
+            "{}: failed to pin to {:?}: {error}",
+            config.name, config.cpus
+        );
     }
     sys::set_min_timer_slack();
+    if let Some(priority) = config.fifo_priority {
+        if let Err(error) = sys::set_fifo(0, priority) {
+            warn!("{}: SCHED_FIFO {priority} failed: {error}", config.name);
+        }
+    }
     let mut stats = LaneStats::default();
     let started = sys::mono_ns();
     let mut clock: Option<(u64, u64)> = None;
@@ -137,22 +186,32 @@ pub fn run(
                 created_ns,
                 paced,
                 event,
+                order,
+                deps,
             } => {
-                if paced {
+                let deadline = paced.then(|| {
                     let (created_origin, mono_origin) =
                         clock.expect("paced events follow PacedStart");
                     let offset = created_ns.saturating_sub(created_origin) as f64 / config.speed;
-                    let deadline = mono_origin + offset as u64;
+                    mono_origin + offset as u64
+                });
+                if let Some(deadline) = deadline {
                     if deadline > sys::mono_ns() {
                         sys::sleep_until_mono(deadline);
                     }
                     let lag = sys::mono_ns().saturating_sub(deadline);
-                    stats.lag.record(lag);
                     if last_end > deadline {
                         stats.queue_lag.record(lag);
                     } else {
                         stats.timer_lag.record(lag);
                     }
+                }
+                let waited = progress.wait(&deps);
+                if waited > 0 {
+                    stats.gate_wait.record(waited);
+                }
+                if let Some(deadline) = deadline {
+                    stats.lag.record(sys::mono_ns().saturating_sub(deadline));
                     stats.paced_events += 1;
                 } else {
                     stats.prefill_events += 1;
@@ -173,6 +232,7 @@ pub fn run(
                     }
                 }
                 last_end = sys::mono_ns();
+                progress.finish(config.index, order);
                 stats
                     .callback
                     .entry(event.kind())
@@ -183,4 +243,27 @@ pub fn run(
         }
     }
     stats
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::Progress,
+        std::{sync::Arc, time::Duration},
+    };
+
+    #[test]
+    fn progress_waits_for_other_lanes() {
+        let progress = Arc::new(Progress::new(2));
+        let waiter = {
+            let progress = Arc::clone(&progress);
+            std::thread::spawn(move || progress.wait(&[(1, 3)]))
+        };
+        std::thread::sleep(Duration::from_millis(5));
+        for order in 0..3 {
+            progress.finish(1, order);
+        }
+        assert!(waiter.join().unwrap() > 0);
+        assert_eq!(progress.wait(&[(1, 3), (0, 0)]), 0);
+    }
 }

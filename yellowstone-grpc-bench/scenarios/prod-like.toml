@@ -1,0 +1,87 @@
+# A production streaming node: filter shapes from fra215 filter_stats, customers with several
+# streams each, a geographic network mix, compression and commitment splits, churn and slow readers.
+# The network weights and the compression split are estimates; replace them when measured.
+name = "prod-like"
+description = "Production-shaped fleet on geographic links, swept over the number of load streams, plus full-block subscribers."
+
+[window]
+start = "heaviest"
+slots = 1500
+prefill_slots = 300
+warmup_secs = 60
+
+[plugin]
+# Production keeps 1000 slots; 300 fits a 48 GiB codespace. Raise it with --set on a larger host.
+replay_stored_slots = 300
+
+[mix]
+streams = 450
+blocks = 6
+deshred = 4
+streams_per_id = 3.7
+commitment = { processed = 90, confirmed = 7, finalized = 3 }
+compression = { none = 40, zstd = 50, gzip = 10 }
+# nyc227's unary load, 30-minute average on 2026-10-21 (method_call_count).
+unary = { get_slot = 240, get_latest_blockhash = 240, get_block_height = 240, ping = 1 }
+
+# Same metro or colo: below what user-space emulation resolves, so local.
+[[mix.network]]
+name = "metro"
+weight = 45
+
+[[mix.network]]
+name = "us-east"
+weight = 20
+delay_ms = [2, 6]
+jitter_ms = 0.3
+bandwidth_mbps = [1000, 5000]
+
+[[mix.network]]
+name = "us-west"
+weight = 12
+delay_ms = [10, 35]
+jitter_ms = 1
+bandwidth_mbps = [500, 2000]
+
+[[mix.network]]
+name = "europe"
+weight = 15
+delay_ms = [35, 45]
+jitter_ms = 1.5
+bandwidth_mbps = [200, 1000]
+
+[[mix.network]]
+name = "asia"
+weight = 6
+delay_ms = [80, 120]
+jitter_ms = 3
+bandwidth_mbps = [100, 500]
+
+# Office and home links: thin, jittery, and stalling now and then.
+[[mix.network]]
+name = "edge"
+weight = 2
+delay_ms = [10, 60]
+jitter_ms = 5
+bandwidth_mbps = [20, 100]
+stall_every_secs = 30
+stall_ms = 200
+
+[mix.churn]
+share = 3
+every_secs = 120
+from_slot_back = 30
+
+[mix.slow]
+share = 1
+bandwidth_mbps = 2
+delay_ms = 20
+
+[[cases]]
+name = "curve"
+streams = [50, 150, 300, 450]
+
+[[cases]]
+name = "blocks"
+streams = [300]
+blocks = [6]

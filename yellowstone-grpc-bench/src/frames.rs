@@ -50,18 +50,14 @@ pub fn main_info(update: &SubscribeUpdate) -> FrameInfo {
         Some(UpdateOneof::Account(msg)) => ("account", Some(msg.slot)),
         Some(UpdateOneof::Slot(msg)) => ("slot", Some(msg.slot)),
         Some(UpdateOneof::Transaction(msg)) => ("transaction", Some(msg.slot)),
-        Some(UpdateOneof::TransactionStatus(msg)) => {
-            ("transaction_status", Some(msg.slot))
-        }
+        Some(UpdateOneof::TransactionStatus(msg)) => ("transaction_status", Some(msg.slot)),
         Some(UpdateOneof::Block(msg)) => ("block", Some(msg.slot)),
         Some(UpdateOneof::Ping(_)) => ("ping", None),
         Some(UpdateOneof::Pong(_)) => ("pong", None),
         Some(UpdateOneof::BlockMeta(msg)) => ("block_meta", Some(msg.slot)),
         Some(UpdateOneof::Entry(msg)) => ("entry", Some(msg.slot)),
         Some(UpdateOneof::BlockFooter(msg)) => ("block_footer", Some(msg.slot)),
-        Some(UpdateOneof::EntryUpdateParent(msg)) => {
-            ("entry_update_parent", Some(msg.slot))
-        }
+        Some(UpdateOneof::EntryUpdateParent(msg)) => ("entry_update_parent", Some(msg.slot)),
         None => ("empty", None),
     };
     FrameInfo {
@@ -78,9 +74,7 @@ fn deshred_info(update: &SubscribeUpdateDeshred) -> FrameInfo {
         Some(DeshredOneof::Ping(_)) => ("ping", None),
         Some(DeshredOneof::Pong(_)) => ("pong", None),
         Some(DeshredOneof::Slot(msg)) => ("slot", Some(msg.slot)),
-        Some(DeshredOneof::DeshredUpdateParent(msg)) => {
-            ("deshred_update_parent", Some(msg.slot))
-        }
+        Some(DeshredOneof::DeshredUpdateParent(msg)) => ("deshred_update_parent", Some(msg.slot)),
         None => ("empty", None),
     };
     FrameInfo {

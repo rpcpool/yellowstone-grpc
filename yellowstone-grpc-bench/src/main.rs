@@ -1,6 +1,7 @@
 //! `ygb`: latency benchmark harness for the Yellowstone gRPC geyser plugin.
 //! See README.md for the fixture format and the measurement rules.
 
+mod bench;
 mod codec;
 mod compare;
 mod cpu;
@@ -10,9 +11,11 @@ mod fleet;
 mod frames;
 mod hist;
 mod inspect;
+mod layout;
 mod profiles;
 mod record;
 mod report;
+mod scenario;
 mod sys;
 
 // Unprefixed jemalloc, as in agave: the dlopen'd plugin's malloc resolves to it too.
@@ -45,6 +48,14 @@ enum Command {
     Profiles(profiles::GenArgs),
     /// Paired A/B of two runs over the same window, by per-slot p99
     Compare(compare::CompareArgs),
+    /// Run a scenario end to end: layout, profile, every case and variant, summary
+    Bench(bench::BenchArgs),
+    /// Print the CPU layout `ygb bench` would pick on this machine
+    Layout {
+        /// Physical cores for the plugin
+        #[clap(long, default_value_t = 6)]
+        plugin_cores: usize,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -57,5 +68,10 @@ fn main() -> anyhow::Result<()> {
         Command::Report(args) => report::run(args),
         Command::Profiles(args) => profiles::run(args),
         Command::Compare(args) => compare::run(args),
+        Command::Bench(args) => bench::run(args),
+        Command::Layout { plugin_cores } => {
+            print!("{}", toml::to_string(&layout::auto(plugin_cores)?)?);
+            Ok(())
+        }
     }
 }

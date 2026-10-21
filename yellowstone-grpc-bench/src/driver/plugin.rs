@@ -1,8 +1,6 @@
 use {
-    agave_geyser_plugin_interface::geyser_plugin_interface::GeyserPlugin,
-    anyhow::Context,
-    log::info,
-    std::path::Path,
+    agave_geyser_plugin_interface::geyser_plugin_interface::GeyserPlugin, anyhow::Context,
+    log::info, std::path::Path,
 };
 
 #[allow(improper_ctypes_definitions)]

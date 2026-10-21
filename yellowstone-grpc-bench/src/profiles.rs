@@ -1,20 +1,22 @@
-//! `ygb profiles`: synthetic subscribers shaped like production, with pubkeys drawn from a fixture.
-//! The share of cold keys (never updated) is chosen so predicted rates match production.
+//! `ygb profiles`: synthetic subscribers shaped like production, with keys drawn from a fixture.
+//! Filter shapes follow fra215 `filter_stats`; the cold-key share is calibrated to production rates.
+//! Networks, churn, slow links and subscription ids come from the scenario's `[mix]`.
 
 use {
     crate::{
         fixture::{FixtureReader, Manifest, StreamId},
         fleet::profile::{
-            AccountsFilter, BlocksFilter, Commitment, Compression, Profile, Request, Role, Subscriber,
-            TransactionsFilter,
+            AccountsFilter, BlocksFilter, Churn, Commitment, Compression, Profile, Request, Role,
+            Subscriber, TransactionsFilter, UnaryLoad,
         },
         frames::{self, Decoded},
+        scenario::{MixSpec, NetworkProfile, ProbeSpec, Scenario},
     },
     log::info,
     std::{
         collections::{BTreeMap, HashMap, HashSet},
         fs,
-        path::PathBuf,
+        path::{Path, PathBuf},
     },
     yellowstone_grpc_proto::geyser::subscribe_update::UpdateOneof,
 };
@@ -23,38 +25,41 @@ use {
 pub struct GenArgs {
     #[clap(long)]
     fixture: PathBuf,
-    /// Slots of the fixture sampled for account and transaction rates
-    #[clap(long, default_value_t = 300)]
-    sample_slots: u64,
-    /// Load streams to generate
-    #[clap(long, default_value_t = 400)]
-    streams: usize,
-    #[clap(long, default_value_t = 1)]
-    seed: u64,
-    /// Percent of streams at processed, confirmed, finalized
-    #[clap(long, default_value = "90,7,3")]
-    commitment_split: String,
-    /// Percent of streams with no compression, zstd, gzip
-    #[clap(long, default_value = "40,50,10")]
-    compression_split: String,
-    /// Full-block subscribers at confirmed
-    #[clap(long, default_value_t = 6)]
-    blocks: usize,
-    /// Deshred subscribers
-    #[clap(long, default_value_t = 4)]
-    deshred: usize,
-    /// Per-stream message rate targets (p50, p90, p99), from fra215 per-id rates over 3.7 streams per id
-    #[clap(long, default_value = "7,120,4900")]
-    rate_targets: String,
-    /// Total message rate target per stream, from fra215: 94k msg/s over 427 streams
-    #[clap(long, default_value_t = 220.0)]
-    total_per_stream: f64,
+    /// Scenario whose `[mix]` and `[probes]` drive the profile; built-in defaults otherwise
+    #[clap(long)]
+    scenario: Option<PathBuf>,
+    /// Override mix.streams
+    #[clap(long)]
+    streams: Option<usize>,
+    /// Override mix.seed
+    #[clap(long)]
+    seed: Option<u64>,
     #[clap(long)]
     out: PathBuf,
 }
 
+pub fn run(args: GenArgs) -> anyhow::Result<()> {
+    let (mut mix, probes) = match &args.scenario {
+        Some(path) => {
+            let scenario = Scenario::load(path)?;
+            (scenario.mix, scenario.probes)
+        }
+        None => (MixSpec::default(), ProbeSpec::default()),
+    };
+    if let Some(streams) = args.streams {
+        mix.streams = streams;
+    }
+    if let Some(seed) = args.seed {
+        mix.seed = seed;
+    }
+    let profile = generate(&args.fixture, &mix, &probes)?;
+    fs::write(&args.out, serde_json::to_vec_pretty(&profile)?)?;
+    info!("wrote {}: {}", args.out.display(), profile.description);
+    Ok(())
+}
+
 /// Account and transaction-key activity in the sampled window, as rates per second.
-struct Activity {
+pub struct Activity {
     pubkeys: Vec<(String, f64)>,
     owners: Vec<(String, f64)>,
     tx_keys: Vec<(String, f64)>,
@@ -62,59 +67,86 @@ struct Activity {
     slot_rate: f64,
 }
 
-pub fn run(args: GenArgs) -> anyhow::Result<()> {
-    let activity = sample(&args)?;
-    let targets = parse_split(&args.rate_targets, 3)?;
-    let total_target = args.total_per_stream * args.streams as f64;
-    let mut best: Option<(f64, f64, Vec<Subscriber>, Vec<f64>)> = None;
-    for cold in [0.0, 0.5, 0.8, 0.9, 0.95, 0.98, 0.99, 0.995, 0.998, 0.999] {
-        let (subscribers, rates) = generate(&args, &activity, cold)?;
-        let quantiles = quantiles(&rates);
-        let total: f64 = rates.iter().sum();
-        let score: f64 = quantiles
-            .iter()
-            .zip(&targets)
-            .map(|(got, want)| ((got.max(0.1)) / want.max(0.1)).ln().abs())
-            .sum::<f64>()
-            + (total.max(1.0) / total_target).ln().abs();
-        info!(
-            "cold {cold:.3}: predicted per-stream msg/s p50 {:.1} p90 {:.1} p99 {:.1}, total {total:.0} (target {total_target:.0}), score {score:.2}",
-            quantiles[0],
-            quantiles[1],
-            quantiles[2],
-        );
-        let alpha = cold;
-        if best.as_ref().is_none_or(|(best_score, ..)| score < *best_score) {
-            best = Some((score, alpha, subscribers, rates));
-        }
-    }
-    let (_, alpha, mut subscribers, rates) = best.expect("at least one alpha");
-    subscribers.extend(probes());
-    let profile = Profile {
-        description: format!(
-            "{} load streams from {} (seed {}, cold key share {alpha:.3}, predicted total {:.0} msg/s) plus probes",
-            args.streams,
-            args.fixture.display(),
-            args.seed,
-            rates.iter().sum::<f64>()
-        ),
-        subscribers,
-    };
-    fs::write(&args.out, serde_json::to_vec_pretty(&profile)?)?;
-    info!("wrote {} with cold key share {alpha:.3}", args.out.display());
-    Ok(())
+pub fn generate(fixture: &Path, mix: &MixSpec, probes: &ProbeSpec) -> anyhow::Result<Profile> {
+    generate_from(&sample(fixture, mix.sample_slots)?, fixture, mix, probes)
 }
 
-fn sample(args: &GenArgs) -> anyhow::Result<Activity> {
-    let manifest = Manifest::load(&args.fixture)?;
-    let first_slot = manifest.first_slot.unwrap_or_default() + 20;
-    let last_slot = first_slot + args.sample_slots;
+/// Builds a profile from activity already sampled from `fixture`.
+pub fn generate_from(
+    activity: &Activity,
+    fixture: &Path,
+    mix: &MixSpec,
+    probes: &ProbeSpec,
+) -> anyhow::Result<Profile> {
+    let total_target = mix.total_per_stream * mix.streams as f64;
+    let candidates: Vec<f64> = if mix.cold_key_share == "auto" {
+        vec![0.0, 0.5, 0.8, 0.9, 0.95, 0.98, 0.99, 0.995, 0.998, 0.999]
+    } else {
+        vec![mix.cold_key_share.parse()?]
+    };
+    let mut best: Option<(f64, f64, Vec<Subscriber>, Vec<f64>)> = None;
+    for cold in candidates {
+        let (subscribers, rates) = load_streams(mix, activity, cold)?;
+        let q = quantiles(&rates);
+        let total: f64 = rates.iter().sum();
+        let score = q
+            .iter()
+            .zip(&mix.rate_targets)
+            .map(|(got, want)| (got.max(0.1) / want.max(0.1)).ln().abs())
+            .sum::<f64>()
+            + (total.max(1.0) / total_target.max(1.0)).ln().abs();
+        info!(
+            "cold {cold:.3}: per-stream msg/s p50 {:.1} p90 {:.1} p99 {:.1}, total {total:.0} (target {total_target:.0}), score {score:.2}",
+            q[0], q[1], q[2]
+        );
+        if best
+            .as_ref()
+            .is_none_or(|(best_score, ..)| score < *best_score)
+        {
+            best = Some((score, cold, subscribers, rates));
+        }
+    }
+    let (_, cold, mut load, rates) = best.expect("at least one candidate");
+    load.extend(special_streams(mix));
+    assign_customers(mix, &mut load)?;
+    let mut subscribers = load;
+    subscribers.extend(probe_streams(mix, probes)?);
+    Ok(Profile {
+        description: format!(
+            "{} load streams from {} (seed {}, cold key share {cold:.3}, predicted {:.0} msg/s), {} blocks, {} deshred, {} probes",
+            mix.streams,
+            fixture.display(),
+            mix.seed,
+            rates.iter().sum::<f64>(),
+            mix.blocks,
+            mix.deshred,
+            probes.streamlab + probes.confirmed,
+        ),
+        subscribers,
+        unary: mix
+            .unary
+            .iter()
+            .filter(|(_, rate)| **rate > 0.0)
+            .map(|(method, rate)| UnaryLoad {
+                method: method.clone(),
+                rate_per_sec: *rate,
+                connections: mix.unary_connections,
+            })
+            .collect(),
+    })
+}
+
+/// Per-key update rates over `sample_slots` slots near the start of the fixture.
+pub fn sample(fixture: &Path, sample_slots: u64) -> anyhow::Result<Activity> {
+    let manifest = Manifest::load(fixture)?;
+    let first_slot = manifest.first_slot.unwrap_or_default() + 64;
+    let last_slot = first_slot + sample_slots;
     let mut pubkeys: HashMap<Vec<u8>, u64> = HashMap::new();
     let mut owners: HashMap<Vec<u8>, u64> = HashMap::new();
     let mut tx_keys: HashMap<Vec<u8>, u64> = HashMap::new();
     let (mut entries, mut metas) = (0u64, 0u64);
     let (mut first_ns, mut last_ns) = (u64::MAX, 0u64);
-    let mut reader = FixtureReader::open(&args.fixture, &manifest.chunks);
+    let mut reader = FixtureReader::open_from(fixture, &manifest.chunks, first_slot);
     while let Some(frame) = reader.next_frame()? {
         if frame.stream == StreamId::Deshred {
             continue;
@@ -142,7 +174,9 @@ fn sample(args: &GenArgs) -> anyhow::Result<Activity> {
                 }
             }
             Some(UpdateOneof::Transaction(msg)) => {
-                let Some(info) = msg.transaction else { continue };
+                let Some(info) = msg.transaction else {
+                    continue;
+                };
                 if info.is_vote {
                     continue;
                 }
@@ -203,7 +237,7 @@ impl<'a> Sampler<'a> {
     }
 
     fn pick(&self, rng: &mut Rng) -> (String, f64) {
-        if rng.chance(self.cold) {
+        if self.keys.is_empty() || rng.chance(self.cold) {
             let mut key = [0u8; 32];
             for chunk in key.chunks_mut(8) {
                 chunk.copy_from_slice(&rng.next().to_le_bytes());
@@ -216,10 +250,10 @@ impl<'a> Sampler<'a> {
 }
 
 /// SplitMix64: small and deterministic, enough for reproducible profiles.
-struct Rng(u64);
+pub struct Rng(pub u64);
 
 impl Rng {
-    const fn next(&mut self) -> u64 {
+    pub const fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -227,49 +261,82 @@ impl Rng {
         z ^ (z >> 31)
     }
 
-    fn unit(&mut self) -> f64 {
+    pub fn unit(&mut self) -> f64 {
         (self.next() >> 11) as f64 / (1u64 << 53) as f64
     }
 
-    fn chance(&mut self, p: f64) -> bool {
+    pub fn chance(&mut self, p: f64) -> bool {
         self.unit() < p
     }
 
-    const fn range(&mut self, low: usize, high: usize) -> usize {
+    pub const fn range(&mut self, low: usize, high: usize) -> usize {
         low + (self.next() % (high - low + 1) as u64) as usize
     }
 
-    fn split<'a, T>(&mut self, percents: &[f64], values: &'a [T]) -> &'a T {
-        let mut target = self.unit() * percents.iter().sum::<f64>();
-        for (percent, value) in percents.iter().zip(values) {
-            if target < *percent {
-                return value;
+    /// Index chosen with probability proportional to `weights`.
+    pub fn weighted(&mut self, weights: &[f64]) -> usize {
+        let mut target = self.unit() * weights.iter().sum::<f64>();
+        for (index, weight) in weights.iter().enumerate() {
+            if target < *weight {
+                return index;
             }
-            target -= percent;
+            target -= weight;
         }
-        values.last().expect("non-empty split")
+        weights.len() - 1
     }
 }
 
-fn generate(args: &GenArgs, activity: &Activity, cold: f64) -> anyhow::Result<(Vec<Subscriber>, Vec<f64>)> {
-    let commitment_split = parse_split(&args.commitment_split, 3)?;
-    let compression_split = parse_split(&args.compression_split, 3)?;
-    let mut rng = Rng(args.seed);
+fn split<T: Copy>(
+    map: &BTreeMap<String, f64>,
+    names: &[(&str, T)],
+) -> anyhow::Result<Vec<(f64, T)>> {
+    for key in map.keys() {
+        anyhow::ensure!(
+            names.iter().any(|(name, _)| name == key),
+            "unknown split key {key}; expected one of {:?}",
+            names.iter().map(|(name, _)| *name).collect::<Vec<_>>()
+        );
+    }
+    Ok(names
+        .iter()
+        .map(|(name, value)| (map.get(*name).copied().unwrap_or(0.0), *value))
+        .collect())
+}
+
+/// Production-shaped load streams with their predicted message rates.
+fn load_streams(
+    mix: &MixSpec,
+    activity: &Activity,
+    cold: f64,
+) -> anyhow::Result<(Vec<Subscriber>, Vec<f64>)> {
+    let commitment = split(
+        &mix.commitment,
+        &[
+            ("processed", Commitment::Processed),
+            ("confirmed", Commitment::Confirmed),
+            ("finalized", Commitment::Finalized),
+        ],
+    )?;
+    let compression = split(
+        &mix.compression,
+        &[
+            ("none", Compression::None),
+            ("zstd", Compression::Zstd),
+            ("gzip", Compression::Gzip),
+        ],
+    )?;
+    let commitment_weights: Vec<f64> = commitment.iter().map(|(weight, _)| *weight).collect();
+    let compression_weights: Vec<f64> = compression.iter().map(|(weight, _)| *weight).collect();
+    let mut rng = Rng(mix.seed);
     let pubkeys = Sampler::new(&activity.pubkeys, cold);
     let owners = Sampler::new(&activity.owners, 0.0);
     let tx_keys = Sampler::new(&activity.tx_keys, cold);
     let mut subscribers = Vec::new();
     let mut rates = Vec::new();
 
-    for index in 0..args.streams {
-        let commitment = *rng.split(
-            &commitment_split,
-            &[Commitment::Processed, Commitment::Confirmed, Commitment::Finalized],
-        );
-        let compression = *rng.split(
-            &compression_split,
-            &[Compression::None, Compression::Zstd, Compression::Gzip],
-        );
+    for index in 0..mix.streams {
+        let commitment = commitment[rng.weighted(&commitment_weights)].1;
+        let compression = compression[rng.weighted(&compression_weights)].1;
         let mut request = Request {
             commitment,
             ..Default::default()
@@ -314,7 +381,9 @@ fn generate(args: &GenArgs, activity: &Activity, cold: f64) -> anyhow::Result<(V
                     account_filter.account.sort();
                     account_filter.account.dedup();
                 }
-                request.accounts.insert(format!("a{filter}"), account_filter);
+                request
+                    .accounts
+                    .insert(format!("a{filter}"), account_filter);
             }
             rate += chosen_keys.values().sum::<f64>() + chosen_owners.values().sum::<f64>();
         }
@@ -344,6 +413,25 @@ fn generate(args: &GenArgs, activity: &Activity, cold: f64) -> anyhow::Result<(V
             );
             rate += chosen.values().sum::<f64>();
         }
+        // About 3% of fra215 customers also take transaction statuses (filter_stats, transaction_status).
+        if rng.chance(0.03) {
+            let mut chosen: HashMap<String, f64> = HashMap::new();
+            for _ in 0..rng.range(1, 100) {
+                let (key, key_rate) = tx_keys.pick(&mut rng);
+                chosen.insert(key, key_rate);
+            }
+            let mut include: Vec<String> = chosen.keys().cloned().collect();
+            include.sort();
+            request.transactions_status.insert(
+                "s0".to_owned(),
+                TransactionsFilter {
+                    vote: Some(false),
+                    account_include: include,
+                    ..Default::default()
+                },
+            );
+            rate += chosen.values().sum::<f64>();
+        }
         rates.push(rate);
         subscribers.push(Subscriber {
             name: format!("load-{index}"),
@@ -352,10 +440,19 @@ fn generate(args: &GenArgs, activity: &Activity, cold: f64) -> anyhow::Result<(V
             compression,
             count: 1,
             request,
+            link: None,
+            subscription_id: None,
+            churn: None,
+            windows_kib: None,
         });
     }
+    Ok((subscribers, rates))
+}
 
-    for index in 0..args.blocks {
+/// Full-block and deshred subscribers, after the load streams so cases can cap each group.
+fn special_streams(mix: &MixSpec) -> Vec<Subscriber> {
+    let mut subscribers = Vec::new();
+    for index in 0..mix.blocks {
         let mut blocks = BTreeMap::new();
         blocks.insert(
             "blocks".to_owned(),
@@ -370,16 +467,24 @@ fn generate(args: &GenArgs, activity: &Activity, cold: f64) -> anyhow::Result<(V
             name: format!("blocks-{index}"),
             class: "blocks".to_owned(),
             role: Role::Load,
-            compression: if index % 2 == 0 { Compression::Zstd } else { Compression::None },
+            compression: if index % 2 == 0 {
+                Compression::Zstd
+            } else {
+                Compression::None
+            },
             count: 1,
             request: Request {
                 commitment: Commitment::Confirmed,
                 blocks,
                 ..Default::default()
             },
+            link: None,
+            subscription_id: None,
+            churn: None,
+            windows_kib: None,
         });
     }
-    for index in 0..args.deshred {
+    for index in 0..mix.deshred {
         subscribers.push(Subscriber {
             name: format!("deshred-{index}"),
             class: "deshred".to_owned(),
@@ -394,13 +499,89 @@ fn generate(args: &GenArgs, activity: &Activity, cold: f64) -> anyhow::Result<(V
                 }),
                 ..Default::default()
             },
+            link: None,
+            subscription_id: None,
+            churn: None,
+            windows_kib: None,
         });
     }
-    Ok((subscribers, rates))
+    subscribers
 }
 
-/// Measured subscribers: streamlab's exact subscription, compressed and not, plus one at confirmed.
-fn probes() -> Vec<Subscriber> {
+/// Groups streams into customers, each on one network path, then marks churning and slow streams.
+fn assign_customers(mix: &MixSpec, subscribers: &mut [Subscriber]) -> anyhow::Result<()> {
+    let weights: Vec<f64> = mix.network.iter().map(|profile| profile.weight).collect();
+    let mut rng = Rng(mix.seed ^ 0x6E65_7477_6F72_6B00);
+    let mut customer = 0usize;
+    let mut remaining = 0usize;
+    let mut path = None;
+    for sub in subscribers.iter_mut() {
+        if remaining == 0 {
+            customer += 1;
+            remaining = geometric(&mut rng, mix.streams_per_id);
+            path = (!mix.network.is_empty()).then(|| {
+                let profile: &NetworkProfile = &mix.network[rng.weighted(&weights)];
+                (profile.link(rng.unit(), rng.unit()), profile.windows_kib())
+            });
+        }
+        remaining -= 1;
+        sub.subscription_id = Some(format!("customer-{customer}"));
+        sub.link = path
+            .as_ref()
+            .map(|(link, _)| link.clone())
+            .filter(|link| !link.is_local());
+        sub.windows_kib = path.as_ref().and_then(|(_, windows)| *windows);
+    }
+    let mut rng = Rng(mix.seed ^ 0x6368_7572_6E00);
+    for sub in subscribers
+        .iter_mut()
+        .filter(|sub| sub.class.starts_with("load-"))
+    {
+        if let Some(churn) = &mix.churn {
+            if rng.chance(churn.share / 100.0) {
+                sub.churn = Some(Churn {
+                    every_secs: churn.every_secs,
+                    from_slot_back: churn.from_slot_back,
+                });
+            }
+        }
+        if let Some(slow) = &mix.slow {
+            if rng.chance(slow.share / 100.0) {
+                let mut link = sub.link.clone().unwrap_or_default();
+                link.bandwidth_mbps = Some(slow.bandwidth_mbps);
+                link.delay_ms = link.delay_ms.max(slow.delay_ms);
+                sub.link = Some(link);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Customer size with the given mean, at least 1.
+fn geometric(rng: &mut Rng, mean: f64) -> usize {
+    if mean <= 1.0 {
+        return 1;
+    }
+    let p = 1.0 / mean;
+    1 + (rng.unit().max(1e-12).ln() / (1.0 - p).ln()) as usize
+}
+
+/// Streamlab's exact subscription from nyc289, uncompressed and zstd, plus confirmed copies.
+fn probe_streams(mix: &MixSpec, probes: &ProbeSpec) -> anyhow::Result<Vec<Subscriber>> {
+    let (link, windows_kib) = match &probes.network {
+        Some(name) => {
+            let profile = mix
+                .network
+                .iter()
+                .find(|profile| &profile.name == name)
+                .ok_or_else(|| anyhow::anyhow!("unknown probe network {name}"))?;
+            (
+                Some(profile.link(0.5, 0.5)).filter(|link| !link.is_local()),
+                profile.windows_kib(),
+            )
+        }
+        None => (None, None),
+    };
     let streamlab = || {
         let mut accounts = BTreeMap::new();
         accounts.insert(
@@ -439,35 +620,51 @@ fn probes() -> Vec<Subscriber> {
             ..Default::default()
         }
     };
-    vec![
-        Subscriber {
-            name: "streamlab-none".to_owned(),
-            class: "streamlab".to_owned(),
-            role: Role::Probe,
-            compression: Compression::None,
-            count: 4,
-            request: streamlab(),
-        },
-        Subscriber {
-            name: "streamlab-zstd".to_owned(),
-            class: "streamlab".to_owned(),
-            role: Role::Probe,
-            compression: Compression::Zstd,
-            count: 4,
-            request: streamlab(),
-        },
-        Subscriber {
-            name: "streamlab-confirmed".to_owned(),
-            class: "streamlab-confirmed".to_owned(),
-            role: Role::Probe,
-            compression: Compression::None,
-            count: 2,
-            request: Request {
+    let probe = |name: &str, class: &str, compression, count, request| Subscriber {
+        name: name.to_owned(),
+        class: class.to_owned(),
+        role: Role::Probe,
+        compression,
+        count,
+        request,
+        link: link.clone(),
+        subscription_id: Some(name.to_owned()),
+        churn: None,
+        windows_kib,
+    };
+    let half = probes.streamlab / 2;
+    let mut subscribers = Vec::new();
+    if probes.streamlab - half > 0 {
+        subscribers.push(probe(
+            "streamlab-none",
+            "streamlab",
+            Compression::None,
+            probes.streamlab - half,
+            streamlab(),
+        ));
+    }
+    if half > 0 {
+        subscribers.push(probe(
+            "streamlab-zstd",
+            "streamlab",
+            Compression::Zstd,
+            half,
+            streamlab(),
+        ));
+    }
+    if probes.confirmed > 0 {
+        subscribers.push(probe(
+            "streamlab-confirmed",
+            "streamlab-confirmed",
+            Compression::None,
+            probes.confirmed,
+            Request {
                 commitment: Commitment::Confirmed,
                 ..streamlab()
             },
-        },
-    ]
+        ));
+    }
+    Ok(subscribers)
 }
 
 const fn commitment_name(commitment: Commitment) -> &'static str {
@@ -478,20 +675,27 @@ const fn commitment_name(commitment: Commitment) -> &'static str {
     }
 }
 
-fn parse_split(value: &str, len: usize) -> anyhow::Result<Vec<f64>> {
-    let parts: Vec<f64> = value
-        .split(',')
-        .map(|part| part.trim().parse::<f64>())
-        .collect::<Result<_, _>>()?;
-    anyhow::ensure!(parts.len() == len, "expected {len} comma-separated numbers in {value}");
-    Ok(parts)
-}
-
 fn quantiles(rates: &[f64]) -> Vec<f64> {
     let mut sorted = rates.to_vec();
     sorted.sort_by(f64::total_cmp);
+    if sorted.is_empty() {
+        return vec![0.0; 3];
+    }
     [0.5, 0.9, 0.99]
         .iter()
         .map(|q| sorted[((sorted.len() - 1) as f64 * q).round() as usize])
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{geometric, Rng};
+
+    #[test]
+    fn geometric_mean_is_close() {
+        let mut rng = Rng(3);
+        let total: usize = (0..20_000).map(|_| geometric(&mut rng, 3.7)).sum();
+        let mean = total as f64 / 20_000.0;
+        assert!((mean - 3.7).abs() < 0.2, "mean {mean}");
+    }
 }

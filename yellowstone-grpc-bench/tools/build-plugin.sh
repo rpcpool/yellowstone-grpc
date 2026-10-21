@@ -44,9 +44,12 @@ lock_version() {
 }
 {
   echo "flavour: $flavour"
+  echo "commit: $(git rev-parse HEAD), $(git status --porcelain | wc -l) changed files"
   rustc -vV
   for crate in agave-geyser-plugin-interface solana-transaction solana-transaction-status solana-account solana-entry solana-message tokio tonic; do
     echo "$crate: $(lock_version "$crate")"
   done
 } > "$target_dir/release/plugin-abi.txt"
-echo "built $target_dir/release/libyellowstone_grpc_geyser.so and $target_dir/release/ygb"
+echo "built $target_dir/release/libyellowstone_grpc_geyser.so and $target_dir/release/ygb" >&2
+# The last stdout line is the variant directory, for bench.sh.
+echo "$root/$target_dir/release"

@@ -1,6 +1,7 @@
 //! Subscriber profiles: a JSON list of subscribers, each with a role, a compression choice and a request.
 
 use {
+    super::link::LinkSpec,
     serde::{Deserialize, Serialize},
     std::collections::{BTreeMap, HashMap},
     yellowstone_grpc_proto::geyser::{
@@ -83,6 +84,8 @@ pub struct Request {
     pub accounts: BTreeMap<String, AccountsFilter>,
     #[serde(default)]
     pub transactions: BTreeMap<String, TransactionsFilter>,
+    #[serde(default)]
+    pub transactions_status: BTreeMap<String, TransactionsFilter>,
     /// Slot updates; `true` adds interslot updates.
     #[serde(default)]
     pub slots: Option<bool>,
@@ -108,6 +111,28 @@ pub struct Subscriber {
     #[serde(default = "default_count")]
     pub count: usize,
     pub request: Request,
+    /// Emulated network between this subscriber and the plugin; local when unset.
+    #[serde(default)]
+    pub link: Option<LinkSpec>,
+    /// `x-subscription-id` of the stream; streams sharing one id model one customer.
+    #[serde(default)]
+    pub subscription_id: Option<String>,
+    /// Periodic reconnects that resume with `from_slot`.
+    #[serde(default)]
+    pub churn: Option<Churn>,
+    /// HTTP/2 stream and connection windows of this client in KiB; the fleet's own when unset.
+    #[serde(default)]
+    pub windows_kib: Option<[u32; 2]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Churn {
+    /// Mean seconds between reconnects; each interval is drawn from 0.5x to 1.5x of it.
+    pub every_secs: f64,
+    /// Resume this many slots behind the newest slot the probes have seen; 0 resumes live.
+    #[serde(default)]
+    pub from_slot_back: u64,
 }
 
 const fn default_count() -> usize {
@@ -120,6 +145,19 @@ pub struct Profile {
     #[serde(default)]
     pub description: String,
     pub subscribers: Vec<Subscriber>,
+    /// Unary calls the fleet makes alongside the streams.
+    #[serde(default)]
+    pub unary: Vec<UnaryLoad>,
+}
+
+/// Unary calls of one method at a steady rate, spread over a few local connections.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnaryLoad {
+    /// Method as the plugin's `method_call_count` labels it, e.g. `get_slot`.
+    pub method: String,
+    pub rate_per_sec: f64,
+    pub connections: usize,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -144,7 +182,9 @@ impl Request {
                 )]),
                 ping: None,
                 slots: match self.slots {
-                    Some(interslot) => HashMap::from([("slots".to_owned(), slots_filter(interslot))]),
+                    Some(interslot) => {
+                        HashMap::from([("slots".to_owned(), slots_filter(interslot))])
+                    }
                     None => HashMap::new(),
                 },
             });
@@ -169,23 +209,8 @@ impl Request {
                     )
                 })
                 .collect(),
-            transactions: self
-                .transactions
-                .iter()
-                .map(|(name, filter)| {
-                    (
-                        name.clone(),
-                        SubscribeRequestFilterTransactions {
-                            vote: filter.vote,
-                            failed: filter.failed,
-                            account_include: filter.account_include.clone(),
-                            account_exclude: filter.account_exclude.clone(),
-                            account_required: filter.account_required.clone(),
-                            ..Default::default()
-                        },
-                    )
-                })
-                .collect(),
+            transactions: transactions_filters(&self.transactions),
+            transactions_status: transactions_filters(&self.transactions_status),
             slots: match self.slots {
                 Some(interslot) => HashMap::from([("slots".to_owned(), slots_filter(interslot))]),
                 None => HashMap::new(),
@@ -196,7 +221,10 @@ impl Request {
                 HashMap::new()
             },
             blocks_meta: if self.blocks_meta {
-                HashMap::from([("blocks_meta".to_owned(), SubscribeRequestFilterBlocksMeta {})])
+                HashMap::from([(
+                    "blocks_meta".to_owned(),
+                    SubscribeRequestFilterBlocksMeta {},
+                )])
             } else {
                 HashMap::new()
             },
@@ -220,6 +248,27 @@ impl Request {
             ..Default::default()
         })
     }
+}
+
+fn transactions_filters(
+    filters: &BTreeMap<String, TransactionsFilter>,
+) -> HashMap<String, SubscribeRequestFilterTransactions> {
+    filters
+        .iter()
+        .map(|(name, filter)| {
+            (
+                name.clone(),
+                SubscribeRequestFilterTransactions {
+                    vote: filter.vote,
+                    failed: filter.failed,
+                    account_include: filter.account_include.clone(),
+                    account_exclude: filter.account_exclude.clone(),
+                    account_required: filter.account_required.clone(),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect()
 }
 
 const fn slots_filter(interslot: bool) -> SubscribeRequestFilterSlots {

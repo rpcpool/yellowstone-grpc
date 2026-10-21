@@ -348,10 +348,9 @@ impl Converter {
 
 pub fn transaction(msg: SubscribeUpdateTransaction) -> anyhow::Result<Event> {
     let info = msg.transaction.context("transaction update without info")?;
-    let transaction = convert_from::create_tx_versioned(
-        info.transaction.context("transaction without body")?,
-    )
-    .map_err(anyhow::Error::msg)?;
+    let transaction =
+        convert_from::create_tx_versioned(info.transaction.context("transaction without body")?)
+            .map_err(anyhow::Error::msg)?;
     let meta = convert_from::create_tx_meta(info.meta.context("transaction without meta")?)
         .map_err(anyhow::Error::msg)?;
     Ok(Event::Transaction(Box::new(TransactionEvent {
@@ -435,23 +434,23 @@ pub fn slot_status(msg: SubscribeUpdateSlot) -> anyhow::Result<Option<Event>> {
 pub fn deshred_transaction(msg: SubscribeUpdateDeshredTransaction) -> anyhow::Result<Event> {
     let info = msg.transaction.context("deshred update without info")?;
     let transaction = convert_from::create_tx_versioned(
-        info.transaction.context("deshred transaction without body")?,
+        info.transaction
+            .context("deshred transaction without body")?,
     )
     .map_err(anyhow::Error::msg)?;
     // Repeated fields cannot tell None from empty, so empty means no ALT resolution.
-    let loaded_addresses = if info.loaded_writable_addresses.is_empty()
-        && info.loaded_readonly_addresses.is_empty()
-    {
-        None
-    } else {
-        Some(
-            convert_from::create_loaded_addresses(
-                info.loaded_writable_addresses,
-                info.loaded_readonly_addresses,
+    let loaded_addresses =
+        if info.loaded_writable_addresses.is_empty() && info.loaded_readonly_addresses.is_empty() {
+            None
+        } else {
+            Some(
+                convert_from::create_loaded_addresses(
+                    info.loaded_writable_addresses,
+                    info.loaded_readonly_addresses,
+                )
+                .map_err(anyhow::Error::msg)?,
             )
-            .map_err(anyhow::Error::msg)?,
-        )
-    };
+        };
     Ok(Event::Deshred(Box::new(DeshredEvent {
         slot: msg.slot,
         signature: signature_from(&info.signature)?,
@@ -473,7 +472,8 @@ pub fn deshred_update_parent(msg: SubscribeUpdateDeshredUpdateParent) -> anyhow:
 }
 
 fn signature_from(bytes: &[u8]) -> anyhow::Result<Signature> {
-    Signature::try_from(bytes).map_err(|_| anyhow::anyhow!("invalid signature length {}", bytes.len()))
+    Signature::try_from(bytes)
+        .map_err(|_| anyhow::anyhow!("invalid signature length {}", bytes.len()))
 }
 
 fn hash_from(bytes: &[u8]) -> anyhow::Result<Hash> {

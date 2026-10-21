@@ -5,12 +5,14 @@ mod lane;
 mod plugin;
 mod schedule;
 
+pub use schedule::LaneMode;
 use {
     crate::{cpu, fixture::Manifest, sys},
     anyhow::Context,
     log::info,
     serde::Serialize,
     std::{
+        collections::BTreeMap,
         fs,
         path::{Path, PathBuf},
         process::{Child, Command},
@@ -21,6 +23,8 @@ use {
 
 const DEFAULT_CONFIG: &str = include_str!("../../configs/geyser-streaming.json");
 const LANE_CAPACITY: usize = 65_536;
+/// Plugin threads outside its runtime: the block-meta store and the config file watcher.
+const PLUGIN_HELPER_THREADS: [&str; 2] = ["solGrpcBlockMet", "notify-rs"];
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct RunArgs {
@@ -101,18 +105,42 @@ pub struct RunArgs {
     /// `KEY=VALUE` set in the environment before the plugin loads, for experiment switches
     #[clap(long = "plugin-env")]
     pub plugin_env: Vec<String>,
+    /// SCHED_FIFO priority for the plugin's runtime threads and the driver lanes; needs CAP_SYS_NICE
+    #[clap(long)]
+    pub fifo_priority: Option<i32>,
+    /// Passed to the fleet: HTTP/2 stream window of each subscriber, in MiB
+    #[clap(long, default_value_t = 8)]
+    pub stream_window_mib: u32,
+    /// Passed to the fleet: HTTP/2 connection window, in MiB
+    #[clap(long, default_value_t = 32)]
+    pub connection_window_mib: u32,
+    /// Passed to the fleet: seed for link jitter and churn timing
+    #[clap(long, default_value_t = 1)]
+    pub fleet_seed: u64,
+    /// How callbacks are spread over driver threads
+    #[clap(long, value_enum, default_value_t = LaneMode::Agave)]
+    pub lanes: LaneMode,
+    /// Scheduler-worker lanes for transaction account writes, with `--lanes agave`
+    #[clap(long, default_value_t = 4)]
+    pub sched_lanes: usize,
+    /// CPUs for the entry-notifier and transaction-status lanes; production runs them on the plugin's cores
+    #[clap(long)]
+    pub notifier_cpus: Option<String>,
+    /// Passed to the fleet: seconds between scrapes of the plugin's metrics; 0 disables
+    #[clap(long, default_value_t = 10.0)]
+    pub scrape_secs: f64,
 }
 
 #[derive(Serialize)]
 struct RunReport {
     fixture: String,
     plugin: String,
+    lane_mode: LaneMode,
     started_unix_ns: u64,
     paced_start_unix_ns: Option<u64>,
     finished_unix_ns: u64,
     schedule: schedule::ScheduleStats,
-    main_lane: lane::LaneReport,
-    deshred_lane: lane::LaneReport,
+    lanes: BTreeMap<String, lane::LaneReport>,
 }
 
 pub fn run(args: RunArgs) -> anyhow::Result<()> {
@@ -130,42 +158,96 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
             .with_context(|| format!("--plugin-env must be KEY=VALUE: {pair}"))?;
         std::env::set_var(key, value);
     }
-    let plugin = plugin::load(&args.plugin, &config_path)?;
-
-    let (main_tx, main_rx) = crossbeam_channel::bounded(LANE_CAPACITY);
-    let (deshred_tx, deshred_rx) = crossbeam_channel::bounded(LANE_CAPACITY);
-    let paced_start = Arc::new(lane::PacedStart::new(2, Duration::from_secs(args.attach_secs)));
-    let paced_start_unix_ns = Arc::new(std::sync::OnceLock::new());
+    let plugin_cpus = parse_cpus(args.plugin_cpus.as_deref())?;
     let driver_cpus = parse_cpus(args.driver_cpus.as_deref())?;
+    // The plugin checks tokio.affinity against this thread's CPUs, so pin it only after the load.
+    let plugin = plugin::load(&args.plugin, &config_path)?;
+    sys::pin_current_thread(&driver_cpus)?;
+    // Production pins the plugin's helper threads with its runtime, in the rescheduler's geyser pool.
+    let pinned = sys::pin_by_name(&PLUGIN_HELPER_THREADS, &plugin_cpus);
+    info!("pinned {pinned} plugin helper threads to the plugin CPUs");
+    if let Some(priority) = args.fifo_priority {
+        let changed = sys::set_fifo_by_name(&["solGeyserGrpc", "solGrpcBlockMet"], priority);
+        info!("SCHED_FIFO {priority} on {changed} plugin threads");
+    }
+
+    let router = schedule::Router::new(args.lanes, args.sched_lanes);
+    let (senders, receivers): (Vec<_>, Vec<_>) = router
+        .lanes
+        .iter()
+        .map(|_| crossbeam_channel::bounded(LANE_CAPACITY))
+        .unzip();
+    let paced_start = Arc::new(lane::PacedStart::new(
+        router.lanes.len(),
+        Duration::from_secs(args.attach_secs),
+    ));
+    let progress = Arc::new(lane::Progress::new(router.lanes.len()));
+    let paced_start_unix_ns = Arc::new(std::sync::OnceLock::new());
     let decoder_cpus = parse_cpus(args.decoder_cpus.as_deref())?;
+    let notifier_cpus = parse_cpus(args.notifier_cpus.as_deref())?;
     let fleet_child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let cpu_sampler: Arc<Mutex<Option<cpu::CpuSampler>>> = Arc::new(Mutex::new(None));
-    let plugin_cpus = parse_cpus(args.plugin_cpus.as_deref())?;
+    let fleet_command = Arc::new(fleet_command(&args));
+    // Notifier lanes on the plugin CPUs are expected there, not load from other tenants.
+    let own_groups: &'static [&'static str] = if !notifier_cpus.is_empty()
+        && router.lanes.iter().any(|spec| spec.notifier)
+        && notifier_cpus.iter().all(|cpu| plugin_cpus.contains(cpu))
+    {
+        &cpu::RUN_OWN_WITH_NOTIFIERS
+    } else {
+        &cpu::RUN_OWN
+    };
+    info!(
+        "lanes ({:?}): {}",
+        args.lanes,
+        router
+            .lanes
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 
-    let lanes = [("ygbLaneMain", true, main_rx), ("ygbLaneDeshred", false, deshred_rx)]
-        .into_iter()
-        .map(|(name, leader, rx)| {
+    let lanes = router
+        .lanes
+        .iter()
+        .zip(receivers)
+        .enumerate()
+        .map(|(index, (spec, rx))| {
             let paced_start = Arc::clone(&paced_start);
+            let progress = Arc::clone(&progress);
             let paced_start_unix_ns = Arc::clone(&paced_start_unix_ns);
             let fleet_child = Arc::clone(&fleet_child);
-            let fleet_command = fleet_command(&args);
+            let fleet_command = Arc::clone(&fleet_command);
             let cpu_sampler = Arc::clone(&cpu_sampler);
             let plugin_cpus = plugin_cpus.clone();
+            let cpus = if spec.notifier && !notifier_cpus.is_empty() {
+                notifier_cpus.clone()
+            } else {
+                driver_cpus.clone()
+            };
             let config = lane::LaneConfig {
-                name,
-                leader,
+                name: spec.name.clone(),
+                index,
+                leader: index == 0,
                 speed: args.speed,
-                cpus: driver_cpus.clone(),
+                cpus,
+                fifo_priority: args.fifo_priority,
             };
             let attach_secs = args.attach_secs;
             std::thread::Builder::new()
-                .name(name.to_owned())
+                .name(spec.name.clone())
                 .spawn(move || {
                     let on_attach = || {
                         info!("prefill complete: subscribers have {attach_secs} s to attach");
-                        let _ = paced_start_unix_ns.set(sys::unix_ns() + attach_secs * 1_000_000_000);
+                        let _ =
+                            paced_start_unix_ns.set(sys::unix_ns() + attach_secs * 1_000_000_000);
                         *cpu_sampler.lock().expect("cpu sampler lock") =
-                            Some(cpu::CpuSampler::start(plugin_cpus.clone()));
+                            Some(cpu::CpuSampler::start(
+                                plugin_cpus.clone(),
+                                &cpu::RUN_GROUPS,
+                                own_groups,
+                            ));
                         if let Some(mut command) = fleet_command.take_command() {
                             match command.spawn() {
                                 Ok(child) => *fleet_child.lock().expect("fleet lock") = Some(child),
@@ -173,7 +255,14 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
                             }
                         }
                     };
-                    lane::run(&config, &rx, plugin, &paced_start, &on_attach)
+                    // Other lanes wait on this one's progress, so a panic here would hang the run.
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        lane::run(&config, &rx, plugin, &paced_start, &progress, &on_attach)
+                    }))
+                    .unwrap_or_else(|_| {
+                        log::error!("lane {} panicked; ending the run", config.name);
+                        std::process::exit(101)
+                    })
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -194,7 +283,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
                 if let Err(error) = sys::pin_current_thread(&decoder_cpus) {
                     log::warn!("scheduler: failed to pin: {error}");
                 }
-                schedule::run(&fixture, &manifest, &schedule_config, &main_tx, &deshred_tx)
+                schedule::run(&fixture, &manifest, &schedule_config, &router, &senders)
             })?
     };
 
@@ -205,8 +294,12 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
         .into_iter()
         .map(|handle| handle.join().map_err(|_| anyhow::anyhow!("lane panicked")))
         .collect::<Result<Vec<_>, _>>()?;
-    let deshred_stats = lane_stats.pop().expect("two lanes");
-    let main_stats = lane_stats.pop().expect("two lanes");
+    let mut statuses: Vec<lane::StatusRecord> = lane_stats
+        .iter_mut()
+        .flat_map(|stats| std::mem::take(&mut stats.statuses))
+        .collect();
+    statuses.sort_by_key(|record| record.unix_ns);
+    let lane_names = schedule::Router::new(args.lanes, args.sched_lanes).lanes;
     let cpu = cpu_sampler
         .lock()
         .expect("cpu sampler lock")
@@ -218,11 +311,12 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
     if let Some(cpu) = &cpu {
         fs::write(args.out.join("cpu.json"), serde_json::to_vec_pretty(cpu)?)?;
         println!(
-            "cpu (attach to end): plugin workers mean {:.2} peak {:.2} cores; plugin CPUs busy mean {:.2} peak {:.2}, foreign mean {:.2} peak {:.2}",
+            "cpu (attach to end): plugin workers mean {:.2} peak {:.2} cores; plugin CPUs busy mean {:.2} peak {:.2}, irq mean {:.2}, foreign mean {:.2} peak {:.2}",
             cpu.groups.get("plugin_workers").map_or(0.0, |v| v.0),
             cpu.groups.get("plugin_workers").map_or(0.0, |v| v.1),
             cpu.plugin_cpus_busy.0,
             cpu.plugin_cpus_busy.1,
+            cpu.plugin_cpus_irq.0,
             cpu.plugin_cpus_foreign.0,
             cpu.plugin_cpus_foreign.1,
         );
@@ -231,17 +325,24 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
     let report = RunReport {
         fixture: args.fixture.display().to_string(),
         plugin: args.plugin.display().to_string(),
+        lane_mode: args.lanes,
         started_unix_ns,
         paced_start_unix_ns: paced_start_unix_ns.get().copied(),
         finished_unix_ns: sys::unix_ns(),
         schedule: schedule_stats,
-        main_lane: main_stats.report(),
-        deshred_lane: deshred_stats.report(),
+        lanes: lane_names
+            .iter()
+            .zip(&lane_stats)
+            .map(|(spec, stats)| (spec.name.clone(), stats.report()))
+            .collect(),
     };
-    fs::write(args.out.join("driver.json"), serde_json::to_vec_pretty(&report)?)?;
+    fs::write(
+        args.out.join("driver.json"),
+        serde_json::to_vec_pretty(&report)?,
+    )?;
     fs::write(
         args.out.join("driver-statuses.json"),
-        serde_json::to_vec(&main_stats.statuses)?,
+        serde_json::to_vec(&statuses)?,
     )?;
     print_summary(&report);
     info!("holding the plugin for {} s", args.hold_secs);
@@ -275,7 +376,17 @@ fn fleet_command(args: &RunArgs) -> FleetCommand {
             .arg("--load-threads")
             .arg(args.load_threads.to_string())
             .arg("--streams-per-connection")
-            .arg(args.streams_per_connection.to_string());
+            .arg(args.streams_per_connection.to_string())
+            .arg("--stream-window-mib")
+            .arg(args.stream_window_mib.to_string())
+            .arg("--connection-window-mib")
+            .arg(args.connection_window_mib.to_string())
+            .arg("--seed")
+            .arg(args.fleet_seed.to_string())
+            .arg("--scrape")
+            .arg(format!("127.0.0.1:{}", args.prometheus_port))
+            .arg("--scrape-secs")
+            .arg(args.scrape_secs.to_string());
         if let Some(cpus) = &args.probe_cpus {
             command.arg("--probe-cpus").arg(cpus);
         }
@@ -311,7 +422,9 @@ fn stop_fleet(mut child: Child) -> anyhow::Result<()> {
 }
 
 fn parse_cpus(list: Option<&str>) -> anyhow::Result<Vec<usize>> {
-    list.map(sys::parse_cpu_list).transpose().map(Option::unwrap_or_default)
+    list.map(sys::parse_cpu_list)
+        .transpose()
+        .map(Option::unwrap_or_default)
 }
 
 fn write_plugin_config(args: &RunArgs, path: &Path) -> anyhow::Result<()> {
@@ -342,9 +455,9 @@ fn print_summary(report: &RunReport) {
         "schedule: {} frames, prefill {} events, paced {} events, dropped {}, conversion errors {}, max pending {}",
         s.frames, s.prefill_events, s.paced_events, s.dropped_outside_window, s.conversion_errors, s.max_pending
     );
-    for (name, lane) in [("main", &report.main_lane), ("deshred", &report.deshred_lane)] {
+    for (name, lane) in &report.lanes {
         println!(
-            "{name} lane: prefill {} in {:.1} s, paced {}, errors {}, lag p50 {:.1} us p99 {:.1} us max {:.1} us; timer lag p99 {:.1} us ({}), queue lag p99 {:.1} us ({})",
+            "{name}: prefill {} in {:.1} s, paced {}, errors {}, lag p50 {:.1} us p99 {:.1} us max {:.1} us; timer lag p99 {:.1} us ({}), queue lag p99 {:.1} us ({}), gate wait p99 {:.1} us ({})",
             lane.prefill_events,
             lane.prefill_secs,
             lane.paced_events,
@@ -356,6 +469,8 @@ fn print_summary(report: &RunReport) {
             lane.timer_lag_ns.count,
             lane.queue_lag_ns.p99 as f64 / 1e3,
             lane.queue_lag_ns.count,
+            lane.gate_wait_ns.p99 as f64 / 1e3,
+            lane.gate_wait_ns.count,
         );
         for (kind, callback) in &lane.callback_ns {
             println!(
