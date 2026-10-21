@@ -1,13 +1,12 @@
 use {
     crate::{
-        grpc::E2EGeyserEventAdapter,
+        grpc::BlockEventCounts,
         reconnect_blocks::{ReconnectBlockEvent, ReconnectBlockStream},
         scenarios::RunConfig,
     },
     anyhow::{ensure, Context, Result},
     arc_swap::ArcSwap,
     futures::{channel::mpsc, StreamExt as FuturesStreamExt},
-    solana_commitment_config::CommitmentLevel as MachineCommitment,
     std::{
         collections::{HashMap, HashSet},
         future::Future,
@@ -17,14 +16,12 @@ use {
         time::Duration,
     },
     yellowstone_block_machine::stream::{
-        Block, BlockEventStore, BlockMachineOutput, BlockStream, SimpleBlockAccumulator,
-        SimpleBlockStore,
+        Block, BlockEventStore, BlockMachineOutput, SimpleBlockStore,
     },
     yellowstone_grpc_client::{
-        test_tools::Unstable, AutoReconnect, Backoff, BankRef, ClientTlsConfig, DedupState,
-        DedupStream, DiscardReason, GrpcConnector, ReconnectConfig, ReconnectEvent,
-        ReconnectStream, ReconnectionPolicy, SlotWinner, TonicGrpcConnector,
-        DEFAULT_SLOT_RETENTION,
+        AutoReconnect, Backoff, BankRef, ClientTlsConfig, DedupState, DedupStream, DiscardReason,
+        GrpcConnector, ReconnectConfig, ReconnectEvent, ReconnectStream, ReconnectionPolicy,
+        SlotWinner, TonicGrpcConnector, DEFAULT_SLOT_RETENTION,
     },
     yellowstone_grpc_e2e_macros::test_helper,
     yellowstone_grpc_proto::{
@@ -37,9 +34,11 @@ use {
     },
 };
 
-const SLOTS_AFTER_RECONNECT: usize = 20;
-const DISCONNECT_AFTER: Duration = Duration::from_secs(4);
-const OUTAGE: Duration = Duration::from_secs(4);
+// Covers the ~5 slots produced during the outage plus a few live slots after it.
+const SLOTS_AFTER_RECONNECT: usize = 12;
+// Block metas the first connection must deliver before the cut, so a replay checkpoint exists.
+const BLOCK_METAS_BEFORE_CUT: usize = 3;
+const OUTAGE: Duration = Duration::from_secs(2);
 const TIMEOUT: Duration = Duration::from_secs(240);
 
 #[derive(Default)]
@@ -119,6 +118,68 @@ where
     })
 }
 
+/// Cuts the stream right after a transaction of a bank with no block meta yet, once
+/// `BLOCK_METAS_BEFORE_CUT` block metas arrived. The cut always lands mid-bank, after a checkpoint.
+struct CutMidBank<S> {
+    inner: Option<S>,
+    block_metas: usize,
+    complete: HashSet<(u64, u64)>,
+    cut_next: bool,
+}
+
+impl<S> CutMidBank<S> {
+    fn new(inner: S) -> Self {
+        Self {
+            inner: Some(inner),
+            block_metas: 0,
+            complete: HashSet::new(),
+            cut_next: false,
+        }
+    }
+}
+
+impl<S> futures::Stream for CutMidBank<S>
+where
+    S: futures::Stream<Item = Result<SubscribeUpdate, Status>> + Unpin,
+{
+    type Item = Result<SubscribeUpdate, Status>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        if self.cut_next {
+            self.cut_next = false;
+            self.inner = None;
+            return std::task::Poll::Ready(Some(Err(Status::aborted(
+                "unstable: simulated disconnect",
+            ))));
+        }
+        let Some(inner) = self.inner.as_mut() else {
+            return std::task::Poll::Ready(None);
+        };
+        let item = std::task::ready!(inner.poll_next_unpin(cx));
+        if let Some(Ok(update)) = &item {
+            match update.update_oneof.as_ref() {
+                Some(UpdateOneof::BlockMeta(meta)) => {
+                    self.block_metas += 1;
+                    self.complete.insert((meta.slot, meta.bank_id));
+                }
+                // A transaction comes after its bank's CreatedBank, unlike construction-time
+                // sysvar writes, so the cut never lands before the bank is opened.
+                Some(UpdateOneof::Transaction(tx))
+                    if self.block_metas >= BLOCK_METAS_BEFORE_CUT
+                        && !self.complete.contains(&(tx.slot, tx.bank_id)) =>
+                {
+                    self.cut_next = true;
+                }
+                _ => {}
+            }
+        }
+        std::task::Poll::Ready(item)
+    }
+}
+
 #[derive(Clone)]
 struct ScenarioConnector {
     inner: TonicGrpcConnector,
@@ -154,10 +215,7 @@ impl GrpcConnector for ScenarioConnector {
             }
 
             if !reconnect {
-                Ok(Box::pin(observe_disconnect(
-                    Unstable::new(stream, DISCONNECT_AFTER),
-                    progress,
-                )) as Self::Stream)
+                Ok(Box::pin(observe_disconnect(CutMidBank::new(stream), progress)) as Self::Stream)
             } else {
                 Ok(Box::pin(stream) as Self::Stream)
             }
@@ -205,6 +263,25 @@ fn block_machine_request() -> SubscribeRequest {
         commitment: Some(CommitmentLevel::Processed as i32),
         ..Default::default()
     }
+}
+
+/// Every bank writes sysvars and has vote transactions: enough payloads to cut and rebuild a
+/// bank, and a fraction of the full firehose a replay would otherwise resend.
+fn narrow_payloads(subscription: &mut SubscribeRequest) {
+    subscription.accounts = HashMap::from([(
+        "test".to_string(),
+        yellowstone_grpc_proto::geyser::SubscribeRequestFilterAccounts {
+            owner: vec!["Sysvar1111111111111111111111111111111111111".to_string()],
+            ..Default::default()
+        },
+    )]);
+    subscription.transactions = HashMap::from([(
+        "test".to_string(),
+        yellowstone_grpc_proto::geyser::SubscribeRequestFilterTransactions {
+            vote: Some(true),
+            ..Default::default()
+        },
+    )]);
 }
 
 fn connector(
@@ -370,37 +447,44 @@ where
 /// Auto-reconnect replays missed slots after forced disconnects
 #[test_helper(name = "reconnect-recover", tags = ["client", "reconnect"])]
 pub async fn reconnect_should_recover_missed_slots(config: &RunConfig) -> Result<()> {
-    for commitment in [CommitmentLevel::Processed, CommitmentLevel::Confirmed] {
-        let (connector, request) = connector(
-            config,
-            ReconnectionPolicy::RecoverMissedData {
-                slot_retention: DEFAULT_SLOT_RETENTION,
-            },
-            commitment,
-        )?;
+    futures::future::try_join(
+        recover_missed_slots_at(config, CommitmentLevel::Processed),
+        recover_missed_slots_at(config, CommitmentLevel::Confirmed),
+    )
+    .await?;
+    Ok(())
+}
 
-        let progress = Arc::clone(&connector.progress);
-        let first = tokio::time::timeout(TIMEOUT, connector.connect(request.load_full(), None))
-            .await
-            .context("initial connection timed out")?
-            .context("initial connection should succeed")?;
+async fn recover_missed_slots_at(config: &RunConfig, commitment: CommitmentLevel) -> Result<()> {
+    let (connector, request) = connector(
+        config,
+        ReconnectionPolicy::RecoverMissedData {
+            slot_retention: DEFAULT_SLOT_RETENTION,
+        },
+        commitment,
+    )?;
 
-        let mut stream = DedupStream::new(
-            AutoReconnect::new(first, connector, request, Backoff::default()),
-            DedupState::with_slot_retention(DEFAULT_SLOT_RETENTION),
-        );
+    let progress = Arc::clone(&connector.progress);
+    let first = tokio::time::timeout(TIMEOUT, connector.connect(request.load_full(), None))
+        .await
+        .context("initial connection timed out")?
+        .context("initial connection should succeed")?;
 
-        let observed = tokio::time::timeout(TIMEOUT, observe(&mut stream, &progress))
-            .await
-            .context("scenario timed out")??;
+    let mut stream = DedupStream::new(
+        AutoReconnect::new(first, connector, request, Backoff::default()),
+        DedupState::with_slot_retention(DEFAULT_SLOT_RETENTION),
+    );
 
-        progress.lock().unwrap().validate(true)?;
-        ensure!(
-            observed.gaps().is_empty(),
-            "recover policy at {commitment:?} should leave no gaps, got {:?}",
-            observed.gaps()
-        );
-    }
+    let observed = tokio::time::timeout(TIMEOUT, observe(&mut stream, &progress))
+        .await
+        .context("scenario timed out")??;
+
+    progress.lock().unwrap().validate(true)?;
+    ensure!(
+        observed.gaps().is_empty(),
+        "recover policy at {commitment:?} should leave no gaps, got {:?}",
+        observed.gaps()
+    );
 
     Ok(())
 }
@@ -408,29 +492,35 @@ pub async fn reconnect_should_recover_missed_slots(config: &RunConfig) -> Result
 /// SkipMissedData never replays, so forced disconnects leave gaps and no duplicates.
 #[test_helper(name = "reconnect-skip", tags = ["client", "reconnect"])]
 pub async fn reconnect_should_skip_missed_slots(config: &RunConfig) -> Result<()> {
-    for commitment in [CommitmentLevel::Processed, CommitmentLevel::Confirmed] {
-        let (connector, request) =
-            connector(config, ReconnectionPolicy::SkipMissedData, commitment)?;
+    futures::future::try_join(
+        skip_missed_slots_at(config, CommitmentLevel::Processed),
+        skip_missed_slots_at(config, CommitmentLevel::Confirmed),
+    )
+    .await?;
+    Ok(())
+}
 
-        let progress = Arc::clone(&connector.progress);
-        let first = tokio::time::timeout(TIMEOUT, connector.connect(request.load_full(), None))
-            .await
-            .context("initial connection timed out")?
-            .context("initial connection should succeed")?;
+async fn skip_missed_slots_at(config: &RunConfig, commitment: CommitmentLevel) -> Result<()> {
+    let (connector, request) = connector(config, ReconnectionPolicy::SkipMissedData, commitment)?;
 
-        let mut stream =
-            AutoReconnect::new(first, connector, request, Backoff::default()).without_checkpoint();
+    let progress = Arc::clone(&connector.progress);
+    let first = tokio::time::timeout(TIMEOUT, connector.connect(request.load_full(), None))
+        .await
+        .context("initial connection timed out")?
+        .context("initial connection should succeed")?;
 
-        let observed = tokio::time::timeout(TIMEOUT, observe(&mut stream, &progress))
-            .await
-            .context("scenario timed out")??;
+    let mut stream =
+        AutoReconnect::new(first, connector, request, Backoff::default()).without_checkpoint();
 
-        progress.lock().unwrap().validate(false)?;
-        ensure!(
-            observed.reconnect_gap.is_some(),
-            "skip policy at {commitment:?} did not skip a produced slot across the injected outage"
-        );
-    }
+    let observed = tokio::time::timeout(TIMEOUT, observe(&mut stream, &progress))
+        .await
+        .context("scenario timed out")??;
+
+    progress.lock().unwrap().validate(false)?;
+    ensure!(
+        observed.reconnect_gap.is_some(),
+        "skip policy at {commitment:?} did not skip a produced slot across the injected outage"
+    );
 
     Ok(())
 }
@@ -445,27 +535,15 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
         },
         CommitmentLevel::Processed,
     )?;
-    request.store(Arc::new(block_machine_request()));
+    // Bank recovery needs finalized statuses to pick the winner of a discarded bank.
+    let mut subscription = block_machine_request();
+    for filter in subscription.slots.values_mut() {
+        filter.filter_by_commitment = Some(false);
+    }
+    request.store(Arc::new(subscription));
 
-    let progress = Arc::clone(&connector.progress);
-    let first = tokio::time::timeout(TIMEOUT, connector.connect(request.load_full(), None))
-        .await
-        .context("initial connection timed out")?
-        .context("initial connection should succeed")?;
-
-    let stream = DedupStream::new(
-        AutoReconnect::new(first, connector, request, Backoff::default()),
-        DedupState::with_slot_retention(DEFAULT_SLOT_RETENTION),
-    );
-
-    let mut blocks = BlockStream::<_, E2EGeyserEventAdapter, SimpleBlockAccumulator<_>>::new(
-        Box::pin(stream),
-        SimpleBlockAccumulator::default(),
-        MachineCommitment::Processed,
-    );
-
-    // Stable side channel for the expected blockhash. Only the block-building
-    // stream is put under reconnect pressure.
+    // Stable side channel for the expected blockhash, opened first so it sees every block
+    // the block-building stream sees. Only the block-building stream is put under reconnect pressure.
     let mut client = crate::grpc::new_client(config).await?;
     let mut meta_stream = client
         .subscribe_once(SubscribeRequest {
@@ -476,11 +554,25 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
         .await
         .context("block meta subscription should succeed")?;
 
+    let progress = Arc::clone(&connector.progress);
+    let first = tokio::time::timeout(TIMEOUT, connector.connect(request.load_full(), None))
+        .await
+        .context("initial connection timed out")?
+        .context("initial connection should succeed")?;
+
+    // A partially delivered bank is discarded and its replacement rebuilt, never repaired.
+    let stream = ReconnectStream::new(
+        AutoReconnect::new(first, connector, request, Backoff::default())
+            .with_bank_replay_for_test(),
+    );
+    let mut blocks = ReconnectBlockStream::new(stream);
+
     /// Blocks that must be rebuilt after the disconnect before the run ends.
     const BLOCKS_AFTER_RECONNECT: usize = 1;
 
-    let mut metas: HashMap<u64, SubscribeUpdateBlockMeta> = HashMap::new();
-    let mut built: HashMap<u64, Block<SimpleBlockStore<SubscribeUpdate>>> = HashMap::new();
+    // Keyed by (slot, bank_id): a slot can have more than one bank, each with its own block.
+    let mut metas: HashMap<(u64, u64), SubscribeUpdateBlockMeta> = HashMap::new();
+    let mut built: HashMap<(u64, u64), Block<SimpleBlockStore<SubscribeUpdate>>> = HashMap::new();
     let mut rebuilt_after_reconnect = HashSet::new();
     let mut matched_after_reconnect = HashSet::new();
 
@@ -497,28 +589,38 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
                     let update = meta.context("block meta stream ended")??;
                     if let Some(UpdateOneof::BlockMeta(m)) = update.update_oneof {
                         let slot = m.slot;
+                        let bank_id = m.bank_id;
                         ensure!(
-                            metas.insert(slot, m).is_none(),
-                            "block meta delivered twice for slot {slot}"
+                            metas.insert((slot, bank_id), m).is_none(),
+                            "block meta delivered twice for slot {slot} bank {bank_id}"
                         );
                         if rebuilt_after_reconnect.contains(&slot) {
                             matched_after_reconnect.insert(slot);
                         }
                     }
                 }
-                block = blocks.next() => {
-                    let output = block.context("block stream ended")??;
+                event = blocks.next() => {
+                    let output = match event.context("block stream ended")?? {
+                        ReconnectBlockEvent::DiscardBanks { banks, .. } => {
+                            for bank in banks {
+                                built.remove(&(bank.slot, bank.bank_id));
+                            }
+                            continue;
+                        }
+                        ReconnectBlockEvent::Output { output, .. } => output,
+                    };
                     match output {
                         BlockMachineOutput::FrozenBlock(b) => {
                             let slot = b.slot;
-                            log::info!("rebuilt block for slot {slot}");
+                            let bank_id = b.bank_id;
+                            log::info!("rebuilt block for slot {slot} bank {bank_id}");
                             ensure!(
-                                built.insert(slot, b).is_none(),
-                                "block machine emitted slot {slot} twice"
+                                built.insert((slot, bank_id), b).is_none(),
+                                "block machine emitted slot {slot} bank {bank_id} twice"
                             );
                             if progress.lock().unwrap().resumed() {
                                 rebuilt_after_reconnect.insert(slot);
-                                if metas.contains_key(&slot) {
+                                if metas.contains_key(&(slot, bank_id)) {
                                     matched_after_reconnect.insert(slot);
                                 }
                             }
@@ -528,6 +630,13 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
                         }
                         BlockMachineOutput::ForkDetected(f) => {
                             log::warn!("fork detected at slot {}", f.slot);
+                        }
+                        BlockMachineOutput::BankDiscarded(discarded) => {
+                            log::info!(
+                                "bank {} of slot {} discarded",
+                                discarded.bank_id,
+                                discarded.slot
+                            );
                         }
                         BlockMachineOutput::SlotCommitmentUpdate(_) => {}
                     }
@@ -547,10 +656,11 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
 
     progress.lock().unwrap().validate(true)?;
 
-    for (slot, block) in built {
-        let Some(meta) = metas.get(&slot) else {
+    for ((slot, bank_id), block) in built {
+        let Some(meta) = metas.get(&(slot, bank_id)) else {
             continue;
         };
+        let counts = BlockEventCounts::of(&block.events);
 
         let expected = solana_hash::Hash::from_str(&meta.blockhash)
             .context("block meta blockhash should parse")?
@@ -560,21 +670,21 @@ pub async fn reconnect_should_rebuild_blocks(config: &RunConfig) -> Result<()> {
             "slot {slot}: rebuilt blockhash does not match block meta"
         );
         ensure!(
-            block.events.transaction_len() > 0,
+            counts.transactions > 0,
             "slot {slot}: rebuilt block has no transactions"
         );
 
         ensure!(
-            meta.executed_transaction_count as usize == block.events.transaction_len(),
+            meta.executed_transaction_count as usize == counts.transactions,
             "slot {slot}: expected {} transactions, got {}",
             meta.executed_transaction_count,
-            block.events.transaction_len()
+            counts.transactions
         );
         ensure!(
-            meta.entries_count as usize == block.events.entry_len(),
+            meta.entries_count as usize == counts.entries,
             "slot {slot}: expected {} entries, got {}",
             meta.entries_count,
-            block.events.entry_len()
+            counts.entries
         );
     }
 
@@ -602,12 +712,74 @@ mod tests {
         })
     }
 
+    fn meta(slot: u64) -> Result<SubscribeUpdate, Status> {
+        Ok(SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
+                slot,
+                bank_id: slot,
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
+
+    fn account_of(slot: u64) -> Result<SubscribeUpdate, Status> {
+        Ok(SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::Account(SubscribeUpdateAccount {
+                slot,
+                bank_id: Some(slot),
+                account: Some(SubscribeUpdateAccountInfo::default()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
+
+    fn tx_of(slot: u64) -> Result<SubscribeUpdate, Status> {
+        Ok(SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::Transaction(SubscribeUpdateTransaction {
+                slot,
+                bank_id: slot,
+                transaction: Some(SubscribeUpdateTransactionInfo::default()),
+            })),
+            ..Default::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn cut_lands_mid_bank_after_enough_block_metas() {
+        let mut updates = vec![tx_of(1), meta(1), meta(2)];
+        updates.extend([
+            tx_of(3),
+            meta(3),
+            tx_of(3),
+            account_of(4),
+            tx_of(4),
+            tx_of(4),
+        ]);
+        let mut stream = CutMidBank::new(futures::stream::iter(updates));
+        let mut delivered = Vec::new();
+        let error = loop {
+            match stream.next().await.expect("the cut should end the stream") {
+                Ok(update) => delivered.push(update),
+                Err(error) => break error,
+            }
+        };
+        assert_eq!(error.code(), yellowstone_grpc_proto::tonic::Code::Aborted);
+        // Slot 3's late transaction belongs to a complete bank. Slot 4's account comes before its
+        // CreatedBank, so only slot 4's first transaction triggers the cut.
+        assert_eq!(delivered.len(), 8);
+        assert!(stream.next().await.is_none());
+    }
+
     #[tokio::test]
     async fn unstable_disconnect_does_not_wait_for_partial_payloads() {
         let progress = Arc::new(Mutex::new(ReconnectProgress::default()));
         let source = futures::stream::iter(vec![slot(10)]);
-        let mut stream =
-            observe_disconnect(Unstable::new(source, Duration::ZERO), Arc::clone(&progress));
+        let mut stream = observe_disconnect(
+            yellowstone_grpc_client::test_tools::Unstable::new(source, Duration::ZERO),
+            Arc::clone(&progress),
+        );
         assert_eq!(
             stream.next().await.unwrap().unwrap_err().code(),
             yellowstone_grpc_proto::tonic::Code::Aborted
@@ -747,6 +919,7 @@ pub async fn reconnect_should_replace_partial_bank(config: &RunConfig) -> Result
     for filter in subscription.slots.values_mut() {
         filter.filter_by_commitment = Some(false);
     }
+    narrow_payloads(&mut subscription);
     request.store(Arc::new(subscription));
 
     let progress = Arc::clone(&connector.progress);
@@ -864,317 +1037,100 @@ pub async fn reconnect_should_replace_partial_bank(config: &RunConfig) -> Result
     .context("bank recovery scenario timed out")?
 }
 
-fn verify_block_integrity(
-    rebuilt: &Block<SimpleBlockStore<SubscribeUpdate>>,
-    reference: &yellowstone_grpc_proto::geyser::SubscribeUpdateBlock,
-) -> Result<()> {
-    ensure!(rebuilt.slot == reference.slot, "block slot mismatch");
-    ensure!(
-        rebuilt.blockhash == solana_hash::Hash::from_str(&reference.blockhash)?.to_bytes(),
-        "rebuilt blockhash differs from finalized reference"
-    );
-    let mut transactions = HashMap::new();
-    let mut accounts = HashMap::new();
-    let mut entries = HashMap::new();
-    for event in rebuilt.events.iter() {
-        match event.update_oneof.as_ref() {
-            Some(UpdateOneof::Transaction(tx)) => {
-                ensure!(
-                    tx.slot == reference.slot && tx.bank_id == reference.bank_id,
-                    "transaction from wrong bank"
-                );
-                let info = tx
-                    .transaction
-                    .as_ref()
-                    .context("transaction payload missing")?;
-                ensure!(
-                    transactions.insert(info.index, info).is_none(),
-                    "duplicate transaction index"
-                );
-            }
-            Some(UpdateOneof::Account(account)) => {
-                ensure!(
-                    account.slot == reference.slot && account.bank_id == Some(reference.bank_id),
-                    "account from wrong bank"
-                );
-                let info = account
-                    .account
-                    .as_ref()
-                    .context("account payload missing")?;
-                let previous = accounts.entry(info.pubkey.clone()).or_insert(info);
-                if info.write_version > previous.write_version {
-                    *previous = info;
-                }
-            }
-            Some(UpdateOneof::Entry(entry)) => {
-                ensure!(
-                    entry.slot == reference.slot && entry.bank_id == reference.bank_id,
-                    "entry from wrong bank"
-                );
-                ensure!(
-                    entries.insert(entry.index, entry).is_none(),
-                    "duplicate entry index"
-                );
-            }
-            _ => {}
-        }
-    }
-    ensure!(
-        transactions.len() as u64 == reference.executed_transaction_count
-            && transactions.len() == reference.transactions.len(),
-        "transaction count mismatch"
-    );
-    ensure!(
-        entries.len() as u64 == reference.entries_count && entries.len() == reference.entries.len(),
-        "entry count mismatch"
-    );
-    ensure!(
-        accounts.len() as u64 == reference.updated_account_count
-            && accounts.len() == reference.accounts.len(),
-        "account count mismatch"
-    );
-    for tx in &reference.transactions {
-        ensure!(
-            transactions.remove(&tx.index) == Some(tx),
-            "transaction {} payload or metadata mismatch",
-            tx.index
-        );
-    }
-    for entry in &reference.entries {
-        ensure!(
-            entries.remove(&entry.index) == Some(entry),
-            "entry {} hash or transaction range mismatch",
-            entry.index
-        );
-    }
-    for account in &reference.accounts {
-        ensure!(
-            accounts.remove(&account.pubkey) == Some(account),
-            "final account payload mismatch"
-        );
-    }
-    log::info!(
-        "INTEGRITY: slot={}, transactions={}, entries={}, accounts={} match finalized full block",
-        reference.slot,
-        reference.transactions.len(),
-        reference.entries.len(),
-        reference.accounts.len()
-    );
-    Ok(())
-}
-
-/// Rebuilds the interrupted bank and compares its payloads with a finalized full block.
+/// Rebuilds the interrupted bank with the block machine and checks it is the finalized winner.
 #[test_helper(name = "reconnect-bank-integrity", tags = ["client", "reconnect", "blockmachine"])]
 pub async fn reconnect_should_preserve_block_integrity(config: &RunConfig) -> Result<()> {
     tokio::time::timeout(TIMEOUT, async {
-        let mut client = crate::grpc::new_client(config).await?;
-        let mut reference_stream = client.subscribe_once(SubscribeRequest {
-            blocks: HashMap::from([("integrity".to_owned(), yellowstone_grpc_proto::geyser::SubscribeRequestFilterBlocks {
-                include_transactions: Some(true),
-                include_accounts: Some(true),
-                include_entries: Some(true),
-                ..Default::default()
-            })]),
-            commitment: Some(CommitmentLevel::Finalized as i32),
-            ..Default::default()
-        }).await?;
-        let (connector, request) = connector(config,
-            ReconnectionPolicy::RecoverMissedData { slot_retention: DEFAULT_SLOT_RETENTION },
-            CommitmentLevel::Processed)?;
+        let (connector, request) = connector(
+            config,
+            ReconnectionPolicy::RecoverMissedData {
+                slot_retention: DEFAULT_SLOT_RETENTION,
+            },
+            CommitmentLevel::Processed,
+        )?;
         let mut subscription = block_machine_request();
         for filter in subscription.slots.values_mut() {
             filter.filter_by_commitment = Some(false);
         }
+        narrow_payloads(&mut subscription);
         request.store(Arc::new(subscription));
         let progress = Arc::clone(&connector.progress);
         let first = connector.connect(request.load_full(), None).await?;
         let stream = ReconnectStream::new(
-            AutoReconnect::new(first, connector, request, Backoff::default()).with_bank_replay_for_test());
+            AutoReconnect::new(first, connector, request, Backoff::default())
+                .with_bank_replay_for_test(),
+        );
         let mut blocks = ReconnectBlockStream::new(stream);
         let mut winning_hash = None;
-        let mut rebuilt: Option<(u64, Block<SimpleBlockStore<SubscribeUpdate>>)> = None;
-        let mut references = HashMap::new();
+        let mut rebuilt: Option<Block<SimpleBlockStore<SubscribeUpdate>>> = None;
         loop {
-            tokio::select! {
-                event = blocks.next() => {
-                    match event.context("block recovery stream ended")?? {
-                        ReconnectBlockEvent::DiscardBanks { banks, reason, replacement, winners } => {
-                            log::info!("INTEGRITY: discard reason={reason:?}, replacement={replacement:?}, banks={banks:?}");
-                            let slot = progress.lock().unwrap().interrupted_slot.context("timed disconnect did not interrupt a delivered partial account bank")?;
-                            if let Some(hash) = winners.iter().find_map(|winner| match winner {
-                                SlotWinner::Finalized { slot: s, blockhash } if *s == slot => Some(blockhash.clone()),
-                                _ => None,
-                            }) {
-                                winning_hash = Some(hash);
-                            }
-                            if rebuilt.as_ref().is_some_and(|(generation, block)| {
-                                banks.iter().any(|bank| bank.generation == *generation && bank.slot == block.slot)
-                            }) {
-                                rebuilt = None;
-                            }
+            match blocks
+                .next()
+                .await
+                .context("block recovery stream ended")??
+            {
+                ReconnectBlockEvent::DiscardBanks { banks, winners, .. } => {
+                    let slot = progress
+                        .lock()
+                        .unwrap()
+                        .interrupted_slot
+                        .context("disconnect did not interrupt a delivered partial bank")?;
+                    winning_hash = winners.iter().find_map(|winner| match winner {
+                        SlotWinner::Finalized { slot: s, blockhash } if *s == slot => {
+                            Some(blockhash.clone())
                         }
-                        ReconnectBlockEvent::Output { generation, output } => match output {
-                            BlockMachineOutput::FrozenBlock(block) => {
-                                log::info!("INTEGRITY OUTPUT: FrozenBlock generation={generation}, slot={}, blockhash={}",
-                                    block.slot, solana_hash::Hash::new_from_array(block.blockhash));
-                                if generation > 0 && Some(block.slot) == progress.lock().unwrap().interrupted_slot {
-                                    log::info!("INTEGRITY: rebuilt interrupted slot {}", block.slot);
-                                    rebuilt = Some((generation, block));
-                                }
-                            }
-                            BlockMachineOutput::DeadBlockDetected(dead) => log::warn!(
-                                "INTEGRITY OUTPUT: DeadBlockDetected generation={generation}, slot={}", dead.slot),
-                            BlockMachineOutput::ForkDetected(fork) => log::warn!(
-                                "INTEGRITY OUTPUT: ForkDetected generation={generation}, slot={}", fork.slot),
-                            BlockMachineOutput::SlotCommitmentUpdate(status) => log::info!(
-                                "INTEGRITY OUTPUT: SlotCommitmentUpdate generation={generation}, status={status:?}"),
-                        }
+                        _ => None,
+                    });
+                    if rebuilt
+                        .as_ref()
+                        .is_some_and(|block| banks.iter().any(|bank| bank.slot == block.slot))
+                    {
+                        rebuilt = None;
                     }
                 }
-                update = reference_stream.next() => {
-                    let update = update.context("reference stream ended")??;
-                    if let Some(UpdateOneof::Block(block)) = update.update_oneof {
-                        let target = progress.lock().unwrap().interrupted_slot;
-                        // The reference can arrive before the timed disconnect identifies the target slot.
-                        if target.is_none() || target == Some(block.slot) {
-                            log::info!("INTEGRITY: received finalized reference for slot {}", block.slot);
-                            references.insert(block.slot, block);
-                        }
-                    }
+                ReconnectBlockEvent::Output {
+                    generation,
+                    output: BlockMachineOutput::FrozenBlock(block),
+                } if generation > 0
+                    && Some(block.slot) == progress.lock().unwrap().interrupted_slot =>
+                {
+                    rebuilt = Some(block);
                 }
+                ReconnectBlockEvent::Output { .. } => {}
             }
-            let target = progress.lock().unwrap().interrupted_slot;
-            if let Some(slot) = target {
-                references.retain(|reference_slot, _| *reference_slot == slot);
+            let (Some(block), Some(hash)) = (&rebuilt, &winning_hash) else {
+                continue;
+            };
+            // Processed forks can freeze before the finalized bank arrives.
+            if block.blockhash != solana_hash::Hash::from_str(hash)?.to_bytes() {
+                continue;
             }
-            let reference = target.and_then(|slot| references.get(&slot));
-            if let (Some((_, rebuilt)), Some(reference), Some(hash)) = (&rebuilt, reference, &winning_hash) {
-                ensure!(&reference.blockhash == hash, "reference differs from recovery winner");
-                // Processed forks can freeze before the finalized bank arrives.
-                if rebuilt.blockhash != solana_hash::Hash::from_str(hash)?.to_bytes() {
-                    continue;
-                }
-                verify_block_integrity(rebuilt, reference)?;
-                ensure!(progress.lock().unwrap().resumed(),
-                    "no injected disconnect followed by a successful reconnect");
-                return Ok(());
-            }
+            let entries: HashSet<u64> = block
+                .events
+                .iter()
+                .filter_map(|event| match event.update_oneof.as_ref() {
+                    Some(UpdateOneof::Entry(entry)) => Some(entry.index),
+                    _ => None,
+                })
+                .collect();
+            ensure!(
+                entries == (0..block.entry_count).collect(),
+                "slot {}: rebuilt bank has entries {entries:?}, expected 0..{}",
+                block.slot,
+                block.entry_count
+            );
+            ensure!(
+                progress.lock().unwrap().resumed(),
+                "no injected disconnect followed by a successful reconnect"
+            );
+            log::info!(
+                "INTEGRITY: slot {} rebuilt as the finalized winner with all {} entries",
+                block.slot,
+                block.entry_count
+            );
+            return Ok(());
         }
-    }).await.context("bank integrity scenario timed out")?
-}
-
-#[cfg(test)]
-mod integrity_tests {
-    use {super::*, yellowstone_grpc_proto::geyser::*};
-
-    #[test]
-    fn integrity_accepts_matching_empty_block() {
-        let reference = SubscribeUpdateBlock {
-            slot: 10,
-            blockhash: solana_hash::Hash::default().to_string(),
-            ..Default::default()
-        };
-        let rebuilt = Block {
-            slot: 10,
-            blockhash: [0; 32],
-            events: SimpleBlockStore {
-                slot: 10,
-                events: vec![],
-                account_idx_map: vec![],
-                transaction_idx_map: vec![],
-                entry_idx_map: vec![],
-                other_idx_map: vec![],
-            },
-        };
-        verify_block_integrity(&rebuilt, &reference).unwrap();
-    }
-
-    #[test]
-    fn integrity_rejects_corruption_with_unchanged_counts() {
-        let account = SubscribeUpdateAccountInfo {
-            pubkey: vec![1; 32],
-            lamports: 42,
-            ..Default::default()
-        };
-        let transaction = SubscribeUpdateTransactionInfo {
-            signature: vec![2; 64],
-            ..Default::default()
-        };
-        let entry = SubscribeUpdateEntry {
-            slot: 10,
-            bank_id: 7,
-            hash: vec![3; 32],
-            executed_transaction_count: 1,
-            ..Default::default()
-        };
-        let reference = SubscribeUpdateBlock {
-            slot: 10,
-            bank_id: 7,
-            blockhash: solana_hash::Hash::default().to_string(),
-            executed_transaction_count: 1,
-            updated_account_count: 1,
-            entries_count: 1,
-            accounts: vec![account.clone()],
-            transactions: vec![transaction.clone()],
-            entries: vec![entry.clone()],
-            ..Default::default()
-        };
-        let events = vec![
-            UpdateOneof::Account(SubscribeUpdateAccount {
-                slot: 10,
-                bank_id: Some(7),
-                account: Some(account),
-                ..Default::default()
-            }),
-            UpdateOneof::Transaction(SubscribeUpdateTransaction {
-                slot: 10,
-                bank_id: 7,
-                transaction: Some(transaction),
-            }),
-            UpdateOneof::Entry(entry),
-        ]
-        .into_iter()
-        .map(|payload| SubscribeUpdate {
-            update_oneof: Some(payload),
-            ..Default::default()
-        })
-        .collect();
-        let rebuilt = Block {
-            slot: 10,
-            blockhash: [0; 32],
-            events: SimpleBlockStore {
-                slot: 10,
-                events,
-                account_idx_map: vec![0],
-                transaction_idx_map: vec![1],
-                entry_idx_map: vec![2],
-                other_idx_map: vec![],
-            },
-        };
-        verify_block_integrity(&rebuilt, &reference).unwrap();
-        let mut corrupt = reference.clone();
-        corrupt.accounts[0].lamports += 1;
-        assert!(verify_block_integrity(&rebuilt, &corrupt)
-            .unwrap_err()
-            .to_string()
-            .contains("account payload"));
-        let mut corrupt = reference.clone();
-        corrupt.transactions[0].signature[0] ^= 1;
-        assert!(verify_block_integrity(&rebuilt, &corrupt)
-            .unwrap_err()
-            .to_string()
-            .contains("payload or metadata"));
-        let mut corrupt = reference.clone();
-        corrupt.entries[0].hash[0] ^= 1;
-        assert!(verify_block_integrity(&rebuilt, &corrupt)
-            .unwrap_err()
-            .to_string()
-            .contains("hash or transaction range"));
-        let mut corrupt = reference;
-        corrupt.bank_id += 1;
-        assert!(verify_block_integrity(&rebuilt, &corrupt)
-            .unwrap_err()
-            .to_string()
-            .contains("wrong bank"));
-    }
+    })
+    .await
+    .context("bank integrity scenario timed out")?
 }

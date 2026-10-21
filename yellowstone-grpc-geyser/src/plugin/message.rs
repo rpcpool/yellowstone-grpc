@@ -592,6 +592,9 @@ impl MessageBlockMeta {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MessageBlock {
     pub meta: Arc<MessageBlockMeta>,
+    /// The bank's `CreatedBank` status as the plugin received it. Not part of the encoded
+    /// block: it is sent on its own to clients that join while the bank is in progress.
+    pub created_bank: Arc<MessageSlot>,
     pub transactions: Vec<Arc<MessageTransaction>>,
     pub updated_account_count: u64,
     pub accounts: Vec<Arc<MessageAccount>>,
@@ -602,12 +605,14 @@ pub struct MessageBlock {
 impl MessageBlock {
     pub fn new(
         meta: Arc<MessageBlockMeta>,
+        created_bank: Arc<MessageSlot>,
         transactions: Vec<Arc<MessageTransaction>>,
         accounts: Vec<Arc<MessageAccount>>,
         entries: Vec<Arc<MessageEntry>>,
     ) -> Self {
         Self {
             meta,
+            created_bank,
             transactions,
             updated_account_count: accounts.len() as u64,
             accounts,

@@ -1,5 +1,8 @@
 use {
-    crate::{grpc::E2EGeyserEventAdapter, scenarios::RunConfig},
+    crate::{
+        grpc::{BlockEventCounts, E2EGeyserEventAdapter, BLOCK_MACHINE_CONFIG},
+        scenarios::RunConfig,
+    },
     anyhow::ensure,
     futures::StreamExt,
     solana_commitment_config::CommitmentLevel,
@@ -90,11 +93,13 @@ pub async fn blockmachine_scenario(run_config: &RunConfig) -> anyhow::Result<()>
     };
     let st = Box::pin(client.subscribe_once(block_st_req).await?);
     let mut block_meta_st = client.subscribe_once(blockmeta_st_req).await?;
-    let mut blockstream = BlockStream::<_, E2EGeyserEventAdapter, SimpleBlockAccumulator<_>>::new(
-        st,
-        SimpleBlockAccumulator::default(),
-        CommitmentLevel::Processed,
-    );
+    let mut blockstream =
+        BlockStream::<_, E2EGeyserEventAdapter, SimpleBlockAccumulator<_>>::new_with_config(
+            st,
+            SimpleBlockAccumulator::default(),
+            CommitmentLevel::Processed,
+            BLOCK_MACHINE_CONFIG,
+        );
 
     const MAX_BLOCKS: usize = 10;
     let mut block_match = 0;
@@ -108,10 +113,11 @@ pub async fn blockmachine_scenario(run_config: &RunConfig) -> anyhow::Result<()>
                     continue;
                 };
                 if let UpdateOneof::BlockMeta(block_meta) = update {
-                    let slot = block_meta.slot;
-                    log::info!("Received block meta for slot {}", slot);
-                    blockmeta_map.insert(block_meta.slot, block_meta);
-                    if block_map.contains_key(&slot) {
+                    // A slot can have more than one bank, each with its own block.
+                    let bank = (block_meta.slot, block_meta.bank_id);
+                    log::info!("Received block meta for slot {} bank {}", bank.0, bank.1);
+                    blockmeta_map.insert(bank, block_meta);
+                    if block_map.contains_key(&bank) {
                         block_match += 1;
                     }
                 }
@@ -120,10 +126,10 @@ pub async fn blockmachine_scenario(run_config: &RunConfig) -> anyhow::Result<()>
                 let block_output = maybe.ok_or_else(|| anyhow::anyhow!("Block stream ended unexpectedly"))??;
                 match block_output {
                     BlockMachineOutput::FrozenBlock(block) => {
-                        let slot = block.slot;
-                        log::info!("Received frozen block for slot {}", slot);
-                        block_map.insert(slot, block);
-                        if blockmeta_map.contains_key(&slot) {
+                        let bank = (block.slot, block.bank_id);
+                        log::info!("Received frozen block for slot {} bank {}", bank.0, bank.1);
+                        block_map.insert(bank, block);
+                        if blockmeta_map.contains_key(&bank) {
                             block_match += 1;
                         }
                     },
@@ -140,27 +146,28 @@ pub async fn blockmachine_scenario(run_config: &RunConfig) -> anyhow::Result<()>
     const SLOT_HISTORY_ACCOUNT_ID: Pubkey =
         Pubkey::from_str_const("SysvarS1otHistory11111111111111111111111111");
 
-    for (slot, block) in block_map {
-        let Some(block_meta) = blockmeta_map.remove(&slot) else {
+    for (bank, block) in block_map {
+        let Some(block_meta) = blockmeta_map.remove(&bank) else {
             continue;
         };
+        let counts = BlockEventCounts::of(&block.events);
         ensure_all_account_txn_sig_exist(&block)?;
         let blockmeta_blockhash = solana_hash::Hash::from_str(&block_meta.blockhash)?.to_bytes();
         ensure!(
             block.blockhash == blockmeta_blockhash,
             "Block hash in block meta does not match block hash in block"
         );
-        ensure!(block.events.account_len() > 0, "Block has no accounts");
+        ensure!(counts.accounts > 0, "Block has no accounts");
         ensure!(
             block_meta.slot == block.slot,
             "Block meta slot does not match block slot"
         );
         ensure!(
-            block_meta.executed_transaction_count as usize == block.events.transaction_len(),
+            block_meta.executed_transaction_count as usize == counts.transactions,
             "Block meta executed transaction count does not match block transaction count"
         );
         ensure!(
-            block_meta.entries_count as usize == block.events.entry_len(),
+            block_meta.entries_count as usize == counts.entries,
             "Block meta entries count does not match block entries count"
         );
 
@@ -184,8 +191,9 @@ pub async fn blockmachine_scenario(run_config: &RunConfig) -> anyhow::Result<()>
 
         ensure!(
             slot_history_account_visited,
-            "Slot history account was not visited in block {}",
-            slot
+            "Slot history account was not visited in block {} bank {}",
+            bank.0,
+            bank.1
         );
     }
     Ok(())

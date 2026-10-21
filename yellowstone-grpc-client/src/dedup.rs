@@ -158,6 +158,13 @@ pub const DEFAULT_SLOT_RETENTION: usize = 250;
 
 const CREATED_BANK_STATUS: i32 = SlotStatus::SlotCreatedBank as i32;
 
+/// A slot status and the bank it names. FirstShredReceived, Completed and Dead have no bank.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+struct BankStatus {
+    status: i32,
+    bank_id: Option<u64>,
+}
+
 pub(crate) enum Observation {
     New,
     Duplicate,
@@ -169,7 +176,7 @@ pub(crate) enum Observation {
 #[derive(Debug, Clone)]
 struct SealedSlot {
     blockhash: Option<String>,
-    statuses: HashSet<i32>,
+    statuses: HashSet<BankStatus>,
 }
 
 struct ReplayBuffer<T> {
@@ -332,7 +339,7 @@ impl<S: ReconnectCounter, T> ReconnectCounter for DedupStream<S, T> {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub(crate) enum DedupKey {
-    Slot(i32),                                        // status
+    Slot(i32, Option<u64>),                           // status, bank_id
     Account([u8; 32], Option<[u8; 64]>, Option<u64>), // pubkey, txn_signature, content hash
     Transaction(u64),                                 // index
     TransactionStatus(u64),                           // index
@@ -347,7 +354,7 @@ pub(crate) enum DedupKey {
 struct SlotState {
     keys: HashSet<DedupKey>, // inflight_slots[slot]
     replaying: bool,
-    statuses: HashSet<i32>, // inflight_slot_statuses[slot] + slot_processed[slot]
+    statuses: HashSet<BankStatus>, // inflight_slot_statuses[slot] + slot_processed[slot]
 }
 
 #[derive(Debug, Clone)]
@@ -379,7 +386,7 @@ impl Dedupable for SubscribeUpdate {
     fn extract_key(&self) -> Option<(u64, DedupKey)> {
         let oneof = self.update_oneof.as_ref()?;
         match oneof {
-            UpdateOneof::Slot(m) => Some((m.slot, DedupKey::Slot(m.status))),
+            UpdateOneof::Slot(m) => Some((m.slot, DedupKey::Slot(m.status, m.bank_id))),
             UpdateOneof::Account(m) => {
                 let info = m.account.as_ref()?;
                 let pubkey = <[u8; 32]>::try_from(info.pubkey.as_slice()).ok()?;
@@ -434,7 +441,7 @@ impl Dedupable for SubscribeUpdateDeshred {
                 let sig = <[u8; 64]>::try_from(info.signature.as_slice()).ok()?;
                 Some((m.slot, DedupKey::DeshredTransaction(sig)))
             }
-            DeshredUpdateOneof::Slot(m) => Some((m.slot, DedupKey::Slot(m.status))),
+            DeshredUpdateOneof::Slot(m) => Some((m.slot, DedupKey::Slot(m.status, m.bank_id))),
             DeshredUpdateOneof::DeshredUpdateParent(_)
             | DeshredUpdateOneof::Ping(_)
             | DeshredUpdateOneof::Pong(_) => None,
@@ -461,13 +468,26 @@ impl DedupState {
     /// Classify a message for the dedup/quarantine layer
     pub(crate) fn observe(&mut self, slot: u64, key: DedupKey) -> Observation {
         match key {
-            DedupKey::Slot(status) => {
-                // CreatedBank means a bank was just created for this slot. Outside replay it
-                // wipes prior state, which recovers from a rollback; during replay it keeps the
-                // partial state so the replay can be reconciled against what was delivered.
+            DedupKey::Slot(status, bank_id) => {
+                let key = BankStatus { status, bank_id };
                 // The server only sends CreatedBank to filters with interslot_updates=true, so
                 // without that flag this branch is dormant.
                 if status == CREATED_BANK_STATUS {
+                    // A replay resends the CreatedBank of a bank already seen: a duplicate. Without
+                    // a bank_id two banks look alike, so it stays a reset.
+                    let seen = bank_id.is_some()
+                        && self
+                            .sealed
+                            .get(&slot)
+                            .map(|sealed| &sealed.statuses)
+                            .into_iter()
+                            .chain(self.inflight.get(&slot).map(|state| &state.statuses))
+                            .any(|statuses| statuses.contains(&key));
+                    if seen {
+                        return Observation::Duplicate;
+                    }
+                    // A new bank wipes prior state, which recovers from a rollback; during
+                    // replay it keeps the partial state so the replay can be reconciled.
                     let partial = self.inflight.get(&slot);
                     if !partial.is_some_and(|state| state.replaying) {
                         self.clear_slot(slot);
@@ -477,14 +497,14 @@ impl DedupState {
                 // Sealed slots keep a compressed status set for post-seal dedup
                 // (Confirmed / Finalized arrive after BlockMeta).
                 if let Some(s) = self.sealed.get_mut(&slot) {
-                    if !s.statuses.insert(status) {
+                    if !s.statuses.insert(key) {
                         return Observation::Duplicate;
                     }
                     return Observation::New;
                 }
 
                 let state = self.slot_mut(slot);
-                if !state.statuses.insert(status) {
+                if !state.statuses.insert(key) {
                     return Observation::Duplicate;
                 }
                 self.prune();
@@ -712,6 +732,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replayed_created_bank_of_a_sealed_bank_is_a_duplicate() {
+        let created = make_slot_msg(10, CREATED_BANK_STATUS);
+        let first = entry(10, 0, 1);
+        let meta = make_block_meta_msg(10);
+        let mut stream = replay_stream(vec![
+            (0, created.clone()),
+            (0, first.clone()),
+            (0, meta.clone()),
+            (1, created.clone()),
+            (1, first.clone()),
+            (1, meta.clone()),
+        ]);
+        assert_eq!(stream.next().await.unwrap().unwrap(), created);
+        assert_eq!(stream.next().await.unwrap().unwrap(), first);
+        assert_eq!(stream.next().await.unwrap().unwrap(), meta);
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn created_bank_of_a_new_bank_resets_a_sealed_slot() {
+        let first = entry(10, 0, 1);
+        let created_again = bank_status(10, CREATED_BANK_STATUS, 11);
+        let mut stream = replay_stream(vec![
+            (0, make_slot_msg(10, CREATED_BANK_STATUS)),
+            (0, first.clone()),
+            (0, make_block_meta_msg(10)),
+            (0, created_again.clone()),
+            (0, first.clone()),
+        ]);
+        for _ in 0..3 {
+            stream.next().await.unwrap().unwrap();
+        }
+        assert_eq!(stream.next().await.unwrap().unwrap(), created_again);
+        assert_eq!(stream.next().await.unwrap().unwrap(), first);
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
     async fn partial_replay_waits_for_meta_across_status_updates() {
         let first = entry(10, 0, 1);
         let second = entry(10, 1, 2);
@@ -751,6 +809,18 @@ mod tests {
         assert_eq!(stream.next().await.unwrap().unwrap(), second);
         assert!(stream.next().await.unwrap().is_ok());
         assert!(stream.next().await.is_none());
+    }
+
+    fn bank_status(slot: u64, status: i32, bank_id: u64) -> SubscribeUpdate {
+        SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
+                slot,
+                status,
+                bank_id: Some(bank_id),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
     }
 
     fn make_slot_msg(slot: u64, status: i32) -> SubscribeUpdate {
@@ -1140,6 +1210,24 @@ mod tests {
             observe(&mut dedup, &make_block_meta_msg_with_hash(700, "any_hash")),
             Observation::PartialReplayComplete { .. }
         ));
+    }
+
+    #[test]
+    fn created_bank_without_bank_id_always_resets() {
+        let mut dedup = DedupState::default();
+        let created = SubscribeUpdate {
+            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
+                slot: 900,
+                status: CREATED_BANK_STATUS,
+                bank_id: None,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            assert!(matches!(observe(&mut dedup, &created), Observation::New));
+            observe(&mut dedup, &make_block_meta_msg(900));
+        }
     }
 
     #[test]

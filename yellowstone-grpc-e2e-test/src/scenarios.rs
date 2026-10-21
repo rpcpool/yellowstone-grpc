@@ -12,7 +12,8 @@ pub type ScenarioFn = for<'a> fn(
 >;
 
 pub struct Scenario {
-    /// Stable CLI scenario name (for example `sysvar-account`).
+    /// Stable scenario name (for example `sysvar-account`). A scenario registered from a
+    /// `params` entry shares it with the others; the CLI uses [`Scenario::full_name`].
     pub name: &'static str,
     /// Human-friendly scenario description shown in `yellowstone-e2e list`.
     pub description: &'static str,
@@ -20,11 +21,29 @@ pub struct Scenario {
     pub module: &'static str,
     /// Optional classification tags (e.g. `&["accounts", "filters"]`).
     pub tags: &'static [&'static str],
+    /// For a scenario registered from a `params` entry: formats the values it passes with
+    /// [`Debug`], separated by `, `.
+    pub params: Option<fn() -> String>,
     /// Callable entry point; box-pins the underlying async fn.
     pub run: ScenarioFn,
 }
 
 inventory::collect!(Scenario);
+
+impl Scenario {
+    /// Returns the name the CLI lists and runs this scenario by.
+    ///
+    /// # Returns
+    ///
+    /// [`Scenario::name`], followed for a scenario registered from a `params` entry by the
+    /// entry's values in brackets, like `replay[Processed]`.
+    pub fn full_name(&self) -> String {
+        match self.params {
+            Some(params) => format!("{}[{}]", self.name, params()),
+            None => self.name.to_string(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct RunConfig {
@@ -46,5 +65,7 @@ pub fn init_log() {
     });
 }
 
+// Alpenglow scenarios run only with `--module alpenglow`.
+pub mod alpenglow;
 pub mod default;
 pub mod ratelimit;

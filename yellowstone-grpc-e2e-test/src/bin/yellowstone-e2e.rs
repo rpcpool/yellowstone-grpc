@@ -73,6 +73,9 @@ enum Commands {
         /// Only show scenarios that carry this tag (repeatable; any match passes).
         #[arg(long = "tags", value_name = "TAG")]
         tags: Vec<String>,
+        /// Hide scenarios that carry this tag (repeatable; any match excludes). Wins over `--tags`.
+        #[arg(long = "exclude-tags", value_name = "TAG")]
+        exclude_tags: Vec<String>,
         /// Only show scenarios from this module (e.g. `default`, `extra`).
         #[arg(long = "module", value_name = "MODULE", default_value = "default")]
         module: String,
@@ -82,6 +85,9 @@ enum Commands {
         /// Only run scenarios that carry this tag (repeatable; any match passes).
         #[arg(long = "tags", value_name = "TAG")]
         tags: Vec<String>,
+        /// Skip scenarios that carry this tag (repeatable; any match excludes). Wins over `--tags`.
+        #[arg(long = "exclude-tags", value_name = "TAG")]
+        exclude_tags: Vec<String>,
         /// Only run scenarios from this module (e.g. `default`, `extra`).
         #[arg(long = "module", value_name = "MODULE", default_value = "default")]
         module: String,
@@ -253,8 +259,20 @@ fn bounded_detail(detail: String) -> String {
     format!("{}{}", &detail[..end], suffix)
 }
 
-fn matches_tags(scenario: &Scenario, tags: &[String]) -> bool {
-    tags.is_empty() || tags.iter().any(|t| scenario.tags.contains(&t.as_str()))
+/// Returns whether `scenario` passes the tag filters.
+///
+/// # Arguments
+///
+/// * `scenario` - The [`Scenario`] to check.
+/// * `tags` - From `--tags`: the scenario must carry one of them, unless empty.
+/// * `exclude_tags` - From `--exclude-tags`: the scenario must carry none of them.
+///
+/// # Returns
+///
+/// `true` if `scenario` carries any of `tags` (or `tags` is empty) and none of `exclude_tags`.
+fn matches_tags(scenario: &Scenario, tags: &[String], exclude_tags: &[String]) -> bool {
+    let carries = |tag: &String| scenario.tags.contains(&tag.as_str());
+    (tags.is_empty() || tags.iter().any(carries)) && !exclude_tags.iter().any(carries)
 }
 
 fn matches_module(scenario: &Scenario, module: &str) -> bool {
@@ -266,11 +284,11 @@ fn matches_module(scenario: &Scenario, module: &str) -> bool {
 fn find_scenario(name: &str) -> Result<&'static Scenario> {
     inventory::iter::<Scenario>
         .into_iter()
-        .find(|s| s.name == name)
+        .find(|s| s.full_name() == name)
         .ok_or_else(|| {
             let available: Vec<_> = inventory::iter::<Scenario>
                 .into_iter()
-                .map(|s| s.name)
+                .map(Scenario::full_name)
                 .collect();
             anyhow::anyhow!(
                 "unknown scenario '{}'; available: {}",
@@ -291,7 +309,7 @@ async fn run_scenario(
             .expect("valid template")
             .tick_strings(&["|", "/", "-", "\\"]),
     );
-    pb.set_message(format!("running scenario '{}'...", scenario.name));
+    pb.set_message(format!("running scenario '{}'...", scenario.full_name()));
     pb.enable_steady_tick(Duration::from_millis(120));
 
     let res = (scenario.run)(config).await;
@@ -299,8 +317,8 @@ async fn run_scenario(
     pb.disable_steady_tick();
 
     let message = match &res {
-        Ok(()) => format!("✅ scenario '{}' passed", scenario.name),
-        Err(err) => format!("❌ scenario '{}' failed: {:#}", scenario.name, err),
+        Ok(()) => format!("✅ scenario '{}' passed", scenario.full_name()),
+        Err(err) => format!("❌ scenario '{}' failed: {:#}", scenario.full_name(), err),
     };
     // Print the final line to the scrollback and drop this bar, so the still-running
     // scenarios' spinners stay pinned as the trailing lines instead of being interleaved
@@ -327,13 +345,13 @@ async fn run_scenario_check(
     let started = Instant::now();
     match run_scenario(scenario, config, multi).await {
         Ok(()) => VerificationCheck {
-            name: scenario.name.to_string(),
+            name: scenario.full_name(),
             status: VerificationStatus::Ok,
             detail: None,
             duration_ms: duration_ms(started.elapsed()),
         },
         Err(err) => VerificationCheck {
-            name: scenario.name.to_string(),
+            name: scenario.full_name(),
             status: VerificationStatus::Critical,
             detail: Some(bounded_detail(format!("{err:#}"))),
             duration_ms: duration_ms(started.elapsed()),
@@ -368,12 +386,13 @@ async fn run(cli: Cli) -> Result<ExitCode> {
 
     if let Commands::List {
         ref tags,
+        ref exclude_tags,
         ref module,
     } = cli.command
     {
         let scenarios: Vec<&Scenario> = inventory::iter::<Scenario>
             .into_iter()
-            .filter(|s| matches_tags(s, tags) && matches_module(s, module))
+            .filter(|s| matches_tags(s, tags, exclude_tags) && matches_module(s, module))
             .collect();
 
         if scenarios.is_empty() {
@@ -381,7 +400,11 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             return Ok(ExitCode::from(exit_code::OK));
         }
 
-        let name_w = scenarios.iter().map(|s| s.name.len()).max().unwrap_or(4);
+        let name_w = scenarios
+            .iter()
+            .map(|s| s.full_name().len())
+            .max()
+            .unwrap_or(4);
         let tags_w = scenarios
             .iter()
             .map(|s| s.tags.join(", ").len())
@@ -395,7 +418,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         for scenario in scenarios {
             println!(
                 "{:<name_w$}  {:<tags_w$}  {}",
-                scenario.name,
+                scenario.full_name(),
                 scenario.tags.join(", "),
                 scenario.description,
             );
@@ -480,12 +503,15 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             }
             Commands::All {
                 ref tags,
+                ref exclude_tags,
                 ref module,
                 num_threads,
             } => {
                 let scenarios: Vec<&'static Scenario> = inventory::iter::<Scenario>
                     .into_iter()
-                    .filter(|s| matches_tags(s, tags) && matches_module(s, module.as_str()))
+                    .filter(|s| {
+                        matches_tags(s, tags, exclude_tags) && matches_module(s, module.as_str())
+                    })
                     .collect();
 
                 let num_threads = (*num_threads).max(1);
@@ -497,10 +523,12 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                         let run_config = &run_config;
                         let multi = &multi;
                         async move {
-                            log::info!("running scenario: {}", scenario.name);
+                            log::info!("running scenario: {}", scenario.full_name());
                             run_scenario(scenario, run_config, multi)
                                 .await
-                                .with_context(|| format!("scenario '{}' failed", scenario.name))
+                                .with_context(|| {
+                                    format!("scenario '{}' failed", scenario.full_name())
+                                })
                         }
                     })
                     .await?;
@@ -536,12 +564,15 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Commands::List { .. } | Commands::VerifyVersion { .. } => Vec::new(),
         Commands::All {
             ref tags,
+            ref exclude_tags,
             ref module,
             num_threads,
         } => {
             let scenarios: Vec<&'static Scenario> = inventory::iter::<Scenario>
                 .into_iter()
-                .filter(|s| matches_tags(s, tags) && matches_module(s, module.as_str()))
+                .filter(|s| {
+                    matches_tags(s, tags, exclude_tags) && matches_module(s, module.as_str())
+                })
                 .collect();
 
             let num_threads = (*num_threads).max(1);
@@ -552,7 +583,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     let run_config = &run_config;
                     let multi = &multi;
                     async move {
-                        log::info!("running scenario: {}", scenario.name);
+                        log::info!("running scenario: {}", scenario.full_name());
                         run_scenario_check(scenario, run_config, multi).await
                     }
                 })
@@ -622,6 +653,64 @@ mod tests {
             cli.json_file.as_deref(),
             Some(std::path::Path::new("/tmp/result.json"))
         );
+    }
+
+    /// Scenarios are run by name, and a `params` entry is named after its values' `Debug`
+    /// output, so two entries that format the same would make one of them unreachable.
+    #[test]
+    fn scenario_names_are_unique() {
+        let mut names = std::collections::HashSet::new();
+        for scenario in inventory::iter::<Scenario> {
+            let name = scenario.full_name();
+            assert!(names.insert(name.clone()), "duplicate scenario name {name}");
+        }
+        assert!(names.contains("replay[Processed]"));
+    }
+
+    fn scenario_with_tags(tags: &'static [&'static str]) -> Scenario {
+        Scenario {
+            name: "test",
+            description: "",
+            module: "yellowstone_grpc_intg_test::scenarios::default",
+            tags,
+            params: None,
+            run: |_| Box::pin(async { Ok(()) }),
+        }
+    }
+
+    fn strings(tags: &[&str]) -> Vec<String> {
+        tags.iter().map(|tag| tag.to_string()).collect()
+    }
+
+    #[test]
+    fn exclude_tags_skip_scenarios_carrying_any_of_them() {
+        let reconnect = scenario_with_tags(&["client", "reconnect"]);
+        let accounts = scenario_with_tags(&["accounts"]);
+        let exclude = strings(&["reconnect"]);
+
+        assert!(!matches_tags(&reconnect, &[], &exclude));
+        assert!(matches_tags(&accounts, &[], &exclude));
+        // Exclusion wins over inclusion.
+        assert!(!matches_tags(&reconnect, &strings(&["client"]), &exclude));
+        assert!(matches_tags(&reconnect, &strings(&["client"]), &[]));
+    }
+
+    #[test]
+    fn parses_repeated_exclude_tags() {
+        let cli = Cli::try_parse_from([
+            "yellowstone-e2e",
+            "all",
+            "--exclude-tags",
+            "reconnect",
+            "--exclude-tags",
+            "replay",
+        ])
+        .unwrap();
+
+        let Commands::All { exclude_tags, .. } = cli.command else {
+            panic!("expected the all command");
+        };
+        assert_eq!(exclude_tags, strings(&["reconnect", "replay"]));
     }
 
     #[test]

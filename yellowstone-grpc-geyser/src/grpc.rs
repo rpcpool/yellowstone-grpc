@@ -50,6 +50,7 @@ use {
         collections::HashMap,
         io,
         num::NonZeroUsize,
+        ops::Range,
         os::unix::fs::PermissionsExt,
         path::PathBuf,
         pin::Pin,
@@ -395,7 +396,8 @@ type DeshredBroadcastedMessage = Message;
 
 pub enum ReplayResponseMessageType {
     Single(Message),
-    Batch(Arc<Vec<Message>>),
+    /// The messages of `batch` in `range`, so part of a shared batch is replayed without a copy.
+    Batch(Arc<Vec<Message>>, Range<usize>),
 }
 
 impl<'a> IntoIterator for &'a ReplayResponseMessageType {
@@ -434,11 +436,11 @@ impl<'a> Iterator for ReplayResponseMessageIterator<'a> {
                     None
                 }
             }
-            ReplayResponseMessageType::Batch(batch) => {
-                if self.current_index < batch.len() {
-                    let msg = &batch[self.current_index];
+            ReplayResponseMessageType::Batch(batch, range) => {
+                let index = range.start + self.current_index;
+                if index < range.end {
                     self.current_index += 1;
-                    Some(msg)
+                    batch.get(index)
                 } else {
                     None
                 }
@@ -470,8 +472,10 @@ enum HeldMessage<'a> {
 }
 
 /// Holds back the live content of the banks in `held` and releases a bank when it seals.
+/// A held bank's CreatedBank is held too: it is sent once, right before the sealed block.
 fn route_held<'a>(held: &mut Vec<BankId>, message: &'a Message) -> HeldMessage<'a> {
     let (bank_id, block) = match message {
+        Message::Slot(slot) if slot.status == SlotStatus::CreatedBank => (slot.bank_id, None),
         Message::Account(account) => (account.bank_id, None),
         Message::Transaction(transaction) => (Some(transaction.bank_id), None),
         Message::Entry(entry) => (Some(entry.bank_id), None),
@@ -897,7 +901,6 @@ fn load_server_config_from_tls_config(
 pub struct GrpcServiceResult {
     pub snapshot_tx: Option<crossbeam_channel::Sender<Box<Message>>>,
     pub deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
-    pub block_reconstruction_tx: mpsc::UnboundedSender<BlockReconstructionMessage>,
     pub contact_info_tx: mpsc::UnboundedSender<contact_info::ContactInfoNotification>,
     pub broadcast: SubscriberChannels,
     pub blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
@@ -1188,7 +1191,6 @@ impl GrpcService {
         }
 
         {
-            let block_reconstruction_tx = block_reconstruction_tx.clone();
             let broadcast = broadcast.clone();
 
             task_tracker.spawn(async move {
@@ -1271,7 +1273,6 @@ impl GrpcService {
             snapshot_tx,
             deshred_broadcast_tx,
             contact_info_tx,
-            block_reconstruction_tx,
             broadcast,
             blocks_meta_tx,
         })
@@ -1356,8 +1357,8 @@ impl GrpcService {
     {
         const MESSAGE_BATCH_SIZE: usize = 1024;
         // let mut message_batch = Vec::with_capacity(MESSAGE_BATCH_SIZE);
-        // BlockMeta and BlockFooter close the batch and go to block reconstruction only,
-        // which emits them once the block seals.
+        // BlockMeta, BlockFooter and the Processed/Confirmed/Finalized slot statuses close the
+        // batch and go to block reconstruction only, which emits them once the block seals.
         struct PartitionedBuffer {
             message_batch: Vec<Message>,
             seal_gated: Option<Message>,
@@ -1367,8 +1368,16 @@ impl GrpcService {
                 if self.message_batch.len() == self.message_batch.capacity() {
                     return Err(item);
                 }
-                match item {
+                match &item {
                     Message::BlockMeta(_) | Message::BlockFooter(_) => self.seal_gated = Some(item),
+                    Message::Slot(slot)
+                        if matches!(
+                            slot.status,
+                            SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Finalized
+                        ) =>
+                    {
+                        self.seal_gated = Some(item)
+                    }
                     _ => self.message_batch.push(item),
                 }
                 Ok(())
@@ -1528,16 +1537,21 @@ impl GrpcService {
                         CommitmentLevel::Finalized => solana_commitment_config::CommitmentLevel::Finalized,
                     };
 
-                    // Each slot has up to 7 entries: data batch, block, footer, block meta and 3 slot statuses.
-                    let mut replayed_messages = Vec::with_capacity(7 * replay_stored_slots as usize);
+                    // Each slot has up to 9 entries: data batch split around CreatedBank, block, footer, block meta and 3 slot statuses.
+                    let mut replayed_messages = Vec::with_capacity(9 * replay_stored_slots as usize);
                     let replayed_slot_iter = block_machine.replay_from_slot(replay_slot, min_solana_commitment);
 
                     // We need only an estimated timestamp for the replayed slot messages, so we can use the same timestamp for all of them.
                     let created_at = Timestamp::from(SystemTime::now());
 
                     for replayed_slot in replayed_slot_iter {
-                        // 1st Put data (account/txn/entries)
-                        replayed_messages.push(ReplayResponseMessageType::Batch(replayed_slot.frozen_block.messages()));
+                        // 1st Put data (account/txn/entries) with the bank's CreatedBank where it arrived live:
+                        // after the account writes made while the bank was constructed.
+                        let bank_messages = replayed_slot.frozen_block.messages();
+                        let created_bank_index = replayed_slot.frozen_block.created_bank_index();
+                        replayed_messages.push(ReplayResponseMessageType::Batch(Arc::clone(&bank_messages), 0..created_bank_index));
+                        replayed_messages.push(ReplayResponseMessageType::Single(Message::Slot(replayed_slot.frozen_block.created_bank())));
+                        replayed_messages.push(ReplayResponseMessageType::Batch(Arc::clone(&bank_messages), created_bank_index..bank_messages.len()));
 
                         // 2nd Put the reconstructed block, then the block summary — mirrors the
                         // live broadcast path so `blocks` subscribers can resume via `from_slot`
@@ -1797,9 +1811,13 @@ impl GrpcService {
                             Err(TrySendError::Closed(_)) => Err(TrySendFailure::Closed),
                         };
                         let sealed_content_sent = match sealed_block {
+                            // The held bank's live CreatedBank went out before this client joined.
                             Some(block) => session
                                 .filter
-                                .try_for_each_block_content_update(block, try_send),
+                                .get_updates(&Message::Slot(Arc::clone(&block.created_bank)), Some(commitment))
+                                .into_iter()
+                                .try_for_each(try_send)
+                                .and_then(|()| session.filter.try_for_each_block_content_update(block, try_send)),
                             None => Ok(()),
                         };
                         let sent = sealed_content_sent.and_then(|()| {
@@ -3349,6 +3367,12 @@ mod tests {
 
         const REPLAYED_SLOT: u64 = 10;
         const PARTIAL_SLOT: u64 = 11;
+        /// When the plugin received each bank's CreatedBank. A client must get this one, not a
+        /// copy made later.
+        const CREATED_AT: Timestamp = Timestamp {
+            seconds: 1_700_000_000,
+            nanos: 0,
+        };
 
         fn slot_message(slot: u64, status: SlotStatus) -> Message {
             Message::Slot(Arc::new(fixtures::message_slot(slot, status)))
@@ -3367,9 +3391,10 @@ mod tests {
             Message::Transaction(transaction)
         }
 
-        /// CreatedBank and the sysvar writes every bank needs before it can seal.
+        /// The sysvar writes every bank needs before it can seal, then CreatedBank, which agave
+        /// sends after the writes made while the bank is constructed.
         fn open_slot(slot: u64) -> Vec<Message> {
-            let mut messages = vec![slot_message(slot, SlotStatus::CreatedBank)];
+            let mut messages = Vec::new();
             for pubkey in MUST_HAVE_SYSVAR_ACCOUNTS {
                 let mut account = fixtures::simple_message_account(pubkey, Pubkey::default());
                 let message = Arc::get_mut(&mut account).unwrap();
@@ -3377,6 +3402,10 @@ mod tests {
                 message.bank_id = Some(slot);
                 messages.push(Message::Account(account));
             }
+            messages.push(Message::Slot(Arc::new(MessageSlot {
+                created_at: CREATED_AT,
+                ..fixtures::message_slot(slot, SlotStatus::CreatedBank)
+            })));
             messages
         }
 
@@ -3403,7 +3432,13 @@ mod tests {
 
         fn create_filter(commitment: CommitmentLevelProto) -> Filter {
             let config = SubscribeRequest {
-                slots: HashMap::from([("test".into(), SubscribeRequestFilterSlots::default())]),
+                slots: HashMap::from([(
+                    "test".into(),
+                    SubscribeRequestFilterSlots {
+                        interslot_updates: Some(true),
+                        ..Default::default()
+                    },
+                )]),
                 transactions: HashMap::from([(
                     "test".into(),
                     SubscribeRequestFilterTransactions::default(),
@@ -3435,13 +3470,21 @@ mod tests {
             .expect("timed out waiting for a broadcast");
         }
 
-        /// Reads the client stream until `slot` is confirmed.
-        /// Returns the transaction ids received on the way, per slot, in order.
+        /// What a client received, in order.
+        #[derive(Default)]
+        struct Received {
+            /// Transaction ids, per slot.
+            transactions: Vec<(u64, u8)>,
+            /// CreatedBank statuses, per slot, with when the plugin received them.
+            created_banks: Vec<(u64, Timestamp)>,
+        }
+
+        /// Reads the client stream until `slot` is confirmed, into `received`.
         async fn read_until_confirmed(
             stream_rx: &mut LoadAwareReceiver<TonicResult<FilteredUpdate>>,
             slot: u64,
-        ) -> Vec<(u64, u8)> {
-            let mut transactions = Vec::new();
+            received: &mut Received,
+        ) {
             loop {
                 let update = tokio::time::timeout(Duration::from_secs(5), stream_rx.recv())
                     .await
@@ -3451,12 +3494,19 @@ mod tests {
                 match update.message {
                     FilteredUpdateOneof::Transaction(update) => {
                         let id = update.transaction.transaction.signature.as_ref()[0];
-                        transactions.push((update.slot, id));
+                        received.transactions.push((update.slot, id));
+                    }
+                    FilteredUpdateOneof::Slot(update)
+                        if update.status == SlotStatus::CreatedBank =>
+                    {
+                        received
+                            .created_banks
+                            .push((update.slot, update.created_at));
                     }
                     FilteredUpdateOneof::Slot(update)
                         if update.slot == slot && update.status == SlotStatus::Confirmed =>
                     {
-                        return transactions;
+                        return;
                     }
                     _ => {}
                 }
@@ -3464,12 +3514,12 @@ mod tests {
         }
 
         /// A client subscribes with `from_slot` while `PARTIAL_SLOT` is half delivered.
-        /// Returns every transaction id the client received, per slot, in order.
+        /// Returns what the client received.
         async fn subscribe_during_partial_slot(
             commitment: CommitmentLevelProto,
             from_slot: u64,
             reconstruction_behind: bool,
-        ) -> Vec<(u64, u8)> {
+        ) -> Received {
             let (messages_tx, messages_rx) = mpsc::unbounded_channel();
             let (block_reconstruction_tx, mut gate_rx) = mpsc::unbounded_channel();
             let (gate_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
@@ -3491,7 +3541,7 @@ mod tests {
             tokio::spawn(GrpcService::geyser_loop(
                 BatchStreamUnboundedReceiver::new(messages_rx),
                 broadcast.clone(),
-                block_reconstruction_tx.clone(),
+                block_reconstruction_tx,
             ));
             tokio::spawn(GrpcService::block_reconstruction_loop(
                 BatchStreamUnboundedReceiver::new(block_reconstruction_rx),
@@ -3500,21 +3550,9 @@ mod tests {
                 None,
                 100,
             ));
-            // Commitment statuses skip the geyser loop, as in `update_bank_status`.
             let send = |messages: Vec<Message>| {
                 for message in messages {
-                    let commitment_status = matches!(
-                        &message,
-                        Message::Slot(slot)
-                            if matches!(slot.status, SlotStatus::Processed | SlotStatus::Confirmed)
-                    );
-                    if commitment_status {
-                        block_reconstruction_tx
-                            .send(BlockReconstructionMessage::Single(message))
-                            .unwrap();
-                    } else {
-                        messages_tx.send(message).unwrap();
-                    }
+                    messages_tx.send(message).unwrap();
                 }
             };
 
@@ -3565,15 +3603,15 @@ mod tests {
                 .unwrap();
 
             // The replay ends while the partial slot is still open.
-            let mut received = Vec::new();
+            let mut received = Received::default();
             if from_slot <= REPLAYED_SLOT {
-                received = read_until_confirmed(&mut stream_rx, REPLAYED_SLOT).await;
+                read_until_confirmed(&mut stream_rx, REPLAYED_SLOT, &mut received).await;
             }
             pause.send_replace(false);
 
             send(vec![transaction(PARTIAL_SLOT, 2)]);
             send(close_slot(PARTIAL_SLOT, 2));
-            received.extend(read_until_confirmed(&mut stream_rx, PARTIAL_SLOT).await);
+            read_until_confirmed(&mut stream_rx, PARTIAL_SLOT, &mut received).await;
             received
         }
 
@@ -3584,6 +3622,9 @@ mod tests {
             (PARTIAL_SLOT, 2),
         ];
 
+        /// The replayed slot's CreatedBank comes from the replay, and the partial slot's, whose
+        /// live CreatedBank went out before the client connected, comes with its sealed block.
+        /// Both are the ones the plugin received.
         #[tokio::test]
         async fn processed_client_gets_the_whole_partial_slot() {
             let received = subscribe_during_partial_slot(
@@ -3592,7 +3633,11 @@ mod tests {
                 false,
             )
             .await;
-            assert_eq!(received, EVERY_TRANSACTION);
+            assert_eq!(received.transactions, EVERY_TRANSACTION);
+            assert_eq!(
+                received.created_banks,
+                [(REPLAYED_SLOT, CREATED_AT), (PARTIAL_SLOT, CREATED_AT)]
+            );
         }
 
         #[tokio::test]
@@ -3601,7 +3646,7 @@ mod tests {
             let received =
                 subscribe_during_partial_slot(CommitmentLevelProto::Processed, REPLAYED_SLOT, true)
                     .await;
-            assert_eq!(received, EVERY_TRANSACTION);
+            assert_eq!(received.transactions, EVERY_TRANSACTION);
         }
 
         #[tokio::test]
@@ -3609,9 +3654,12 @@ mod tests {
             let received =
                 subscribe_during_partial_slot(CommitmentLevelProto::Processed, PARTIAL_SLOT, false)
                     .await;
-            assert_eq!(received, EVERY_TRANSACTION[2..]);
+            assert_eq!(received.transactions, EVERY_TRANSACTION[2..]);
+            assert_eq!(received.created_banks, [(PARTIAL_SLOT, CREATED_AT)]);
         }
 
+        /// The replayed slot's CreatedBank comes from the replay. The partial slot's went out
+        /// live before the client connected, and is not sent again at confirmed.
         #[tokio::test]
         async fn confirmed_client_gets_the_whole_partial_slot() {
             let received = subscribe_during_partial_slot(
@@ -3620,7 +3668,8 @@ mod tests {
                 false,
             )
             .await;
-            assert_eq!(received, EVERY_TRANSACTION);
+            assert_eq!(received.transactions, EVERY_TRANSACTION);
+            assert_eq!(received.created_banks, [(REPLAYED_SLOT, CREATED_AT)]);
         }
     }
 
@@ -3628,23 +3677,27 @@ mod tests {
         use {
             super::super::*,
             crate::{
+                block_reconstruction_v2::MUST_HAVE_SYSVAR_ACCOUNTS,
                 plugin::{
                     convert_to,
+                    filter::fixtures,
                     message::{
-                        MessageDeshredTransaction, MessageDeshredTransactionInfo, MessageSlot,
-                        SlotStatus,
+                        MessageBlockMeta, MessageDeshredTransaction, MessageDeshredTransactionInfo,
+                        MessageSlot, SlotStatus,
                     },
                 },
                 stream::tokio::BatchStreamUnboundedReceiver,
             },
             foldhash::{HashSet as FoldHashSet, HashSetExt as _},
             prost_types::Timestamp,
+            solana_hash::Hash,
             solana_message::{legacy::Message as SolMessage, MessageHeader},
             solana_pubkey::Pubkey,
             solana_signature::Signature,
             solana_transaction::{versioned::VersionedTransaction, Transaction},
             std::{sync::Arc, time::SystemTime},
             tokio::sync::{broadcast, mpsc},
+            yellowstone_grpc_proto::prelude::SubscribeUpdateBlockMeta,
         };
 
         struct Harness {
@@ -3658,6 +3711,12 @@ mod tests {
         }
 
         fn spawn_loop() -> Harness {
+            spawn_loop_with_replay(None)
+        }
+
+        fn spawn_loop_with_replay(
+            replay_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
+        ) -> Harness {
             let (messages_tx, messages_rx) = mpsc::unbounded_channel();
             let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
             let broadcast = SubscriberChannels::new(1024, 1024, 1024);
@@ -3675,7 +3734,7 @@ mod tests {
             let handle_reconstruction = tokio::spawn(GrpcService::block_reconstruction_loop(
                 BatchStreamUnboundedReceiver::new(block_reconstruction_rx),
                 broadcast,
-                None,
+                replay_rx,
                 None,
                 100,
             ));
@@ -3810,6 +3869,216 @@ mod tests {
             let _ =
                 tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
         }
+
+        fn bank_status(slot: u64, status: SlotStatus, bank_id: Option<u64>) -> Message {
+            Message::Slot(Arc::new(MessageSlot {
+                slot,
+                parent: Some(slot - 1),
+                status,
+                dead_error: None,
+                created_at: Timestamp::from(SystemTime::now()),
+                bank_id,
+            }))
+        }
+
+        /// CreatedBank, the sysvars, an entry and BlockMeta: everything `bank_id` needs to seal.
+        fn sealed_bank(slot: u64, bank_id: u64) -> Vec<Message> {
+            let mut messages = vec![bank_status(slot, SlotStatus::CreatedBank, Some(bank_id))];
+            for pubkey in MUST_HAVE_SYSVAR_ACCOUNTS {
+                let mut account = fixtures::simple_message_account(pubkey, Pubkey::default());
+                let message = Arc::get_mut(&mut account).unwrap();
+                message.slot = slot;
+                message.bank_id = Some(bank_id);
+                messages.push(Message::Account(account));
+            }
+            let mut entry = fixtures::message_entry(slot, 0);
+            Arc::get_mut(&mut entry).unwrap().bank_id = bank_id;
+            messages.push(Message::Entry(entry));
+            messages.push(Message::BlockMeta(Arc::new(
+                MessageBlockMeta::from_update_oneof(
+                    SubscribeUpdateBlockMeta {
+                        slot,
+                        parent_slot: slot - 1,
+                        blockhash: Hash::new_unique().to_string(),
+                        entries_count: 1,
+                        bank_id,
+                        ..Default::default()
+                    },
+                    Timestamp::from(SystemTime::now()),
+                ),
+            )));
+            messages
+        }
+
+        /// Bank 1 for slot 10 dies, and its repaired replacement, bank 2, is processed. `Dead`
+        /// names a slot, not a bank, so bank 2's Processed must reach block reconstruction after
+        /// that `Dead`, or the `Dead` discards bank 2 too. The statuses keep that order by going
+        /// through geyser_loop, which must not broadcast them itself.
+        #[tokio::test]
+        async fn replacement_bank_after_dead_is_delivered_once_at_processed() {
+            let mut harness = spawn_loop();
+            let mut messages = vec![
+                bank_status(10, SlotStatus::CreatedBank, Some(1)),
+                bank_status(10, SlotStatus::Dead, None),
+            ];
+            messages.extend(sealed_bank(10, 2));
+            messages.push(bank_status(10, SlotStatus::Processed, Some(2)));
+            for message in messages {
+                harness.messages_tx.send(message).unwrap();
+            }
+
+            let is_processed_status = |message: &Message| {
+                matches!(
+                    message,
+                    Message::Slot(slot) if slot.slot == 10 && slot.status == SlotStatus::Processed
+                )
+            };
+            let mut received = Vec::new();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !received.iter().any(is_processed_status) {
+                    let batch = harness.broadcast_rx.recv().await.expect("broadcast open");
+                    received.extend(batch.iter().cloned());
+                }
+            })
+            .await
+            .expect("slot 10 was never delivered at Processed");
+            // Give a duplicate time to show up.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            while let Ok(batch) = harness.broadcast_rx.try_recv() {
+                received.extend(batch.iter().cloned());
+            }
+
+            let processed_statuses: Vec<_> = received
+                .iter()
+                .filter_map(|message| match message {
+                    Message::Slot(slot) if is_processed_status(message) => Some(slot.bank_id),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(processed_statuses, vec![Some(2)]);
+            assert!(received.iter().any(
+                |message| matches!(message, Message::Block(block) if block.meta.bank_id == 2)
+            ));
+
+            drop(harness.messages_tx);
+            let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
+            let _ =
+                tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
+        }
+
+        /// A `from_slot` replay sends each bank's CreatedBank as the plugin received it, and
+        /// where it arrived live: after the account writes made while the bank was constructed,
+        /// before the rest of the bank's data.
+        #[tokio::test]
+        async fn replay_sends_the_original_created_bank_in_live_order() {
+            const CREATED_AT: Timestamp = Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            };
+            let (replay_tx, replay_rx) = mpsc::channel(1);
+            let mut harness = spawn_loop_with_replay(Some(replay_rx));
+            // `sealed_bank` sends CreatedBank first; agave sends the construction writes first.
+            let mut messages = sealed_bank(10, 2);
+            let created_bank = messages.remove(0);
+            let Message::Slot(created_bank) = created_bank else {
+                panic!("sealed_bank starts with CreatedBank");
+            };
+            let construction_writes = MUST_HAVE_SYSVAR_ACCOUNTS.len();
+            messages.insert(
+                construction_writes,
+                Message::Slot(Arc::new(MessageSlot {
+                    created_at: CREATED_AT,
+                    ..MessageSlot::clone(&created_bank)
+                })),
+            );
+            messages.push(bank_status(10, SlotStatus::Processed, Some(2)));
+            for message in messages {
+                harness.messages_tx.send(message).unwrap();
+            }
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let batch = harness.broadcast_rx.recv().await.expect("broadcast open");
+                    if batch
+                        .iter()
+                        .any(|message| matches!(message, Message::Block(_)))
+                    {
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect("slot 10 never sealed");
+
+            let (response_tx, response_rx) = oneshot::channel();
+            replay_tx
+                .send((CommitmentLevel::Processed, 10, response_tx))
+                .await
+                .unwrap();
+            let Ok(ReplayedResponse::Messages(replayed, _)) = response_rx.await else {
+                panic!("replay failed");
+            };
+            let kinds: Vec<&str> = replayed
+                .iter()
+                .flatten()
+                .map(|message| match message {
+                    Message::Account(_) => "account",
+                    Message::Slot(slot) if slot.status == SlotStatus::CreatedBank => {
+                        assert_eq!(slot.created_at, CREATED_AT);
+                        assert_eq!((slot.bank_id, slot.parent), (Some(2), Some(9)));
+                        "created-bank"
+                    }
+                    Message::Slot(_) => "status",
+                    Message::Entry(_) => "entry",
+                    Message::Block(_) => "block",
+                    Message::BlockMeta(_) => "block-meta",
+                    _ => "other",
+                })
+                .collect();
+            assert_eq!(
+                kinds,
+                [
+                    "account",
+                    "account",
+                    "account",
+                    "account",
+                    "created-bank",
+                    "entry",
+                    "block",
+                    "block-meta",
+                    "status",
+                ]
+            );
+
+            drop(harness.messages_tx);
+            let _ = tokio::time::timeout(Duration::from_secs(1), harness.handle).await;
+            let _ =
+                tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
+        }
+    }
+
+    /// A held bank's live CreatedBank is held back; another bank's passes.
+    #[test]
+    fn route_held_holds_created_bank_of_held_bank() {
+        let created_bank = |bank_id| {
+            Message::Slot(Arc::new(MessageSlot {
+                slot: 10,
+                parent: Some(9),
+                status: SlotStatus::CreatedBank,
+                dead_error: None,
+                created_at: Timestamp::default(),
+                bank_id: Some(bank_id),
+            }))
+        };
+        let mut held = vec![2];
+        assert!(matches!(
+            route_held(&mut held, &created_bank(2)),
+            HeldMessage::Skip
+        ));
+        assert!(matches!(
+            route_held(&mut held, &created_bank(3)),
+            HeldMessage::Pass
+        ));
+        assert_eq!(held, vec![2]);
     }
 
     #[tokio::test]
