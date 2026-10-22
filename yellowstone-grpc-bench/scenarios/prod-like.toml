@@ -67,9 +67,10 @@ bandwidth_mbps = [20, 100]
 stall_every_secs = 30
 stall_ms = 200
 
+# About 0.4 stream ends per second, as on nyc227 (client_disconnects_total over 6 h).
 [mix.churn]
-share = 3
-every_secs = 120
+share = 10
+every_secs = 110
 from_slot_back = 30
 
 [mix.slow]

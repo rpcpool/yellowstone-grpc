@@ -122,7 +122,7 @@ So BlockMeta comes after every account write of its bank, and a transaction afte
 
 ## CPU layout
 
-`ygb bench` pins every role. Without `--layout`, it reads the topology from `/sys` and uses only CPUs the process may run on. The plugin gets `--plugin-cores` whole cores (default 6, with their SMT siblings) on the smallest L3 domain that fits, which matches one production CCD. The probes, driver (two cores on machines with 12 cores or more) and decoder go outside that domain. The load fleet gets the rest. `ygb layout` prints the choice. `layouts/` holds fixed layouts for the codespace and nyc226.
+`ygb bench` pins every role. Without `--layout`, it reads the topology from `/sys` and uses only CPUs the process may run on. The plugin gets `--plugin-cores` whole cores (default 6, with their SMT siblings) on the smallest L3 domain that fits, which matches one production CCD. The probes (two cores on machines with 16 cores or more), driver (two cores with 12 or more) and decoder go outside that domain. The load fleet gets the rest. `ygb layout` prints the choice. `layouts/` holds fixed layouts for the codespace and nyc226.
 
 ## Variants and A/B decisions
 
@@ -229,3 +229,4 @@ The manifest lists the chunks with their slot ranges, plus counts per kind, the 
 - The driver lanes call the plugin at agave's times, but agave's own CPU work on the shared notifier cores is not reproduced.
 - Block footers do not exist on mainnet yet, so they are not replayed.
 - The network shares, the compression split and the client HTTP/2 windows are estimates, not measurements.
+- Probes stamp a chunk when their task reads it. All probes get each burst at once, so on shared probe threads a probe can read its chunk up to a few probe handling times late. The load table shows the slowest probe's p99 handling time per chunk (10-20 µs), and the probes get two cores on machines with 16 cores or more. Paired comparisons cancel most of this.

@@ -125,7 +125,8 @@ fn plan(mut cores: Vec<Core>, cpu_count: usize, plugin_cores: usize) -> anyhow::
             .flat_map(|index| cores[*index].cpus.clone())
             .collect()
     };
-    let probes = take(1);
+    // Probes take every burst at the same moment; on one core they queue behind each other.
+    let probes = take(if cores.len() >= 16 { 2 } else { 1 });
     // Agave-shaped lanes run about seven driver threads; give them two cores when there is room.
     let mut driver = take(if cores.len() >= 12 { 2 } else { 1 });
     let mut decoder = take(1);
@@ -262,9 +263,9 @@ mod tests {
             layout.plugin,
             vec![10, 11, 12, 13, 14, 15, 26, 27, 28, 29, 30, 31]
         );
-        assert_eq!(layout.probes, vec![0, 16]);
-        assert_eq!(layout.driver, vec![1, 2, 17, 18]);
-        assert_eq!(layout.decoder, vec![3, 19]);
+        assert_eq!(layout.probes, vec![0, 1, 16, 17]);
+        assert_eq!(layout.driver, vec![2, 3, 18, 19]);
+        assert_eq!(layout.decoder, vec![4, 20]);
         assert_disjoint(&layout);
     }
 

@@ -126,6 +126,8 @@ struct Delivery {
     unary_p99_ms: f64,
     /// Messages per second per `load-*` stream at p50, p90 and p99, against `mix.rate_targets`.
     stream_rates: [f64; 3],
+    /// Slowest probe's p99 time to handle one received chunk, in µs; later chunks wait this long.
+    probe_handle_p99_us: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -635,7 +637,9 @@ fn evaluate(
     let fleet = fs::read(dir.join("fleet").join("fleet.json"))
         .ok()
         .and_then(|data| serde_json::from_slice::<FleetReport>(&data).ok());
-    let delivery = fleet.as_ref().map(delivery);
+    let paced_from =
+        read_json("driver.json").and_then(|driver| driver["paced_start_unix_ns"].as_u64());
+    let delivery = fleet.as_ref().map(|fleet| delivery(fleet, paced_from));
     match (&fleet, &delivery) {
         (Some(fleet), Some(delivery)) => {
             if delivery.probe_disconnects > 0 {
@@ -688,8 +692,12 @@ fn evaluate(
     }
 }
 
-fn delivery(fleet: &FleetReport) -> Delivery {
-    let seconds = fleet.stopped_unix_ns.saturating_sub(fleet.started_unix_ns) as f64 / 1e9;
+/// What the fleet received; rates count from `paced_from` (unix ns), since attach-window time carries no load.
+fn delivery(fleet: &FleetReport, paced_from: Option<u64>) -> Delivery {
+    let from = paced_from.map_or(fleet.started_unix_ns, |paced| {
+        paced.max(fleet.started_unix_ns)
+    });
+    let seconds = fleet.stopped_unix_ns.saturating_sub(from) as f64 / 1e9;
     let mut out = Delivery {
         seconds,
         ..Default::default()
@@ -701,6 +709,9 @@ fn delivery(fleet: &FleetReport) -> Delivery {
         out.emulated_links += usize::from(emulated);
         out.churn_reconnects += u64::from(sub.reconnects);
         let ended = sub.errors > 0;
+        if let Some(handle) = &sub.handle_ns {
+            out.probe_handle_p99_us = out.probe_handle_p99_us.max(handle.p99 as f64 / 1e3);
+        }
         if sub.role == "probe" {
             out.probe_disconnects += usize::from(ended);
             continue;
@@ -871,12 +882,12 @@ fn summary_markdown(summary: &Summary, scenario: &Scenario) -> String {
         "\nLoad the fleet received. Per-stream msg/s targets from production: p50 {:.0}, p90 {:.0}, p99 {:.0}.\n\n",
         targets[0], targets[1], targets[2]
     ));
-    md.push_str("| run | variant | streams | msg/s | MiB/s | per-stream msg/s p50 / p90 / p99 | emulated links | churn reconnects | ended (emulated/local) | slowest scrape | unary/s (slowest p99) |\n");
-    md.push_str("|---|---|---|---|---|---|---|---|---|---|---|\n");
+    md.push_str("| run | variant | streams | msg/s | MiB/s | per-stream msg/s p50 / p90 / p99 | emulated links | churn reconnects | ended (emulated/local) | slowest scrape | unary/s (slowest p99) | probe chunk p99 |\n");
+    md.push_str("|---|---|---|---|---|---|---|---|---|---|---|---|\n");
     for run in &summary.runs {
         let delivery = run.delivery.clone().unwrap_or_default();
         md.push_str(&format!(
-            "| {} | {} | {} | {:.0} | {:.1} | {:.1} / {:.1} / {:.0} | {} | {} | {}/{} | {:.1} ms, {:.0} KiB | {:.0} ({:.1} ms) |\n",
+            "| {} | {} | {} | {:.0} | {:.1} | {:.1} / {:.1} / {:.0} | {} | {} | {}/{} | {:.1} ms, {:.0} KiB | {:.0} ({:.1} ms) | {:.0} µs |\n",
             run.point.label(),
             run.variant,
             delivery.load_streams,
@@ -893,6 +904,7 @@ fn summary_markdown(summary: &Summary, scenario: &Scenario) -> String {
             delivery.scrape_max_kib,
             delivery.unary_calls_per_sec,
             delivery.unary_p99_ms,
+            delivery.probe_handle_p99_us,
         ));
     }
     if !summary.comparisons.is_empty() {
