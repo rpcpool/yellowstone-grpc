@@ -9,6 +9,8 @@ shift
 root=$(cd "$(dirname "$0")/../.." && pwd -P)
 [[ -f "$root/Cargo.toml" && -d "$root/yellowstone-grpc-geyser" ]] || { echo "$root is not a yellowstone-grpc tree" >&2; exit 1; }
 cd "$root"
+# Counted before cargo runs: the public-fork patch rewrites Cargo.lock for the build.
+changed=$(git status --porcelain | wc -l | tr -d ' ')
 
 args=(build --release -p yellowstone-grpc-geyser -p yellowstone-grpc-bench)
 # TRACE=1 builds the plugin with latency-trace checkpoints into a separate target dir.
@@ -46,7 +48,7 @@ lock_version() {
 }
 {
   echo "flavour: $flavour"
-  echo "commit: $(git rev-parse HEAD), $(git status --porcelain | wc -l | tr -d ' ') changed files"
+  echo "commit: $(git rev-parse HEAD), $changed changed files"
   rustc -vV
   for crate in agave-geyser-plugin-interface solana-transaction solana-transaction-status solana-account solana-entry solana-message tokio tonic; do
     echo "$crate: $(lock_version "$crate")"
