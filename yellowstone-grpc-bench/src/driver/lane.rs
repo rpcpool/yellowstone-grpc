@@ -17,8 +17,10 @@ use {
     },
 };
 
-/// Spins this long on a dependency before yielding the CPU.
+/// Spins this long on a dependency, then sleeps in steps of `NAP`; a SCHED_FIFO lane
+/// that only yielded would starve kernel threads on its CPU when RT throttling is off.
 const SPIN_NS: u64 = 20_000;
+const NAP: std::time::Duration = std::time::Duration::from_micros(20);
 
 /// Per lane, how many events in release order it has finished; lanes wait on each other through it.
 pub struct Progress(Vec<AtomicU64>);
@@ -37,7 +39,7 @@ impl Progress {
                 if sys::mono_ns() - begin < SPIN_NS {
                     std::hint::spin_loop();
                 } else {
-                    std::thread::yield_now();
+                    std::thread::sleep(NAP);
                 }
             }
         }

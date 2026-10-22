@@ -170,7 +170,7 @@ yellowstone-grpc-bench/bench.sh --scenario prod-like --fixture ~/fixtures/nyc226
   --set plugin.fifo_priority=40 --set plugin.replay_stored_slots=1000 --set window.prefill_slots=1000
 ```
 
-SCHED_FIFO needs CAP_SYS_NICE. `--setcap` grants it to each built `ygb` with `sudo setcap`, so the build and the results stay owned by you. With `kernel.sched_rt_runtime_us=-1`, a FIFO thread that never sleeps owns its CPU; the driver lanes spin for at most 20 µs before they yield. If something already listens on 127.0.0.1:10000 or 9123, pick other ports with `--grpc-port` and `--prometheus-port`.
+SCHED_FIFO needs CAP_SYS_NICE. `--setcap` grants it to each built `ygb` with `sudo setcap`, so the build and the results stay owned by you. With `kernel.sched_rt_runtime_us=-1`, a FIFO thread that never sleeps owns its CPU; a driver lane that waits on another spins for at most 20 µs, then sleeps in 20 µs steps. If something already listens on 127.0.0.1:10000 or 9123, pick other ports with `--grpc-port` and `--prometheus-port`.
 
 Results from different machines are comparable only within one machine. Compare variants on the same host and fixture.
 
