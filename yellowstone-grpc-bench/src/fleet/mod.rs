@@ -456,7 +456,7 @@ pub fn run(args: FleetArgs) -> anyhow::Result<()> {
         stopped_unix_ns: sys::unix_ns(),
         subscribers: reports,
         disconnects,
-        cpu: Some(cpu.finish()),
+        cpu: cpu.map(cpu::CpuSampler::finish),
         scrapes,
         unary,
     };

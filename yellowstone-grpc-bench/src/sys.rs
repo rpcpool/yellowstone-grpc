@@ -1,6 +1,7 @@
-//! Thin wrappers over the Linux calls the harness needs: monotonic clock, absolute sleeps, pinning.
+//! Thin wrappers over the OS calls the harness needs: monotonic clock, absolute sleeps, pinning.
+//! Pinning, timer slack and SCHED_FIFO exist only on Linux; elsewhere they do nothing or fail softly.
 
-use std::{io, mem};
+use std::io;
 
 pub fn mono_ns() -> u64 {
     let mut ts = libc::timespec {
@@ -23,6 +24,7 @@ pub fn unix_ns() -> u64 {
 }
 
 /// Sleeps until an absolute CLOCK_MONOTONIC deadline in nanoseconds.
+#[cfg(target_os = "linux")]
 pub fn sleep_until_mono(deadline_ns: u64) {
     let ts = libc::timespec {
         tv_sec: (deadline_ns / 1_000_000_000) as libc::time_t,
@@ -44,10 +46,25 @@ pub fn sleep_until_mono(deadline_ns: u64) {
     }
 }
 
+/// Sleeps until an absolute CLOCK_MONOTONIC deadline in nanoseconds; relative sleeps without clock_nanosleep.
+#[cfg(not(target_os = "linux"))]
+pub fn sleep_until_mono(deadline_ns: u64) {
+    loop {
+        let now = mono_ns();
+        if now >= deadline_ns {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_nanos(deadline_ns - now));
+    }
+}
+
 /// Shrinks the calling thread's timer slack so absolute sleeps wake on time.
 pub fn set_min_timer_slack() {
     // SAFETY: PR_SET_TIMERSLACK takes a plain integer argument.
-    unsafe { libc::prctl(libc::PR_SET_TIMERSLACK, 1 as libc::c_ulong, 0, 0, 0) };
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::prctl(libc::PR_SET_TIMERSLACK, 1 as libc::c_ulong, 0, 0, 0)
+    };
 }
 
 pub fn pin_current_thread(cpus: &[usize]) -> io::Result<()> {
@@ -55,24 +72,31 @@ pub fn pin_current_thread(cpus: &[usize]) -> io::Result<()> {
 }
 
 /// Pins a thread (0 for the calling thread) to `cpus`; an empty list leaves it as it is.
+#[cfg(target_os = "linux")]
 pub fn pin_thread(tid: i32, cpus: &[usize]) -> io::Result<()> {
     if cpus.is_empty() {
         return Ok(());
     }
     // SAFETY: cpu_set_t is plain data; CPU_SET writes inside it and sched_setaffinity reads it.
     unsafe {
-        let mut set: libc::cpu_set_t = mem::zeroed();
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
         for cpu in cpus {
             libc::CPU_SET(*cpu, &mut set);
         }
-        if libc::sched_setaffinity(tid, mem::size_of::<libc::cpu_set_t>(), &set) != 0 {
+        if libc::sched_setaffinity(tid, std::mem::size_of::<libc::cpu_set_t>(), &set) != 0 {
             return Err(io::Error::last_os_error());
         }
     }
     Ok(())
 }
 
-/// Thread ids and names of this process whose names start with one of `prefixes`.
+/// Other systems have no CPU affinity to set; threads run where the OS puts them.
+#[cfg(not(target_os = "linux"))]
+pub fn pin_thread(_tid: i32, _cpus: &[usize]) -> io::Result<()> {
+    Ok(())
+}
+
+/// Thread ids and names of this process whose names start with one of `prefixes`; Linux only.
 fn threads_named(prefixes: &[&str]) -> Vec<(i32, String)> {
     let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
         return Vec::new();
@@ -104,6 +128,7 @@ pub fn pin_by_name(prefixes: &[&str], cpus: &[usize]) -> usize {
 }
 
 /// Sets SCHED_FIFO on a thread (0 for the calling thread); needs CAP_SYS_NICE.
+#[cfg(target_os = "linux")]
 pub fn set_fifo(tid: i32, priority: i32) -> io::Result<()> {
     let param = libc::sched_param {
         sched_priority: priority,
@@ -113,6 +138,14 @@ pub fn set_fifo(tid: i32, priority: i32) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn set_fifo(_tid: i32, _priority: i32) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "SCHED_FIFO is set only on Linux",
+    ))
 }
 
 /// Sets SCHED_FIFO on this process's threads whose names start with one of `prefixes`.
@@ -125,6 +158,34 @@ pub fn set_fifo_by_name(prefixes: &[&str], priority: i32) -> usize {
         }
     }
     changed
+}
+/// Raises the soft open-file limit toward the hard one. macOS terminals start at 256, and a run
+/// with 450 streams holds about 500 sockets in each of the plugin and fleet processes.
+pub fn raise_fd_limit() {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit and setrlimit read and write a plain struct.
+    unsafe {
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+            return;
+        }
+        // macOS refuses values above kern.maxfilesperproc even when the hard limit is unlimited.
+        for want in [65_536 as libc::rlim_t, 10_240] {
+            let wanted = want.min(limit.rlim_max);
+            if wanted <= limit.rlim_cur {
+                return;
+            }
+            let raised = libc::rlimit {
+                rlim_cur: wanted,
+                rlim_max: limit.rlim_max,
+            };
+            if libc::setrlimit(libc::RLIMIT_NOFILE, &raised) == 0 {
+                return;
+            }
+        }
+    }
 }
 
 /// Parses a CPU list such as `8-13,24-29`.

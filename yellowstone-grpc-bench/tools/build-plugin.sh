@@ -27,7 +27,7 @@ case "$flavour" in
         --config "patch.crates-io.${crate}.tag=\"0.1.0+triton.grpcrust.0.14.6\"")
     done
     # The patch rewrites Cargo.lock; restore it so the tree stays clean.
-    saved_lock=$(mktemp)
+    saved_lock=$(mktemp "${TMPDIR:-/tmp}/ygb-cargo-lock.XXXXXX")
     cp Cargo.lock "$saved_lock"
     trap 'cp "$saved_lock" Cargo.lock; rm -f "$saved_lock"' EXIT
     ;;
@@ -44,12 +44,12 @@ lock_version() {
 }
 {
   echo "flavour: $flavour"
-  echo "commit: $(git rev-parse HEAD), $(git status --porcelain | wc -l) changed files"
+  echo "commit: $(git rev-parse HEAD), $(git status --porcelain | wc -l | tr -d ' ') changed files"
   rustc -vV
   for crate in agave-geyser-plugin-interface solana-transaction solana-transaction-status solana-account solana-entry solana-message tokio tonic; do
     echo "$crate: $(lock_version "$crate")"
   done
 } > "$target_dir/release/plugin-abi.txt"
-echo "built $target_dir/release/libyellowstone_grpc_geyser.so and $target_dir/release/ygb" >&2
+echo "built the plugin library and ygb in $target_dir/release" >&2
 # The last stdout line is the variant directory, for bench.sh.
 echo "$root/$target_dir/release"

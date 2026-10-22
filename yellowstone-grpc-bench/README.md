@@ -23,7 +23,7 @@ yellowstone-grpc-bench/bench.sh --scenario quick --fixture ~/fixtures/nyc226-3k 
 
 `bench.sh --help` lists every option. Results go to `../ygb-results/<scenario>-<UTC time>/` next to the repository, unless `--out` says otherwise. `summary.md` holds the headline table. A rerun with the same `--out` skips finished runs, so an interrupted bench resumes.
 
-Prerequisites: `git`, rustup (the repository pins the toolchain), and a C compiler. `protoc` is vendored. The default `public-fork` flavour fetches the rpcpool tonic fork from GitHub.
+Prerequisites: `git`, rustup (the repository pins the toolchain), a C compiler and `perl`. `protoc` is vendored. The default `public-fork` flavour fetches the rpcpool tonic fork from GitHub. It runs on Linux and on macOS; see "Running on another machine" for what macOS cannot do.
 
 ## What a run simulates
 
@@ -144,7 +144,7 @@ An output directory holds:
 A run is invalid, and is left out of comparisons, when any of these holds:
 
 - a plugin callback returned an error;
-- a driver lane's timer lag p99 exceeds 200 µs, so the replay lost the recorded pace;
+- a driver lane's timer lag p99 exceeds `--max-timer-lag-us` (default 200 µs), so the replay lost the recorded pace;
 - other tenants use more than `--max-foreign` (default 2%) of the plugin or probe CPUs, after the plugin's threads, the notifier lanes and interrupt time;
 - a probe disconnected, or a local load stream ended (the fleet, not the network, fell behind);
 - a probe thread used more than 70% of a core in any 500 ms window.
@@ -156,6 +156,25 @@ On a shared host such as the codespace, other tenants often take 2-3% of each CP
 `ygb report --run <dir> --stalls 5` adds a timeline of 100 ms windows in which processed probes waited more than 5 ms, next to the fleet's reconnects, stream ends and metrics scrapes from the second before each window. `ygb compare --a <run> --b <run>` pairs any two runs of the same window.
 
 ## Running on another machine
+
+A fixture moves more easily cut down to the windows the scenarios use. `ygb trim` keeps the slots around the heaviest `prod-like` window, so `prod-like`, `ab` and `quick` replay the same slots as on the full fixture; the 10k-slot fixture of 26 GB becomes 6.3 GB:
+
+```bash
+target/bench-fork/release/ygb trim --fixture /workspaces/fixtures/ygb/nyc226-10k-20261020 \
+  --out /workspaces/fixtures/ygb/nyc226-trim-20261020
+```
+
+### macOS
+
+`bench.sh` and `ygb` run on macOS with the system bash 3.2, Xcode's command line tools and rustup. macOS has no thread pinning, no SCHED_FIFO and no `/proc`, so there:
+
+- every role shares every CPU, and the scheduler moves threads between performance and efficiency cores;
+- the driver sleeps with relative sleeps instead of `clock_nanosleep`;
+- there is no CPU accounting: plugin cores show as `-`, and the foreign-load guard is skipped.
+
+Use the Mac for functional runs and for A/Bs inside one bench, not for numbers to put next to production. The `ygb run` process needs about 11 GiB at `replay_stored_slots = 300`; on a 16 GB Mac, add `--set plugin.replay_stored_slots=100`. If runs fail the timer-lag guard, raise it with `--max-timer-lag-us 1000`.
+
+### nyc226
 
 The same command works on any Linux host. For nyc226:
 
@@ -187,6 +206,7 @@ Results from different machines are comparable only within one machine. Compare 
 | `ygb report` | Prints probe latency by class, compression and kind, with per-slot p99 and stall counts, the plugin's trace stages for traced builds, and the stall timeline with `--stalls`. |
 | `ygb compare` | Paired A/B of two runs of the same window, by per-slot p99. |
 | `ygb layout` | Prints the CPU layout `ygb bench` would pick here. |
+| `ygb trim` | Copies the part of a fixture one scenario window needs, to move it to another machine. |
 
 Reference times in reports: processed data uses the plugin's `created_at`. Slot statuses, and everything on confirmed or finalized streams, use the driver's callback time for that slot's status (`driver-statuses.json`).
 

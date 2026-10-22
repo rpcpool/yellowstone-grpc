@@ -24,7 +24,14 @@ use {
     },
 };
 
-const PLUGIN_SO: &str = "libyellowstone_grpc_geyser.so";
+/// The plugin library's file name on this system: `.so` on Linux, `.dylib` on macOS.
+fn plugin_library() -> String {
+    format!(
+        "{}yellowstone_grpc_geyser{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    )
+}
 /// Fleet runtimes beyond this many threads only add scheduling noise.
 const MAX_LOAD_THREADS: usize = 16;
 
@@ -67,6 +74,9 @@ pub struct BenchArgs {
     /// Times to run again a run that failed only an environment check (other tenants, timer lag)
     #[clap(long, default_value_t = 1)]
     pub retries: usize,
+    /// A run is invalid when a driver lane's timer lag p99 exceeds this many µs
+    #[clap(long, default_value_t = 200)]
+    pub max_timer_lag_us: u64,
     /// Print the plan and exit
     #[clap(long)]
     pub dry_run: bool,
@@ -356,7 +366,7 @@ fn variants(specs: &[String]) -> anyhow::Result<Vec<Variant>> {
             let variant = Variant {
                 name: name.to_owned(),
                 ygb: dir.join("ygb"),
-                plugin: dir.join(PLUGIN_SO),
+                plugin: dir.join(plugin_library()),
                 abi: fs::read_to_string(dir.join("plugin-abi.txt")).unwrap_or_default(),
             };
             anyhow::ensure!(variant.ygb.exists(), "{} not found", variant.ygb.display());
@@ -401,7 +411,7 @@ fn write_profiles(
 }
 
 /// Paced start slot of the window. `heaviest` uses chunk sizes, so it needs no decoding.
-fn window_start(window: &Window, manifest: &Manifest) -> anyhow::Result<u64> {
+pub fn window_start(window: &Window, manifest: &Manifest) -> anyhow::Result<u64> {
     let chunks: Vec<(u64, u64)> = manifest
         .chunks
         .iter()
@@ -612,10 +622,11 @@ fn evaluate(
             // Past this the replay no longer keeps the recorded pace.
             for (name, lane) in &lanes {
                 let timer_p99 = lane["timer_lag_ns"]["p99"].as_u64().unwrap_or(0);
-                if timer_p99 > 200_000 {
+                if timer_p99 > args.max_timer_lag_us * 1000 {
                     problems.push(format!(
-                        "{name} timer lag p99 {} us (over 200 us)",
-                        timer_p99 / 1000
+                        "{name} timer lag p99 {} us (over {} us)",
+                        timer_p99 / 1000,
+                        args.max_timer_lag_us
                     ));
                 }
             }

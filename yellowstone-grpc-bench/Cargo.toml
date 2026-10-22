@@ -40,12 +40,15 @@ solana-signature = { workspace = true }
 solana-transaction = { workspace = true }
 solana-transaction-status = { workspace = true }
 toml = { workspace = true }
-tikv-jemallocator = { version = "0.6", features = ["unprefixed_malloc_on_supported_platforms"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 tonic = { workspace = true, features = ["zstd", "gzip", "tls-native-roots", "tls-ring"] }
 yellowstone-grpc-geyser = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression", "account-data-as-bytes"] }
 zstd = { workspace = true }
+
+# Unprefixed jemalloc only works on Linux; elsewhere ygb and the plugin share the system allocator.
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemallocator = { version = "0.6", features = ["unprefixed_malloc_on_supported_platforms"] }
 
 [lints]
 workspace = true

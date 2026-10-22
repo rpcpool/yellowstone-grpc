@@ -242,12 +242,11 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
                         info!("prefill complete: subscribers have {attach_secs} s to attach");
                         let _ =
                             paced_start_unix_ns.set(sys::unix_ns() + attach_secs * 1_000_000_000);
-                        *cpu_sampler.lock().expect("cpu sampler lock") =
-                            Some(cpu::CpuSampler::start(
-                                plugin_cpus.clone(),
-                                &cpu::RUN_GROUPS,
-                                own_groups,
-                            ));
+                        *cpu_sampler.lock().expect("cpu sampler lock") = cpu::CpuSampler::start(
+                            plugin_cpus.clone(),
+                            &cpu::RUN_GROUPS,
+                            own_groups,
+                        );
                         if let Some(mut command) = fleet_command.take_command() {
                             match command.spawn() {
                                 Ok(child) => *fleet_child.lock().expect("fleet lock") = Some(child),

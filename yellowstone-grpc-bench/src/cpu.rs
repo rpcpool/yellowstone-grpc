@@ -62,13 +62,16 @@ pub struct CpuSampler {
 }
 
 impl CpuSampler {
-    /// Samples `groups` (thread name prefix, group) and the busy time of `cpus`.
-    /// `own` lists the groups pinned to `cpus`; the rest of their busy time counts as foreign.
+    /// Samples `groups` (thread name prefix, group) and the busy time of `cpus`; `None` off Linux,
+    /// where /proc is missing. `own` lists the groups pinned to `cpus`; the rest counts as foreign.
     pub fn start(
         cpus: Vec<usize>,
         groups: &'static [(&'static str, &'static str)],
         own: &'static [&'static str],
-    ) -> Self {
+    ) -> Option<Self> {
+        if !cfg!(target_os = "linux") {
+            return None;
+        }
         let stop = Arc::new(AtomicBool::new(false));
         let handle = {
             let stop = Arc::clone(&stop);
@@ -77,7 +80,7 @@ impl CpuSampler {
                 .spawn(move || sample(&stop, &cpus, groups, own))
                 .expect("spawn cpu sampler")
         };
-        Self { stop, handle }
+        Some(Self { stop, handle })
     }
 
     pub fn finish(self) -> CpuReport {

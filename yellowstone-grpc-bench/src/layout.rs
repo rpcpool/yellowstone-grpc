@@ -1,8 +1,8 @@
 //! CPU layout of a run: which CPUs the plugin, the driver, the decoder, and the fleet use.
-//! `auto` reads the topology from /sys: the plugin gets whole cores on one L3 domain, the rest elsewhere.
+//! On Linux `auto` reads the topology from /sys: the plugin gets whole cores on one L3 domain, the
+//! rest elsewhere. Other systems cannot pin threads, so every role gets every CPU there.
 
 use {
-    crate::sys,
     anyhow::Context,
     serde::{Deserialize, Serialize},
     std::{collections::BTreeMap, fs, path::Path},
@@ -47,6 +47,7 @@ impl Layout {
 
 /// A physical core: its logical CPUs and the L3 domain it belongs to.
 #[derive(Debug, Clone)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct Core {
     cpus: Vec<usize>,
     l3: String,
@@ -54,12 +55,29 @@ struct Core {
 }
 
 /// Picks a layout for this machine, using only CPUs this process may run on.
+#[cfg(target_os = "linux")]
 pub fn auto(plugin_cores: usize) -> anyhow::Result<Layout> {
     let allowed = allowed_cpus()?;
     plan(read_cores(&allowed), allowed.len(), plugin_cores)
 }
 
+/// Without thread affinity every role shares every CPU; the lists only keep the plugin config valid.
+#[cfg(not(target_os = "linux"))]
+pub fn auto(_plugin_cores: usize) -> anyhow::Result<Layout> {
+    let count = std::thread::available_parallelism().map_or(1, usize::from);
+    let all: Vec<usize> = (0..count).collect();
+    Ok(Layout {
+        plugin: all.clone(),
+        driver: all.clone(),
+        decoder: all.clone(),
+        probes: all.clone(),
+        load: all,
+        note: format!("{count} CPUs, no CPU pinning on this system: every role shares every CPU"),
+    })
+}
+
 /// Physical cores among `allowed`, from /sys topology and cache files.
+#[cfg(target_os = "linux")]
 fn read_cores(allowed: &[usize]) -> Vec<Core> {
     let mut cores: BTreeMap<String, Core> = BTreeMap::new();
     for cpu in allowed {
@@ -82,6 +100,7 @@ fn read_cores(allowed: &[usize]) -> Vec<Core> {
 }
 
 /// Splits cores between roles: the plugin first, then one core each for probes, driver and decoder.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn plan(mut cores: Vec<Core>, cpu_count: usize, plugin_cores: usize) -> anyhow::Result<Layout> {
     cores.sort_by_key(|core| core.cpus[0]);
     anyhow::ensure!(
@@ -174,6 +193,7 @@ fn plan(mut cores: Vec<Core>, cpu_count: usize, plugin_cores: usize) -> anyhow::
     Ok(layout)
 }
 
+#[cfg(target_os = "linux")]
 fn allowed_cpus() -> anyhow::Result<Vec<usize>> {
     // SAFETY: cpu_set_t is plain data and sched_getaffinity writes inside it.
     let set = unsafe {
@@ -184,7 +204,7 @@ fn allowed_cpus() -> anyhow::Result<Vec<usize>> {
         set
     };
     let online = read_trimmed("/sys/devices/system/cpu/online").unwrap_or_default();
-    let online = sys::parse_cpu_list(&online).unwrap_or_default();
+    let online = crate::sys::parse_cpu_list(&online).unwrap_or_default();
     // SAFETY: CPU_ISSET only reads inside the set.
     Ok(online
         .into_iter()
@@ -192,6 +212,7 @@ fn allowed_cpus() -> anyhow::Result<Vec<usize>> {
         .collect())
 }
 
+#[cfg(target_os = "linux")]
 fn read_trimmed(path: &str) -> Option<String> {
     fs::read_to_string(path)
         .ok()

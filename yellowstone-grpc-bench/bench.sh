@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One command per benchmark: builds every variant with this harness, records a fixture when asked,
-# then runs `ygb bench`. Usage and options: ./bench.sh --help, and README.md.
+# then runs `ygb bench`. Runs on Linux and macOS (bash 3.2). Options: ./bench.sh --help, README.md.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -25,6 +25,7 @@ Usage: yellowstone-grpc-bench/bench.sh [options]
   --plugin-cores N       plugin cores in a detected layout (default 6)
   --max-foreign SHARE    other tenants' share of a plugin or probe CPU that invalidates a run
                          (default 0.02)
+  --max-timer-lag-us US  driver timer lag p99 that invalidates a run (default 200; macOS may need 1000)
   --retries N            run again a run that failed only an environment check (default 1)
   --grpc-port PORT       loopback gRPC port of the plugin (default 10000)
   --prometheus-port PORT loopback Prometheus port of the plugin (default 9123)
@@ -56,7 +57,7 @@ while (($#)); do
     --flavour) flavour=$2; shift 2 ;;
     --layout) layout=$2; shift 2 ;;
     --out) out=$2; shift 2 ;;
-    --set | --only | --plugin-cores | --max-foreign | --retries | --grpc-port | --prometheus-port)
+    --set | --only | --plugin-cores | --max-foreign | --max-timer-lag-us | --retries | --grpc-port | --prometheus-port)
       passthrough+=("$1" "$2")
       shift 2
       ;;
@@ -89,15 +90,18 @@ overlay() {
   local file
   (cd "$here" && git ls-files -z --cached --others --exclude-standard . |
     while IFS= read -r -d '' file; do
-      [[ ! -e "$file" ]] || cp --parents -t "$tree/yellowstone-grpc-bench" "$file"
+      [[ -e "$file" ]] || continue
+      mkdir -p "$tree/yellowstone-grpc-bench/$(dirname "$file")"
+      cp "$file" "$tree/yellowstone-grpc-bench/$file"
     done)
+  # perl -pi edits in place the same way with GNU and BSD tools.
   grep -q '"yellowstone-grpc-bench"' "$tree/Cargo.toml" ||
-    sed -i 's/^members = \[/members = [\n    "yellowstone-grpc-bench",/' "$tree/Cargo.toml"
+    perl -pi -e 's/^members = \[/members = [\n    "yellowstone-grpc-bench",/' "$tree/Cargo.toml"
   local dep line
   sed -n 's/^\([a-z0-9_-]*\) = { workspace = true.*/\1/p' "$here/Cargo.toml" | while read -r dep; do
     if ! grep -q "^$dep = " "$tree/Cargo.toml"; then
       line=$(grep "^$dep = " "$root/Cargo.toml")
-      sed -i "/^\[workspace.dependencies\]/a $line" "$tree/Cargo.toml"
+      LINE=$line perl -pi -e '$_ .= "$ENV{LINE}\n" if /^\[workspace\.dependencies\]/' "$tree/Cargo.toml"
     fi
   done
 }
@@ -141,6 +145,7 @@ for spec in "${variants[@]}"; do
   dir=$(build_variant "$name" "$ref")
   [[ -x "$dir/ygb" ]] || { echo "build of $name did not produce $dir/ygb" >&2; exit 1; }
   if ((setcap)); then
+    [[ "$(uname -s)" == Linux ]] || { echo "--setcap and SCHED_FIFO work only on Linux" >&2; exit 2; }
     sudo setcap cap_sys_nice+ep "$dir/ygb"
   fi
   variant_args+=(--variant "$name=$dir")
@@ -162,4 +167,5 @@ out=${out:-$(dirname "$root")/ygb-results/$(basename "$scenario_file" .toml)-$(d
 args=(bench --scenario "$scenario_file" --fixture "$fixture" --out "$out" "${variant_args[@]}")
 [[ -z "$layout" ]] || args+=(--layout "$layout")
 echo "results: $out" >&2
-RUST_LOG=${RUST_LOG:-info} exec "$ygb" "${args[@]}" "${passthrough[@]}"
+# bash 3.2, as on macOS, treats an empty "${array[@]}" as unbound under set -u.
+RUST_LOG=${RUST_LOG:-info} exec "$ygb" "${args[@]}" ${passthrough[@]+"${passthrough[@]}"}

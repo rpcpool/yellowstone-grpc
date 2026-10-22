@@ -17,8 +17,10 @@ mod record;
 mod report;
 mod scenario;
 mod sys;
+mod trim;
 
 // Unprefixed jemalloc, as in agave: the dlopen'd plugin's malloc resolves to it too.
+#[cfg(target_os = "linux")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
@@ -50,6 +52,8 @@ enum Command {
     Compare(compare::CompareArgs),
     /// Run a scenario end to end: layout, profile, every case and variant, summary
     Bench(bench::BenchArgs),
+    /// Copy the part of a fixture one scenario window needs, to move it to another machine
+    Trim(trim::TrimArgs),
     /// Print the CPU layout `ygb bench` would pick on this machine
     Layout {
         /// Physical cores for the plugin
@@ -60,6 +64,7 @@ enum Command {
 
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    sys::raise_fd_limit();
     match Args::parse().command {
         Command::Record(args) => record::run(args),
         Command::Inspect(args) => inspect::run(args),
@@ -69,6 +74,7 @@ fn main() -> anyhow::Result<()> {
         Command::Profiles(args) => profiles::run(args),
         Command::Compare(args) => compare::run(args),
         Command::Bench(args) => bench::run(args),
+        Command::Trim(args) => trim::run(args),
         Command::Layout { plugin_cores } => {
             print!("{}", toml::to_string(&layout::auto(plugin_cores)?)?);
             Ok(())
