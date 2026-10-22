@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Builds the plugin .so and ygb in one cargo invocation, so both sides of dlopen share dependency builds.
-# Usage: build-plugin.sh public|public-fork [extra cargo args]. Writes plugin-abi.txt next to the .so.
+# Builds the plugin library and ygb in one cargo invocation, so both sides of dlopen share dependency builds.
+# Usage: build-plugin.sh public|public-fork [extra cargo args]. Writes plugin-abi.txt next to the library.
 set -euo pipefail
 
 flavour=${1:?usage: build-plugin.sh public|public-fork [cargo args]}
 shift
-root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+# The tree this script sits in, never a checkout above it.
+root=$(cd "$(dirname "$0")/../.." && pwd -P)
+[[ -f "$root/Cargo.toml" && -d "$root/yellowstone-grpc-geyser" ]] || { echo "$root is not a yellowstone-grpc tree" >&2; exit 1; }
 cd "$root"
 
 args=(build --release -p yellowstone-grpc-geyser -p yellowstone-grpc-bench)

@@ -46,15 +46,17 @@ pub fn sleep_until_mono(deadline_ns: u64) {
     }
 }
 
-/// Sleeps until an absolute CLOCK_MONOTONIC deadline in nanoseconds; relative sleeps without clock_nanosleep.
+/// Sleeps until an absolute CLOCK_MONOTONIC deadline in nanoseconds without clock_nanosleep.
+/// macOS lets a sleep end late by a share of its length, so long waits go in halves.
 #[cfg(not(target_os = "linux"))]
 pub fn sleep_until_mono(deadline_ns: u64) {
     loop {
-        let now = mono_ns();
-        if now >= deadline_ns {
+        let left = deadline_ns.saturating_sub(mono_ns());
+        if left == 0 {
             return;
         }
-        std::thread::sleep(std::time::Duration::from_nanos(deadline_ns - now));
+        let step = if left > 400_000 { left / 2 } else { left };
+        std::thread::sleep(std::time::Duration::from_nanos(step));
     }
 }
 

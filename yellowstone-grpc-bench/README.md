@@ -1,35 +1,39 @@
 # yellowstone-grpc-bench (`ygb`)
 
-`ygb` measures how fast the Yellowstone gRPC geyser plugin delivers processed updates while many subscribers are connected. It loads the real plugin `.so` in-process the way agave does, replays a recorded mainnet firehose into the plugin callbacks at the recorded pace, and attaches a fleet of production-shaped subscribers. The subscribers use different filters, compression, commitment levels and emulated networks. Probe subscribers shaped like streamlab's measure latency from the plugin's `created_at` to receipt.
+`ygb` measures how fast the Yellowstone gRPC geyser plugin delivers processed updates while many subscribers are connected. It loads the real plugin library (`.so`, `.dylib` on macOS) in-process the way agave does, replays a recorded mainnet firehose into the plugin callbacks at the recorded pace, and attaches a fleet of production-shaped subscribers. The subscribers use different filters, compression, commitment levels and emulated networks. Probe subscribers shaped like streamlab's measure latency from the plugin's `created_at` to receipt.
 
 ## Quick start
 
 One command builds the plugin and `ygb` together, records a fixture when asked, and runs a scenario:
 
 ```bash
-# Smoke test, about 6 minutes after the build.
-yellowstone-grpc-bench/bench.sh --scenario quick --fixture /workspaces/fixtures/ygb/nyc226-10k-20261020
+# Smoke test: about 2 minutes per variant after the build.
+yellowstone-grpc-bench/bench.sh --scenario quick --fixture <fixture>
 
-# A production-shaped sweep over the number of subscribers (about 40 minutes).
+# A production-shaped sweep over the number of subscribers: about 30 minutes per variant.
 yellowstone-grpc-bench/bench.sh --scenario prod-like --fixture <fixture>
 
-# An A/B of two builds: every variant gets this checkout's harness, so only the plugin differs.
+# An A/B of two plugin builds: every variant gets this checkout's harness, so only the plugin differs.
 yellowstone-grpc-bench/bench.sh --scenario ab --fixture <fixture> \
-  --variant base=origin/master --variant fanout=exp/fanout-dispatch --set 'plugin.env.YELLOWSTONE_FANOUT_SHARDS="8"'
+  --variant base=<base commit> --variant stack=. --set 'plugin.env.YELLOWSTONE_FANOUT_SHARDS="8"'
 
 # No fixture yet: record 3000 slots first (about 8 GB, 12 minutes).
 yellowstone-grpc-bench/bench.sh --scenario quick --fixture ~/fixtures/nyc226-3k --record 3000
 ```
 
+On `feat/latency-harness`, `.` also carries two plugin experiments as its last two commits: per-session metric handles (always on) and sharded processed fan-out (on only with `YELLOWSTONE_FANOUT_SHARDS=K`). The commit before them builds the plugin as on master, so use it as `<base commit>`; `git log --oneline -3` shows it. A variant ref must exist in the clone: a `--single-branch` clone has no `origin/master`.
+
 `bench.sh --help` lists every option. Results go to `../ygb-results/<scenario>-<UTC time>/` next to the repository, unless `--out` says otherwise. `summary.md` holds the headline table. A rerun with the same `--out` skips finished runs, so an interrupted bench resumes.
 
-Prerequisites: `git`, rustup (the repository pins the toolchain), a C compiler and `perl`. `protoc` is vendored. The default `public-fork` flavour fetches the rpcpool tonic fork from GitHub. It runs on Linux and on macOS; see "Running on another machine" for what macOS cannot do.
+Prerequisites: `git`, rustup (the repository pins the toolchain), a C compiler and `perl`. `protoc` is vendored. It runs on Linux and on macOS; see "Running on another machine" for what macOS cannot do.
+
+The default `public-fork` flavour patches in the rpcpool tonic fork that production uses, from the private repository `rpcpool/grpc-rust`. Cargo needs your GitHub credentials for it: `export CARGO_NET_GIT_FETCH_WITH_CLI=true` makes cargo fetch with your own git setup. `--flavour public` builds with upstream tonic instead, which adds about 0.6 ms per zstd message; do not rank changes on it.
 
 ## What a run simulates
 
 | Part | What `ygb` does |
 |---|---|
-| Plugin | The real `libyellowstone_grpc_geyser.so`, loaded through `_create_plugin` with a production config (`configs/geyser-streaming.json`): 8 workers, gzip and zstd, `replay_stored_slots`, filter limits. Unprefixed jemalloc as in agave. |
+| Plugin | The real plugin library, loaded through `_create_plugin` with a production config (`configs/geyser-streaming.json`): 8 workers, gzip and zstd, `replay_stored_slots`, filter limits. Unprefixed jemalloc as in agave, on Linux. |
 | Agave callers | Agave-shaped driver threads call the bank-scoped callbacks at the recorded pace, with agave's ordering guarantees (see "Driver lanes"). |
 | Filters | Each load stream gets production-shaped filters: account filters by pubkey (1, 2-99 or 100-1000 keys) or owner, transaction filters with `account_include` (1 to 1000 keys), slots, blocks_meta, entries. Keys come from the fixture. The share of keys that never update is calibrated so per-stream rates match fra215. |
 | Commitment | Processed, confirmed and finalized streams in the scenario's split. Full-block subscribers at confirmed and deshred subscribers are separate groups. |
@@ -48,7 +52,7 @@ A scenario is a TOML file. `scenarios/` holds these:
 
 | Scenario | Purpose |
 |---|---|
-| `quick` | Smoke test of every feature at 60 streams in about 6 minutes. |
+| `quick` | Smoke test of every feature at 60 streams, about 2 minutes per variant. |
 | `prod-like` | Production-shaped fleet on geographic links, swept over 50, 150, 300 and 450 streams, plus 6 full-block subscribers at 300. |
 | `ab` | Decision run for two builds: 400 local streams, 3 repeats, variant order rotated per repeat. |
 | `network` | The same 300 streams on different networks: all local, geographic, all far, stalling, 10% slow readers. |
@@ -126,7 +130,7 @@ So BlockMeta comes after every account write of its bank, and a transaction afte
 
 ## Variants and A/B decisions
 
-A variant is a directory with a `ygb` and a plugin `.so` from one cargo invocation, so both sides of `dlopen` share rustc and dependency builds. `bench.sh --variant NAME=REF` checks REF out in `target/ygb-variants/NAME`, replaces its `yellowstone-grpc-bench` with this checkout's, and builds it. `NAME=.` builds this checkout as it is. `ygb bench --variant NAME=DIR` takes prebuilt directories.
+A variant is a directory with a `ygb` and a plugin library (`.so`, `.dylib` on macOS) from one cargo invocation, so both sides of `dlopen` share rustc and dependency builds. `bench.sh --variant NAME=REF` checks REF out in `target/ygb-variants/NAME`, replaces its `yellowstone-grpc-bench` with this checkout's, and builds it. `NAME=.` builds this checkout as it is. `ygb bench --variant NAME=DIR` takes prebuilt directories.
 
 Each repeat runs every variant on the same window with the same profile and fleet seed. The variant order rotates per repeat. `summary.md` compares each variant with the first one, pairing slot by slot: the median change of the per-slot p99 and a 95% CI from a 10-slot block bootstrap. Accept a change when the CI excludes zero and the effect exceeds both 5% and twice the A/A spread (about 9% at run level and about 1% paired on the codespace). Rank only `public-fork` builds; upstream tonic creates a zstd context per message, which adds about 0.6 ms per compressed message.
 
@@ -157,12 +161,14 @@ On a shared host such as the codespace, other tenants often take 2-3% of each CP
 
 ## Running on another machine
 
-A fixture moves more easily cut down to the windows the scenarios use. `ygb trim` keeps the slots around the heaviest `prod-like` window, so `prod-like`, `ab` and `quick` replay the same slots as on the full fixture; the 10k-slot fixture of 26 GB becomes 6.3 GB:
+A fixture moves more easily cut down to the windows the scenarios use. `ygb trim` keeps the slots around the heaviest `prod-like` window and the slots that profiles sample. So `prod-like`, `ab` and `quick` replay the same slots with the same subscriber profile as on the full fixture. The 10k-slot fixture of 26 GB becomes 7.2 GB:
 
 ```bash
 target/bench-fork/release/ygb trim --fixture /workspaces/fixtures/ygb/nyc226-10k-20261020 \
   --out /workspaces/fixtures/ygb/nyc226-trim-20261020
 ```
+
+A trimmed fixture holds only `--prefill-slots` (default 300) slots before the window; for a longer prefill, trim with a matching `--prefill-slots`. The 1000-slot windows of `network`, `compression` and `stress` may land elsewhere than on the full fixture.
 
 ### macOS
 
@@ -170,15 +176,16 @@ target/bench-fork/release/ygb trim --fixture /workspaces/fixtures/ygb/nyc226-10k
 
 - every role shares every CPU, and the scheduler moves threads between performance and efficiency cores;
 - the driver sleeps with relative sleeps instead of `clock_nanosleep`;
-- there is no CPU accounting: plugin cores show as `-`, and the foreign-load guard is skipped.
+- there is no CPU accounting: plugin cores show as `-`, and the foreign-load guard is skipped;
+- `bench.sh` runs `ygb` under `caffeinate -i`, so the Mac does not sleep during a run. Keep it on power with the lid open.
 
-Use the Mac for functional runs and for A/Bs inside one bench, not for numbers to put next to production. The `ygb run` process needs about 11 GiB at `replay_stored_slots = 300`; on a 16 GB Mac, add `--set plugin.replay_stored_slots=100`. If runs fail the timer-lag guard, raise it with `--max-timer-lag-us 1000`.
+Use the Mac for functional runs and for A/Bs inside one bench, not for numbers to put next to production. macOS wakes sleeping threads less precisely; if runs fail the timer-lag guard, raise it with `--max-timer-lag-us 2000`. The `ygb run` process needs about 11 GiB at `replay_stored_slots = 300`. On a 16 GB Mac, add `--set plugin.replay_stored_slots=100`; this must stay above the scenario's `from_slot_back` (20 in `quick`, 30 in `prod-like`, 150 in `stress`), or churned streams cannot resume.
 
 ### nyc226
 
 The same command works on any Linux host. For nyc226:
 
-1. Clone the branch and record a fixture while the validator still runs, or copy one from the codespace: `bench.sh --scenario quick --fixture ~/fixtures/nyc226 --record 3000 --dry-run` records and builds without running.
+1. Clone the branch and record a fixture while the validator still runs, or copy the full fixture from the codespace: `yellowstone-grpc-bench/bench.sh --scenario quick --fixture ~/fixtures/nyc226 --record 3000 --dry-run` records and builds without running. The run in step 4 uses a 1000-slot prefill, which a default trimmed fixture does not hold; trim with `--prefill-slots 1000` instead.
 2. Stop the validator, so the plugin under test has the machine to itself.
 3. Check the layout: `lscpu -e`, then `target/bench-fork/release/ygb layout`. `layouts/nyc226.toml` puts the plugin on the production notifier cores (47-52 and 111-116).
 4. Run with production settings:
@@ -200,7 +207,7 @@ Results from different machines are comparable only within one machine. Compare 
 | `ygb bench` | Runs a scenario: layout, profiles, every case and variant, validity checks, `summary.md`. |
 | `ygb record` | Subscribes to a live node at processed and writes raw frames into a fixture. Main stream: accounts, transactions (votes and failed included), entries with update-parent markers, slots with interslot updates, block meta, and block footers. Deshred stream: deshred transactions, update-parent markers, and slots. `--split-accounts` puts accounts on their own connection, because one connection's receive window caps WAN throughput near 28 MB/s. |
 | `ygb inspect` | Checks every bank of a fixture and prints rates, recording lag, timing facts, and the heaviest slots. |
-| `ygb run` | Loads a plugin `.so`, replays a fixture window into it, and starts `ygb fleet` when prefill ends. |
+| `ygb run` | Loads a plugin library, replays a fixture window into it, and starts `ygb fleet` when prefill ends. |
 | `ygb fleet` | Runs subscribers on a raw HTTP/2 gRPC client. Probes record every message; load subscribers count bytes and messages. |
 | `ygb profiles` | Generates a subscriber profile from a fixture and a scenario's `[mix]`. |
 | `ygb report` | Prints probe latency by class, compression and kind, with per-slot p99 and stall counts, the plugin's trace stages for traced builds, and the stall timeline with `--stalls`. |

@@ -45,7 +45,8 @@ pub const STAGE_NAMES: [&str; 10] = [
 
 /// One in 16 batches is sampled for per-subscriber checkpoints, chosen by the first message's stamp.
 pub fn sampled(message: &Message) -> bool {
-    created_at(message).nanos % 16 == 0
+    // Whole microseconds, so clocks with microsecond resolution (macOS) also sample 1 in 16.
+    (created_at(message).nanos / 1000) % 16 == 0
 }
 
 pub fn age_ns(now_unix_ns: u64, message: &Message) -> u64 {

@@ -25,7 +25,7 @@ Usage: yellowstone-grpc-bench/bench.sh [options]
   --plugin-cores N       plugin cores in a detected layout (default 6)
   --max-foreign SHARE    other tenants' share of a plugin or probe CPU that invalidates a run
                          (default 0.02)
-  --max-timer-lag-us US  driver timer lag p99 that invalidates a run (default 200; macOS may need 1000)
+  --max-timer-lag-us US  driver timer lag p99 that invalidates a run (default 200; macOS may need 2000)
   --retries N            run again a run that failed only an environment check (default 1)
   --grpc-port PORT       loopback gRPC port of the plugin (default 10000)
   --prometheus-port PORT loopback Prometheus port of the plugin (default 9123)
@@ -107,13 +107,18 @@ overlay() {
 }
 
 build_variant() {
+  # $(build_variant ...) turns errexit off; without it a failed checkout would build this checkout instead.
+  set -e
   local name=$1 ref=$2 tree
   if [[ "$ref" == "." ]]; then
     tree=$root
   else
     tree=$root/target/ygb-variants/$name
     local commit
-    commit=$(git -C "$root" rev-parse --verify "$ref^{commit}")
+    commit=$(git -C "$root" rev-parse --verify --quiet "$ref^{commit}") || {
+      echo "variant $name: ref $ref does not exist in this clone (a --single-branch clone has no origin/master)" >&2
+      exit 2
+    }
     if [[ -e "$tree" ]]; then
       # Without its own .git, git -C would walk up to this checkout and reset it.
       if [[ ! -e "$tree/.git" || "$(git -C "$tree" rev-parse --show-toplevel)" != "$tree" ]]; then
@@ -132,7 +137,10 @@ build_variant() {
     exit 1
   fi
   echo "building $name ($ref) in $tree" >&2
-  "$tree/yellowstone-grpc-bench/tools/build-plugin.sh" "$flavour" | tail -n1
+  local dir
+  dir=$("$tree/yellowstone-grpc-bench/tools/build-plugin.sh" "$flavour" | tail -n1)
+  [[ "$dir" == "$tree/"* ]] || { echo "variant $name built into $dir, outside $tree" >&2; exit 1; }
+  echo "$dir"
 }
 
 variant_args=()
@@ -167,5 +175,8 @@ out=${out:-$(dirname "$root")/ygb-results/$(basename "$scenario_file" .toml)-$(d
 args=(bench --scenario "$scenario_file" --fixture "$fixture" --out "$out" "${variant_args[@]}")
 [[ -z "$layout" ]] || args+=(--layout "$layout")
 echo "results: $out" >&2
+# macOS sleeps when the user is idle, which would stall the replay; caffeinate holds it awake.
+launcher=()
+[[ "$(uname -s)" != Darwin ]] || launcher=(caffeinate -i)
 # bash 3.2, as on macOS, treats an empty "${array[@]}" as unbound under set -u.
-RUST_LOG=${RUST_LOG:-info} exec "$ygb" "${args[@]}" ${passthrough[@]+"${passthrough[@]}"}
+RUST_LOG=${RUST_LOG:-info} exec ${launcher[@]+"${launcher[@]}"} "$ygb" "${args[@]}" ${passthrough[@]+"${passthrough[@]}"}

@@ -46,7 +46,7 @@ pub struct BenchArgs {
     /// Output directory: profiles, layout, one directory per run, summary
     #[clap(long)]
     pub out: PathBuf,
-    /// NAME=DIR, where DIR holds `ygb` and the plugin .so from one build; repeat for A/B.
+    /// NAME=DIR, where DIR holds `ygb` and the plugin library from one build; repeat for A/B.
     /// The first variant is the baseline. Defaults to this binary's own directory.
     #[clap(long = "variant")]
     pub variants: Vec<String>,
@@ -363,6 +363,11 @@ fn variants(specs: &[String]) -> anyhow::Result<Vec<Variant>> {
                 "variant {name} is listed twice"
             );
             let dir = fs::canonicalize(dir).with_context(|| format!("variant directory {dir}"))?;
+            anyhow::ensure!(
+                seen.insert(dir.display().to_string()),
+                "variant {name} uses the same build as another variant: {}",
+                dir.display()
+            );
             let variant = Variant {
                 name: name.to_owned(),
                 ygb: dir.join("ygb"),

@@ -1,5 +1,6 @@
 //! `ygb trim`: copies the part of a fixture one scenario window needs, so it can move to another machine.
-//! By default it keeps the heaviest window, so runs on the copy pick the same slots as on the original.
+//! It keeps the heaviest window and the slots profiles sample, so runs on the copy replay the same slots
+//! with the same subscriber profile as on the original.
 
 use {
     crate::{bench, fixture::Manifest, scenario::Window},
@@ -28,6 +29,9 @@ pub struct TrimArgs {
     /// First paced slot of the window; the heaviest window when unset
     #[clap(long)]
     pub start_slot: Option<u64>,
+    /// Slots that profiles sample after the fixture's first slot (mix.sample_slots, at most 300 in scenarios/)
+    #[clap(long, default_value_t = 300)]
+    pub sample_slots: u64,
 }
 
 pub fn run(args: TrimArgs) -> anyhow::Result<()> {
@@ -50,11 +54,16 @@ pub fn run(args: TrimArgs) -> anyhow::Result<()> {
     // `ygb bench` needs prefill + 64 slots before the window and 200 after it.
     let from = paced.saturating_sub(args.prefill_slots + 64 + MARGIN_SLOTS);
     let to = paced + args.slots + 200 + MARGIN_SLOTS;
+    // Profiles sample key activity from first_slot + 64 on; keeping those slots keeps the profile.
+    let first = manifest.first_slot.unwrap_or(from);
+    let sample_to = first + 64 + args.sample_slots + MARGIN_SLOTS;
+    let wanted =
+        |min: u64, max: u64| (max >= from && min <= to) || (max >= first && min <= sample_to);
     let chunks: Vec<_> = manifest
         .chunks
         .iter()
         .filter(|chunk| match (chunk.min_slot, chunk.max_slot) {
-            (Some(min), Some(max)) => max >= from && min <= to,
+            (Some(min), Some(max)) => wanted(min, max),
             _ => false,
         })
         .cloned()
@@ -66,7 +75,7 @@ pub fn run(args: TrimArgs) -> anyhow::Result<()> {
     );
     let bytes: u64 = chunks.iter().map(|chunk| chunk.bytes).sum();
     info!(
-        "keeping {} of {} chunks for slots {from}..={to} (paced window from {paced}), {:.1} GB uncompressed",
+        "keeping {} of {} chunks: slots {first}..={sample_to} for profiles, {from}..={to} for the window from {paced}; {:.1} GB uncompressed",
         chunks.len(),
         manifest.chunks.len(),
         bytes as f64 / 1e9
@@ -82,11 +91,13 @@ pub fn run(args: TrimArgs) -> anyhow::Result<()> {
     }
     let mut trimmed = manifest;
     trimmed.chunks = chunks;
-    trimmed.first_slot = Some(from);
     trimmed.last_slot = Some(to);
     trimmed.notes.insert(
         "trimmed_from".to_owned(),
-        format!("{}, slots {from}..={to}", args.fixture.display()),
+        format!(
+            "{}, slots {first}..={sample_to} for profiles and {from}..={to} for the window",
+            args.fixture.display()
+        ),
     );
     trimmed.save(&args.out)?;
     info!("wrote {}", args.out.display());

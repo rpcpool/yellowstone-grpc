@@ -1,4 +1,4 @@
-# Smoke test of every moving part in about 6 minutes per variant.
+# Smoke test of every moving part in about 2 minutes per variant.
 # Small fleet with emulated links, zstd and gzip, churn with from_slot, a slow reader, blocks and deshred.
 name = "quick"
 description = "Smoke test: 60 load streams on emulated links, zstd and gzip, churn, a slow reader, blocks and deshred."
