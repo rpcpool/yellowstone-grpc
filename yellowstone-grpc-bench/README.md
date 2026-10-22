@@ -159,6 +159,27 @@ On a shared host such as the codespace, other tenants often take 2-3% of each CP
 
 `ygb report --run <dir> --stalls 5` adds a timeline of 100 ms windows in which processed probes waited more than 5 ms, next to the fleet's reconnects, stream ends and metrics scrapes from the second before each window. `ygb compare --a <run> --b <run>` pairs any two runs of the same window.
 
+## Bundles: run on a server without the repository
+
+`bench.sh --bundle DIR` builds the variants here, then writes everything a run needs into `DIR` instead of running: each variant's `ygb` and plugin library, the scenarios, the layouts, the fixture, and `run.sh`. The fixture goes in as hard links when it shares a file system with `DIR`, so the bundle costs no extra disk here. The target needs no repository, Rust toolchain or git, only a glibc at least as new as the build machine's; `run.sh` checks it.
+
+```bash
+# Here: the plugin as on master and the current branch with E3 on, with the full 10k-slot fixture.
+yellowstone-grpc-bench/bench.sh --bundle /workspaces/ygb-bundle \
+  --variant base=<base commit> --variant stack=. --set 'plugin.env.YELLOWSTONE_FANOUT_SHARDS="8"' \
+  --fixture /workspaces/fixtures/ygb/nyc226-10k-20261020
+rsync -a --info=progress2 /workspaces/ygb-bundle/ SERVER:ygb-bundle/
+
+# On the server:
+cd ygb-bundle
+./run.sh start --scenario prod-like   # runs in the background and prints the log path
+./run.sh status                       # progress, and the summary path when done
+./run.sh stop                         # stops the bench, the plugin and the fleet
+./run.sh resume                       # finishes a stopped bench; finished runs are kept
+```
+
+`--set` options given with `--bundle` become the bundle's defaults (`bundle.args`), and options given to `run.sh` come after them. `./run.sh start --variants stack` runs one variant only. Results go to `results/` inside the bundle. `./run.sh help` lists every command.
+
 ## Running on another machine
 
 A fixture moves more easily cut down to the windows the scenarios use. `ygb trim` keeps the slots around the heaviest `prod-like` window and the slots that profiles sample. So `prod-like`, `ab` and `quick` replay the same slots with the same subscriber profile as on the full fixture. The 10k-slot fixture of 26 GB becomes 7.2 GB:
@@ -214,6 +235,8 @@ Results from different machines are comparable only within one machine. Compare 
 | `ygb compare` | Paired A/B of two runs of the same window, by per-slot p99. |
 | `ygb layout` | Prints the CPU layout `ygb bench` would pick here. |
 | `ygb trim` | Copies the part of a fixture one scenario window needs, to move it to another machine. |
+
+`bench.sh --bundle DIR` packs prebuilt variants, scenarios, layouts and a fixture with `run.sh` for a server without the repository; see "Bundles".
 
 Reference times in reports: processed data uses the plugin's `created_at`. Slot statuses, and everything on confirmed or finalized streams, use the driver's callback time for that slot's status (`driver-statuses.json`).
 

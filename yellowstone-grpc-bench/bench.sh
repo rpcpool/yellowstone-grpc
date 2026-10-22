@@ -32,6 +32,9 @@ Usage: yellowstone-grpc-bench/bench.sh [options]
   --setcap               grant each built ygb CAP_SYS_NICE with sudo setcap, for
                          plugin.fifo_priority; the build and the results stay yours
   --dry-run              build, then print the plan without running it
+  --bundle DIR           build, then write a bundle to DIR instead of running: every variant's
+                         binaries, scenarios, layouts, the --fixture (optional) and run.sh. Copy
+                         DIR to a server and run ./run.sh there; --set options become its defaults
 
 Environment: TRACE=1 builds plugins with latency-trace checkpoints; YGB_FIXTURE sets --fixture.
 USAGE
@@ -44,6 +47,7 @@ endpoint=https://nyc226.nodes.rpcpool.com:10000
 flavour=public-fork
 out=""
 layout=""
+bundle=""
 setcap=0
 variants=()
 passthrough=()
@@ -57,6 +61,7 @@ while (($#)); do
     --flavour) flavour=$2; shift 2 ;;
     --layout) layout=$2; shift 2 ;;
     --out) out=$2; shift 2 ;;
+    --bundle) bundle=$2; shift 2 ;;
     --set | --only | --plugin-cores | --max-foreign | --max-timer-lag-us | --retries | --grpc-port | --prometheus-port)
       passthrough+=("$1" "$2")
       shift 2
@@ -71,7 +76,11 @@ done
 for tool in cargo git; do
   command -v "$tool" >/dev/null || { echo "$tool is required" >&2; exit 1; }
 done
-[[ -n "$fixture" ]] || { echo "set --fixture DIR or YGB_FIXTURE" >&2; exit 2; }
+[[ -n "$fixture" || -n "$bundle" ]] || { echo "set --fixture DIR or YGB_FIXTURE" >&2; exit 2; }
+if [[ -n "$bundle" && -e "$bundle" ]]; then
+  echo "$bundle exists; pick a new --bundle directory" >&2
+  exit 2
+fi
 if [[ -f "$here/scenarios/$scenario.toml" ]]; then
   scenario_file=$here/scenarios/$scenario.toml
 elif [[ -f "$scenario" ]]; then
@@ -144,6 +153,8 @@ build_variant() {
 }
 
 variant_args=()
+variant_names=()
+variant_dirs=()
 first_dir=""
 for spec in "${variants[@]}"; do
   name=${spec%%=*}
@@ -157,9 +168,77 @@ for spec in "${variants[@]}"; do
     sudo setcap cap_sys_nice+ep "$dir/ygb"
   fi
   variant_args+=(--variant "$name=$dir")
+  variant_names+=("$name")
+  variant_dirs+=("$dir")
   first_dir=${first_dir:-$dir}
 done
 ygb=$first_dir/ygb
+
+# A bundle holds what a run needs, so the target needs no repository or toolchain.
+make_bundle() {
+  local dest=$1 i name dir lib
+  mkdir -p "$dest/bin" "$dest/scenarios" "$dest/layouts" "$dest/fixture" "$dest/results"
+  : >"$dest/bin/variants"
+  for i in "${!variant_names[@]}"; do
+    name=${variant_names[$i]}
+    dir=${variant_dirs[$i]}
+    mkdir -p "$dest/bin/$name"
+    for lib in ygb libyellowstone_grpc_geyser.so libyellowstone_grpc_geyser.dylib plugin-abi.txt; do
+      [[ ! -e "$dir/$lib" ]] || cp "$dir/$lib" "$dest/bin/$name/"
+    done
+    echo "$name" >>"$dest/bin/variants"
+  done
+  cp "$here"/scenarios/*.toml "$dest/scenarios/"
+  cp "$here"/layouts/*.toml "$dest/layouts/"
+  cp "$here/tools/bundle-run.sh" "$dest/run.sh"
+  chmod +x "$dest/run.sh"
+  # The bundle's --set options; run.sh passes them before the caller's own options.
+  : >"$dest/bundle.args"
+  i=0
+  while ((i < ${#passthrough[@]})); do
+    if [[ "${passthrough[$i]}" == --set ]]; then
+      printf '%s
+%s
+' --set "${passthrough[$((i + 1))]}" >>"$dest/bundle.args"
+      i=$((i + 2))
+    else
+      i=$((i + 1))
+    fi
+  done
+  if [[ -n "$fixture" ]]; then
+    local src file target
+    src=$(cd "$fixture" && pwd -P)
+    target=$dest/fixture/$(basename "$src")
+    # Hard links when the bundle shares a file system with the fixture, copies otherwise.
+    (cd "$src" && find . -type f -print0) | while IFS= read -r -d '' file; do
+      mkdir -p "$target/$(dirname "$file")"
+      ln "$src/$file" "$target/$file" 2>/dev/null || cp "$src/$file" "$target/$file"
+    done
+  fi
+  local glibc=""
+  if command -v objdump >/dev/null && [[ "$(uname -s)" == Linux ]]; then
+    glibc=$(for dir in "$dest"/bin/*/; do objdump -T "$dir"ygb "$dir"libyellowstone_grpc_geyser.so 2>/dev/null; done |
+      grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1 || true)
+  fi
+  {
+    echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ) on $(uname -sm)"
+    echo "harness: $(git -C "$root" rev-parse --short HEAD) on $(git -C "$root" branch --show-current)"
+    for i in "${!variant_names[@]}"; do
+      echo "variant ${variant_names[$i]}: $(sed -n 's/^commit: //p' "${variant_dirs[$i]}/plugin-abi.txt")"
+    done
+    echo "fixture: ${fixture:+$(basename "$fixture")}"
+    [[ -z "$glibc" ]] || echo "glibc: $glibc"
+  } >"$dest/MANIFEST.txt"
+  "$dest/run.sh" help >"$dest/README.txt"
+  echo "bundle: $dest ($(du -sh "$dest" | cut -f1))" >&2
+  echo "copy it with: rsync -a --info=progress2 $dest/ SERVER:$(basename "$dest")/" >&2
+  echo "then on the server: cd $(basename "$dest") && ./run.sh start --scenario prod-like" >&2
+}
+
+if [[ -n "$bundle" && -z "$fixture" ]]; then
+  make_bundle "$bundle"
+  exit 0
+fi
 
 if [[ ! -f "$fixture/manifest.json" ]]; then
   if ((record_slots == 0)); then
@@ -169,6 +248,11 @@ if [[ ! -f "$fixture/manifest.json" ]]; then
   echo "recording $record_slots slots from $endpoint into $fixture (about 2.6 GB per 1000 slots)" >&2
   "$ygb" record --endpoint "$endpoint" --out "$fixture" --slots "$record_slots" --tail-secs 40 --split-accounts
   "$ygb" inspect --fixture "$fixture" | tee "$fixture.inspect.txt"
+fi
+
+if [[ -n "$bundle" ]]; then
+  make_bundle "$bundle"
+  exit 0
 fi
 
 out=${out:-$(dirname "$root")/ygb-results/$(basename "$scenario_file" .toml)-$(date -u +%Y%m%dT%H%M%SZ)}
