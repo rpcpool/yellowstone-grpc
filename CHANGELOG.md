@@ -20,6 +20,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- client: `DedupStream` prunes slots whose first message is a `BlockMeta`. They were sealed without being added to the retention queue, so with a `blocks_meta` filter and no `slots` filter the dedup state grew by one entry per slot until the process ran out of memory.
 - client: `DedupStream` drops a replayed `CreatedBank` of a bank it already delivered. It used to read it as a rollback and forget the bank, so the replayed copy of the block reached the client a second time. A `CreatedBank` of a new bank, or one without a `bank_id`, still resets the slot.
 
 ### Misc
