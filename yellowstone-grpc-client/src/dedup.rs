@@ -525,6 +525,11 @@ impl DedupState {
 
                 // First BlockMeta for this slot: seal it. The SlotState is destroyed;
                 // only the blockhash and statuses survive in the compressed SealedSlot.
+                // A slot first seen here is not in slot_order yet; register it so prune() can
+                // drop it, otherwise blocks_meta-only streams grow `sealed` without bound.
+                if !self.inflight.contains_key(&slot) {
+                    self.slot_order.push_back(slot);
+                }
                 let state = self.inflight.remove(&slot).unwrap_or_default();
                 self.sealed.insert(
                     slot,
@@ -1232,6 +1237,36 @@ mod tests {
             assert!(matches!(observe(&mut dedup, &created), Observation::New));
             observe(&mut dedup, &make_block_meta_msg(900));
         }
+    }
+
+    #[test]
+    fn test_block_meta_only_slots_are_pruned() {
+        let mut dedup = DedupState::with_slot_retention(5);
+
+        for slot in 1..=10_000 {
+            observe(&mut dedup, &make_block_meta_msg(slot));
+        }
+
+        assert_eq!(dedup.sealed.len(), 5);
+        assert_eq!(dedup.slot_order.len(), 5);
+        for slot in 9_996..=10_000 {
+            assert!(dedup.sealed.contains_key(&slot));
+        }
+    }
+
+    #[test]
+    fn test_mixed_slots_registered_once() {
+        let mut dedup = DedupState::with_slot_retention(3);
+
+        for slot in 1..=1_000 {
+            if slot % 2 == 0 {
+                observe(&mut dedup, &make_slot_msg(slot, 0));
+            }
+            observe(&mut dedup, &make_block_meta_msg(slot));
+        }
+
+        assert_eq!(dedup.slot_order.len(), 3);
+        assert_eq!(dedup.sealed.len() + dedup.inflight.len(), 3);
     }
 
     #[test]
