@@ -37,7 +37,7 @@ pub struct RunArgs {
     /// Run directory for the rendered plugin config and the results
     #[clap(long)]
     pub out: PathBuf,
-    /// Plugin config template; defaults to the prod streaming template
+    /// Plugin config template; defaults to configs/geyser-streaming.json
     #[clap(long)]
     pub config_template: Option<PathBuf>,
     #[clap(long, default_value_t = 10000)]
@@ -123,7 +123,7 @@ pub struct RunArgs {
     /// Scheduler-worker lanes for transaction account writes, with `--lanes agave`
     #[clap(long, default_value_t = 4)]
     pub sched_lanes: usize,
-    /// CPUs for the entry-notifier and transaction-status lanes; production runs them on the plugin's cores
+    /// CPUs for the entry-notifier and transaction-status lanes, e.g. the plugin's own cores
     #[clap(long)]
     pub notifier_cpus: Option<String>,
     /// Passed to the fleet: seconds between scrapes of the plugin's metrics; 0 disables
@@ -163,7 +163,7 @@ pub fn run(args: RunArgs) -> anyhow::Result<()> {
     // The plugin checks tokio.affinity against this thread's CPUs, so pin it only after the load.
     let plugin = plugin::load(&args.plugin, &config_path)?;
     sys::pin_current_thread(&driver_cpus)?;
-    // Production pins the plugin's helper threads with its runtime, in the rescheduler's geyser pool.
+    // The plugin's helper threads run with its runtime, as when a validator pins the whole plugin.
     let pinned = sys::pin_by_name(&PLUGIN_HELPER_THREADS, &plugin_cpus);
     info!("pinned {pinned} plugin helper threads to the plugin CPUs");
     if let Some(priority) = args.fifo_priority {

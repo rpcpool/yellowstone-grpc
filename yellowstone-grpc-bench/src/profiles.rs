@@ -1,5 +1,5 @@
-//! `ygb profiles`: synthetic subscribers shaped like production, with keys drawn from a fixture.
-//! Filter shapes follow fra215 `filter_stats`; the cold-key share is calibrated to production rates.
+//! `ygb profiles`: synthetic subscribers with realistic filter shapes and keys drawn from a fixture.
+//! The share of keys that never update is calibrated to the scenario's per-stream rate targets.
 //! Networks, churn, slow links and subscription ids come from the scenario's `[mix]`.
 
 use {
@@ -110,7 +110,7 @@ pub fn generate_from(
     load.extend(special_streams(mix));
     assign_customers(mix, &mut load)?;
     let mut subscribers = load;
-    subscribers.extend(probe_streams(mix, probes)?);
+    subscribers.extend(probe_streams(mix, probes, activity)?);
     Ok(Profile {
         description: format!(
             "{} load streams from {} (seed {}, cold key share {cold:.3}, predicted {:.0} msg/s), {} blocks, {} deshred, {} probes",
@@ -120,7 +120,7 @@ pub fn generate_from(
             rates.iter().sum::<f64>(),
             mix.blocks,
             mix.deshred,
-            probes.streamlab + probes.confirmed,
+            probes.processed + probes.confirmed,
         ),
         subscribers,
         unary: mix
@@ -303,7 +303,7 @@ fn split<T: Copy>(
         .collect())
 }
 
-/// Production-shaped load streams with their predicted message rates.
+/// Load streams with realistic filter shapes and their predicted message rates.
 fn load_streams(
     mix: &MixSpec,
     activity: &Activity,
@@ -413,7 +413,7 @@ fn load_streams(
             );
             rate += chosen.values().sum::<f64>();
         }
-        // About 3% of fra215 customers also take transaction statuses (filter_stats, transaction_status).
+        // About 3% of streams also take transaction statuses.
         if rng.chance(0.03) {
             let mut chosen: HashMap<String, f64> = HashMap::new();
             for _ in 0..rng.range(1, 100) {
@@ -566,8 +566,64 @@ fn geometric(rng: &mut Rng, mean: f64) -> usize {
     1 + (rng.unit().max(1e-12).ln() / (1.0 - p).ln()) as usize
 }
 
-/// Streamlab's exact subscription from nyc289, uncompressed and zstd, plus confirmed copies.
-fn probe_streams(mix: &MixSpec, probes: &ProbeSpec) -> anyhow::Result<Vec<Subscriber>> {
+/// The probes' narrow subscription: the scenario's keys, or busy keys picked from the fixture.
+fn probe_request(probes: &ProbeSpec, activity: &Activity) -> Request {
+    // Keys whose update rate is nearest `rate` per second; ties go by key, so a fixture always picks the same.
+    let pick =
+        |keys: &[(String, f64)], configured: &[String], count: usize, rate: f64| -> Vec<String> {
+            if !configured.is_empty() {
+                return configured.to_vec();
+            }
+            let mut ranked: Vec<&(String, f64)> = keys.iter().collect();
+            ranked.sort_by(|a, b| {
+                (a.1 - rate)
+                    .abs()
+                    .total_cmp(&(b.1 - rate).abs())
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            ranked
+                .into_iter()
+                .take(count)
+                .map(|(key, _)| key.clone())
+                .collect()
+        };
+    let mut accounts = BTreeMap::new();
+    accounts.insert(
+        "probe_account".to_owned(),
+        AccountsFilter {
+            account: pick(&activity.pubkeys, &probes.accounts, 1, 5.0),
+            owner: vec![],
+        },
+    );
+    accounts.insert(
+        "probe_owner".to_owned(),
+        AccountsFilter {
+            account: vec![],
+            owner: pick(&activity.owners, &probes.owners, 1, 20.0),
+        },
+    );
+    let mut transactions = BTreeMap::new();
+    transactions.insert(
+        "probe".to_owned(),
+        TransactionsFilter {
+            account_include: pick(&activity.tx_keys, &probes.transactions, 2, 20.0),
+            ..Default::default()
+        },
+    );
+    Request {
+        accounts,
+        transactions,
+        entries: true,
+        ..Default::default()
+    }
+}
+
+/// Probes at processed, uncompressed and zstd, plus confirmed copies, all with one subscription.
+fn probe_streams(
+    mix: &MixSpec,
+    probes: &ProbeSpec,
+    activity: &Activity,
+) -> anyhow::Result<Vec<Subscriber>> {
     let (link, windows_kib) = match &probes.network {
         Some(name) => {
             let profile = mix
@@ -582,44 +638,7 @@ fn probe_streams(mix: &MixSpec, probes: &ProbeSpec) -> anyhow::Result<Vec<Subscr
         }
         None => (None, None),
     };
-    let streamlab = || {
-        let mut accounts = BTreeMap::new();
-        accounts.insert(
-            "streamlab_ping".to_owned(),
-            AccountsFilter {
-                account: vec!["ping6gwBZx1ccMMFyLgkVSupUmujYrFidEXuNRPq989".to_owned()],
-                owner: vec![],
-            },
-        );
-        accounts.insert(
-            "streamlab_owner".to_owned(),
-            AccountsFilter {
-                account: vec![],
-                owner: vec!["9H6tua7jkLhdm3w8BvgpTn5LZNU7g4ZynDmCiNN3q6Rp".to_owned()],
-            },
-        );
-        let mut transactions = BTreeMap::new();
-        transactions.insert(
-            "streamlab".to_owned(),
-            TransactionsFilter {
-                account_include: [
-                    "9H6tua7jkLhdm3w8BvgpTn5LZNU7g4ZynDmCiNN3q6Rp",
-                    "HEvSKofvBgfaexv23kMabbYqxasxU3mQ4ibBMEmJWHny",
-                    "ping6gwBZx1ccMMFyLgkVSupUmujYrFidEXuNRPq989",
-                    "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ",
-                ]
-                .map(str::to_owned)
-                .to_vec(),
-                ..Default::default()
-            },
-        );
-        Request {
-            accounts,
-            transactions,
-            entries: true,
-            ..Default::default()
-        }
-    };
+    let request = probe_request(probes, activity);
     let probe = |name: &str, class: &str, compression, count, request| Subscriber {
         name: name.to_owned(),
         class: class.to_owned(),
@@ -632,35 +651,35 @@ fn probe_streams(mix: &MixSpec, probes: &ProbeSpec) -> anyhow::Result<Vec<Subscr
         churn: None,
         windows_kib,
     };
-    let half = probes.streamlab / 2;
+    let half = probes.processed / 2;
     let mut subscribers = Vec::new();
-    if probes.streamlab - half > 0 {
+    if probes.processed - half > 0 {
         subscribers.push(probe(
-            "streamlab-none",
-            "streamlab",
+            "probe-none",
+            "probe",
             Compression::None,
-            probes.streamlab - half,
-            streamlab(),
+            probes.processed - half,
+            request.clone(),
         ));
     }
     if half > 0 {
         subscribers.push(probe(
-            "streamlab-zstd",
-            "streamlab",
+            "probe-zstd",
+            "probe",
             Compression::Zstd,
             half,
-            streamlab(),
+            request.clone(),
         ));
     }
     if probes.confirmed > 0 {
         subscribers.push(probe(
-            "streamlab-confirmed",
-            "streamlab-confirmed",
+            "probe-confirmed",
+            "probe-confirmed",
             Compression::None,
             probes.confirmed,
             Request {
                 commitment: Commitment::Confirmed,
-                ..streamlab()
+                ..request
             },
         ));
     }

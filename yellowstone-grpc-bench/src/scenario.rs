@@ -74,12 +74,12 @@ const fn default_warmup() -> u64 {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginSpec {
-    /// grpc.replay_stored_slots; prod streaming nodes use 1000.
+    /// grpc.replay_stored_slots; the bundled config keeps 1000.
     #[serde(default)]
     pub replay_stored_slots: Option<u64>,
     #[serde(default)]
     pub worker_threads: Option<usize>,
-    /// Plugin config template; the prod streaming template when unset.
+    /// Plugin config template; configs/geyser-streaming.json when unset.
     #[serde(default)]
     pub config_template: Option<String>,
     /// Environment for the plugin, e.g. experiment switches.
@@ -100,7 +100,7 @@ pub struct DriverSpec {
     /// Scheduler-worker threads that deliver transaction account writes.
     #[serde(default = "default_sched_lanes")]
     pub sched_lanes: usize,
-    /// Entry-notifier and transaction-status threads share the plugin CPUs, as in production.
+    /// Entry-notifier and transaction-status threads share the plugin CPUs.
     #[serde(default = "default_true")]
     pub notifiers_on_plugin_cpus: bool,
 }
@@ -140,7 +140,7 @@ pub struct MixSpec {
     pub blocks: usize,
     #[serde(default)]
     pub deshred: usize,
-    /// Mean streams per `x-subscription-id`; prod fra215 has about 3.7.
+    /// Mean streams per `x-subscription-id`.
     #[serde(default = "default_streams_per_id")]
     pub streams_per_id: f64,
     /// Share of subscribed keys that never update: `auto` calibrates it against `rate_targets`.
@@ -321,28 +321,40 @@ pub struct SlowSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProbeSpec {
-    /// Streamlab-shaped probes; half uncompressed, half zstd.
-    #[serde(default = "default_streamlab")]
-    pub streamlab: usize,
-    /// Streamlab-shaped probes at confirmed.
+    /// Probes at processed; half uncompressed, half zstd.
+    #[serde(default = "default_processed_probes")]
+    pub processed: usize,
+    /// Probes at confirmed.
     #[serde(default = "default_confirmed")]
     pub confirmed: usize,
     /// Network profile name for the probes; local when unset.
     #[serde(default)]
     pub network: Option<String>,
+    /// Account pubkeys the probes watch; one busy account from the fixture when empty.
+    #[serde(default)]
+    pub accounts: Vec<String>,
+    /// Owners the probes watch; one busy owner from the fixture when empty.
+    #[serde(default)]
+    pub owners: Vec<String>,
+    /// Transaction `account_include` keys; two busy keys from the fixture when empty.
+    #[serde(default)]
+    pub transactions: Vec<String>,
 }
 
 impl Default for ProbeSpec {
     fn default() -> Self {
         Self {
-            streamlab: default_streamlab(),
+            processed: default_processed_probes(),
             confirmed: default_confirmed(),
             network: None,
+            accounts: Vec::new(),
+            owners: Vec::new(),
+            transactions: Vec::new(),
         }
     }
 }
 
-const fn default_streamlab() -> usize {
+const fn default_processed_probes() -> usize {
     8
 }
 const fn default_confirmed() -> usize {
@@ -358,7 +370,7 @@ pub struct FleetSpec {
     pub stream_window_mib: u32,
     #[serde(default = "default_connection_window_mib")]
     pub connection_window_mib: u32,
-    /// Seconds between scrapes of the plugin's metrics, as production's agent does; 0 disables.
+    /// Seconds between scrapes of the plugin's metrics, as a metrics agent does; 0 disables.
     #[serde(default = "default_scrape_secs")]
     pub scrape_secs: f64,
 }

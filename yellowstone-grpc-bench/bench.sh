@@ -14,10 +14,11 @@ Usage: yellowstone-grpc-bench/bench.sh [options]
                          stress) or a TOML file (default: quick)
   --fixture DIR          fixture directory (default: $YGB_FIXTURE)
   --record SLOTS         record SLOTS slots into --fixture first when it has no manifest
-  --endpoint URL         node to record from (default: https://nyc226.nodes.rpcpool.com:10000)
+  --endpoint URL         gRPC endpoint of the node to record from, with --record
   --variant NAME=REF     build git REF as variant NAME; `.` is this checkout as it is. Repeat for
                          an A/B; the first variant is the baseline (default: base=.)
-  --flavour FLAVOUR      public-fork (production tonic fork, default) or public
+  --flavour FLAVOUR      public (upstream tonic) or patched (tonic from YGB_TONIC_GIT at
+                         YGB_TONIC_TAG); patched is the default when YGB_TONIC_GIT is set
   --layout FILE          CPU layout (default: detected; see layouts/)
   --out DIR              results (default: ../ygb-results/<scenario>-<UTC time> next to the repo)
   --set KEY=VALUE        override a scenario key, e.g. --set plugin.fifo_priority=40
@@ -43,8 +44,9 @@ USAGE
 scenario=quick
 fixture=${YGB_FIXTURE:-}
 record_slots=0
-endpoint=https://nyc226.nodes.rpcpool.com:10000
-flavour=public-fork
+endpoint=""
+flavour=public
+[[ -z "${YGB_TONIC_GIT:-}" ]] || flavour=patched
 out=""
 layout=""
 bundle=""
@@ -241,8 +243,8 @@ if [[ -n "$bundle" && -z "$fixture" ]]; then
 fi
 
 if [[ ! -f "$fixture/manifest.json" ]]; then
-  if ((record_slots == 0)); then
-    echo "no fixture at $fixture; add --record SLOTS to record one from $endpoint" >&2
+  if ((record_slots == 0)) || [[ -z "$endpoint" ]]; then
+    echo "no fixture at $fixture; add --record SLOTS --endpoint URL to record one" >&2
     exit 1
   fi
   echo "recording $record_slots slots from $endpoint into $fixture (about 2.6 GB per 1000 slots)" >&2

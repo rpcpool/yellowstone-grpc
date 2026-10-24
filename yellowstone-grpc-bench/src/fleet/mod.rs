@@ -72,7 +72,7 @@ pub struct FleetArgs {
     /// Plugin Prometheus address to scrape, e.g. 127.0.0.1:9123
     #[clap(long)]
     pub scrape: Option<String>,
-    /// Seconds between scrapes; production scrapes every 10 s
+    /// Seconds between scrapes; 10 s is a common scrape interval
     #[clap(long, default_value_t = 10.0)]
     pub scrape_secs: f64,
 }
@@ -718,7 +718,7 @@ async fn run_stream(
         if attempt_started.elapsed() > Duration::from_secs(30) {
             backoff = Duration::from_secs(1);
         }
-        // Load subscribers come back like production clients: after a backoff, on a new connection.
+        // Load subscribers come back like real clients: after a backoff, on a new connection.
         send_request = reconnect(&context, &sub, &mut report, &mut backoff, &mut stop_rx).await;
         from_slot = resume_slot(
             sub.spec

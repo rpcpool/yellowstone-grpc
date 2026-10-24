@@ -31,7 +31,7 @@ pub const RUN_GROUPS: [(&str, &str); 7] = [
 
 /// Groups whose threads run on the plugin CPUs in `ygb run`.
 pub const RUN_OWN: [&str; 3] = ["plugin_workers", "plugin_block_meta", "plugin_trace"];
-/// The same, when the notifier lanes share the plugin CPUs as in production.
+/// The same, when the notifier lanes share the plugin CPUs.
 pub const RUN_OWN_WITH_NOTIFIERS: [&str; 4] = [
     "plugin_workers",
     "plugin_block_meta",

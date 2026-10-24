@@ -53,7 +53,7 @@ pub struct BenchArgs {
     /// CPU layout file (TOML); detected from /sys when unset
     #[clap(long)]
     pub layout: Option<PathBuf>,
-    /// Physical cores for the plugin in an auto layout (production uses 6 with SMT)
+    /// Physical cores for the plugin in an auto layout (6, with their SMT siblings, by default)
     #[clap(long, default_value_t = 6)]
     pub plugin_cores: usize,
     /// Only run cases whose name contains this
@@ -766,7 +766,7 @@ fn delivery(fleet: &FleetReport, paced_from: Option<u64>) -> Delivery {
     out
 }
 
-/// One line per run for the log: the streamlab account, transaction and entry p99, and plugin CPU.
+/// One line per run for the log: the probes' account, transaction and entry p99, and plugin CPU.
 fn headline(result: &RunResult) -> String {
     let cell = |kind: &str| {
         result
@@ -774,13 +774,13 @@ fn headline(result: &RunResult) -> String {
             .as_ref()
             .and_then(|report| {
                 report.rows.iter().find(|row| {
-                    row.class == "streamlab" && row.compression == "none" && row.kind == kind
+                    row.class == "probe" && row.compression == "none" && row.kind == kind
                 })
             })
             .map_or("-".to_owned(), |row| format!("{:.0}", row.p99_us))
     };
     format!(
-        "streamlab p99 account {} tx {} entry {} us; plugin {:.2} cores",
+        "probe p99 account {} tx {} entry {} us; plugin {:.2} cores",
         cell("account"),
         cell("transaction"),
         cell("entry"),
@@ -852,7 +852,7 @@ fn summary_markdown(summary: &Summary, scenario: &Scenario) -> String {
         Layout::cpu_list(&summary.layout.probes),
         Layout::cpu_list(&summary.layout.load),
     );
-    md.push_str("Streamlab-shaped probes: latency from the plugin's `created_at` to receipt in µs, as p50 / p99 / p99.9 / median per-slot p99.\n\n");
+    md.push_str("Probes: latency from the plugin's `created_at` to receipt in µs, as p50 / p99 / p99.9 / median per-slot p99.\n\n");
     md.push_str("| run | variant | account | transaction | entry | account zstd | confirmed account | plugin cores | valid |\n");
     md.push_str("|---|---|---|---|---|---|---|---|---|\n");
     for run in &summary.runs {
@@ -879,11 +879,11 @@ fn summary_markdown(summary: &Summary, scenario: &Scenario) -> String {
             "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             run.point.label(),
             run.variant,
-            cell("streamlab", "none", "account"),
-            cell("streamlab", "none", "transaction"),
-            cell("streamlab", "none", "entry"),
-            cell("streamlab", "zstd", "account"),
-            cell("streamlab-confirmed", "none", "account"),
+            cell("probe", "none", "account"),
+            cell("probe", "none", "transaction"),
+            cell("probe", "none", "entry"),
+            cell("probe", "zstd", "account"),
+            cell("probe-confirmed", "none", "account"),
             run.plugin_cores
                 .map_or("-".to_owned(), |cores| format!("{cores:.2}")),
             if run.valid {
@@ -895,7 +895,7 @@ fn summary_markdown(summary: &Summary, scenario: &Scenario) -> String {
     }
     let targets = scenario.mix.rate_targets;
     md.push_str(&format!(
-        "\nLoad the fleet received. Per-stream msg/s targets from production: p50 {:.0}, p90 {:.0}, p99 {:.0}.\n\n",
+        "\nLoad the fleet received. Per-stream msg/s targets (mix.rate_targets): p50 {:.0}, p90 {:.0}, p99 {:.0}.\n\n",
         targets[0], targets[1], targets[2]
     ));
     md.push_str("| run | variant | streams | msg/s | MiB/s | per-stream msg/s p50 / p90 / p99 | emulated links | churn reconnects | ended (emulated/local) | slowest scrape | unary/s (slowest p99) | probe chunk p99 |\n");
@@ -930,7 +930,7 @@ fn summary_markdown(summary: &Summary, scenario: &Scenario) -> String {
             for row in comparison
                 .rows
                 .iter()
-                .filter(|row| row.group.starts_with("streamlab"))
+                .filter(|row| row.group.starts_with("probe"))
             {
                 md.push_str(&format!(
                     "| {} | r{} | {} | {} | {} | {:+.1}% | {:.0}..{:.0} |\n",

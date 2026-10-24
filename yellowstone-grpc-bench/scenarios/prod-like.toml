@@ -1,8 +1,8 @@
-# A production streaming node: filter shapes from fra215 filter_stats, customers with several
+# A busy streaming node: realistic filter shapes, customers with several
 # streams each, a geographic network mix, compression and commitment splits, churn and slow readers.
 # The network weights and the compression split are estimates; replace them when measured.
 name = "prod-like"
-description = "Production-shaped fleet on geographic links, swept over the number of load streams, plus full-block subscribers."
+description = "Busy-node fleet on geographic links, swept over the number of load streams, plus full-block subscribers."
 
 [window]
 start = "heaviest"
@@ -11,7 +11,7 @@ prefill_slots = 300
 warmup_secs = 60
 
 [plugin]
-# Production keeps 1000 slots; 300 fits a 48 GiB codespace. Raise it with --set on a larger host.
+# The bundled config keeps 1000 slots; 300 fits in 48 GiB of memory. Raise it with --set on a larger host.
 replay_stored_slots = 300
 
 [mix]
@@ -21,7 +21,7 @@ deshred = 4
 streams_per_id = 3.7
 commitment = { processed = 90, confirmed = 7, finalized = 3 }
 compression = { none = 40, zstd = 50, gzip = 10 }
-# nyc227's unary load, 30-minute average on 2026-10-21 (method_call_count).
+# Unary load of a busy node.
 unary = { get_slot = 240, get_latest_blockhash = 240, get_block_height = 240, ping = 1 }
 
 # Same metro or colo: below what user-space emulation resolves, so local.
@@ -67,7 +67,7 @@ bandwidth_mbps = [20, 100]
 stall_every_secs = 30
 stall_ms = 200
 
-# About 0.4 stream ends per second, as on nyc227 (client_disconnects_total over 6 h).
+# About 0.4 stream ends per second.
 [mix.churn]
 share = 10
 every_secs = 110

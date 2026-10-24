@@ -22,7 +22,7 @@ Usage: ./run.sh COMMAND [options]
 Options for start and run:
   --scenario NAME|FILE   bundled scenario (quick, prod-like, ab, network, compression, stress) or a file
   --fixture DIR          fixture directory (default: the one in fixture/)
-  --layout NAME|FILE     bundled layout (codespace, nyc226) or a file (default: detected)
+  --layout NAME|FILE     bundled layout (see layouts/) or a file (default: detected)
   --out DIR              results directory (default: results/<scenario>-<UTC time>)
   --variants A,B         run only these bundled variants, in this order (default: all, see bin/variants)
   Any other option goes to `ygb bench`, e.g. --set KEY=VALUE, --only TEXT, --max-foreign SHARE,
@@ -154,7 +154,7 @@ case "${1:-help}" in
       exit 0
     fi
     log=$(cat "$results/current.log")
-    { grep -E 'plan:|\] \[[0-9]+/[0-9]+\]|: streamlab p99|invalid|Error' "$log" || true; } | tail -6 | sed 's/^\[[^]]*\] *//'
+    { grep -E 'plan:|\] \[[0-9]+/[0-9]+\]|: probe p99|invalid|Error' "$log" || true; } | tail -6 | sed 's/^\[[^]]*\] *//'
     summary=$(cat "$results/last.out")/summary.md
     if [[ -f "$summary" ]]; then echo "summary: $summary"; fi
     ;;

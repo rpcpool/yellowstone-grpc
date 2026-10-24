@@ -109,7 +109,7 @@ fn plan(mut cores: Vec<Core>, cpu_count: usize, plugin_cores: usize) -> anyhow::
         cores.len()
     );
 
-    // The plugin takes the smallest L3 domain with enough cores, so it sees a production-sized cache.
+    // The plugin takes the smallest L3 domain with enough cores, so it sees one server CCD's cache.
     let mut domains: BTreeMap<String, (u64, Vec<usize>)> = BTreeMap::new();
     for (index, core) in cores.iter().enumerate() {
         domains

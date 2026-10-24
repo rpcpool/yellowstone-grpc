@@ -1,7 +1,0 @@
-# 7950X3D codespace: the plugin on CCD1 (32 MiB L3, like one production CCD), the rest on CCD0.
-plugin = [8, 9, 10, 11, 12, 13, 24, 25, 26, 27, 28, 29]
-driver = [2, 3, 18, 19]
-decoder = [4, 5, 20, 21]
-probes = [0, 1, 16, 17]
-load = [6, 7, 14, 15, 22, 23, 30, 31]
-note = "codespace 7950X3D: plugin on CCD1"

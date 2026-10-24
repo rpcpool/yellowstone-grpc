@@ -1,7 +1,7 @@
 # Decision run for two builds: run with two --variant flags; the first is the baseline.
 # Local links keep fleet noise out of the comparison; prod-like.toml covers the network.
 name = "ab"
-description = "A/B of plugin builds: production filter mix at 400 local streams, three repeats, variant order rotated."
+description = "A/B of plugin builds: realistic filter mix at 400 local streams, three repeats, variant order rotated."
 
 [window]
 start = "heaviest"
@@ -15,7 +15,7 @@ replay_stored_slots = 300
 [mix]
 streams = 400
 deshred = 4
-# tyo236's unary load, 30-minute average on 2026-10-21.
+# Unary load of a moderately busy node.
 unary = { get_slot = 120, get_latest_blockhash = 120, get_block_height = 120, ping = 1 }
 
 [[cases]]

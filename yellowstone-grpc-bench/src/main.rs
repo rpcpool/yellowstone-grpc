@@ -46,7 +46,7 @@ enum Command {
     Fleet(fleet::FleetArgs),
     /// Summarize probe latencies of a run
     Report(report::ReportArgs),
-    /// Generate a production-shaped subscriber profile from a fixture
+    /// Generate a subscriber profile with realistic filters from a fixture
     Profiles(profiles::GenArgs),
     /// Paired A/B of two runs over the same window, by per-slot p99
     Compare(compare::CompareArgs),

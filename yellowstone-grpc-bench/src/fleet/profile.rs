@@ -104,7 +104,7 @@ pub struct Request {
 #[serde(deny_unknown_fields)]
 pub struct Subscriber {
     pub name: String,
-    /// Probe class used to group results, e.g. `streamlab`.
+    /// Probe class used to group results, e.g. `probe`.
     pub class: String,
     pub role: Role,
     pub compression: Compression,

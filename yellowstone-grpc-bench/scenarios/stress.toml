@@ -15,7 +15,7 @@ replay_stored_slots = 300
 streams = 300
 blocks = 12
 deshred = 16
-# tyo236's unary load, 30-minute average on 2026-10-21.
+# Unary load of a moderately busy node.
 unary = { get_slot = 120, get_latest_blockhash = 120, get_block_height = 120, ping = 1 }
 
 [[cases]]

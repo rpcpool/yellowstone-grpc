@@ -146,7 +146,7 @@ pub struct LaneConfig {
     pub leader: bool,
     pub speed: f64,
     pub cpus: Vec<usize>,
-    /// Agave's notifier threads run at SCHED_FIFO on production streaming nodes.
+    /// SCHED_FIFO priority for this lane, as validators that run agave's notifier threads at FIFO.
     pub fifo_priority: Option<i32>,
 }
 

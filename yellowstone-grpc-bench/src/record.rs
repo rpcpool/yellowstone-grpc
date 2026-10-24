@@ -30,12 +30,10 @@ use {
     },
 };
 
-const DEFAULT_ENDPOINT: &str = "https://nyc226.nodes.rpcpool.com:10000";
-
 #[derive(Debug, clap::Args)]
 pub struct RecordArgs {
     /// gRPC endpoint of the node to record
-    #[clap(long, default_value = DEFAULT_ENDPOINT)]
+    #[clap(long)]
     endpoint: String,
     /// TLS server name, when the endpoint host is not covered by the node's certificate
     #[clap(long)]

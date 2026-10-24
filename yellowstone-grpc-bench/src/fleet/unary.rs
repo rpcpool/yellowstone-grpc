@@ -1,4 +1,4 @@
-//! Unary calls at production rates. GetSlot, GetLatestBlockhash and GetBlockHeight run on the plugin's
+//! Unary calls at steady rates. GetSlot, GetLatestBlockhash and GetBlockHeight run on the plugin's
 //! runtime and read the block-meta store, so they compete with processed delivery.
 
 use {
