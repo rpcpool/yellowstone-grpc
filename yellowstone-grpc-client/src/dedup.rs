@@ -523,9 +523,8 @@ impl DedupState {
                     return Observation::ReplayComplete { same };
                 }
 
-                // First BlockMeta for this slot: seal it. The SlotState is destroyed;
-                // only the blockhash and statuses survive in the compressed SealedSlot.
-                // A slot first seen at BlockMeta is not in slot_order yet; add it so prune evicts it.
+                // First BlockMeta seals the slot; only the blockhash and statuses survive.
+                // A slot first seen here is not in slot_order yet, so add it for prune to evict.
                 let state = self.inflight.remove(&slot).unwrap_or_else(|| {
                     self.slot_order.push_back(slot);
                     SlotState::default()
