@@ -525,7 +525,11 @@ impl DedupState {
 
                 // First BlockMeta for this slot: seal it. The SlotState is destroyed;
                 // only the blockhash and statuses survive in the compressed SealedSlot.
-                let state = self.inflight.remove(&slot).unwrap_or_default();
+                // A slot first seen at BlockMeta is not in slot_order yet; add it so prune evicts it.
+                let state = self.inflight.remove(&slot).unwrap_or_else(|| {
+                    self.slot_order.push_back(slot);
+                    SlotState::default()
+                });
                 self.sealed.insert(
                     slot,
                     SealedSlot {
@@ -1251,5 +1255,44 @@ mod tests {
             observe(&mut dedup, &make_slot_msg(800, 0)),
             Observation::New
         ));
+    }
+
+    #[test]
+    fn test_block_meta_only_stream_is_pruned() {
+        let retention = 10;
+        let mut dedup = DedupState::with_slot_retention(retention);
+
+        // a blocks_meta-only subscription: BlockMeta is the first message of every slot
+        for slot in 0..1_000 {
+            assert!(matches!(
+                observe(&mut dedup, &make_block_meta_msg(slot)),
+                Observation::New
+            ));
+        }
+
+        assert_eq!(dedup.slot_order.len(), retention);
+        assert_eq!(dedup.sealed.len(), retention);
+        assert!(dedup.sealed.contains_key(&999));
+        assert!(!dedup.sealed.contains_key(&989));
+    }
+
+    #[test]
+    fn test_block_meta_before_processed_is_pruned() {
+        let retention = 10;
+        let mut dedup = DedupState::with_slot_retention(retention);
+
+        // without interslot_updates, BlockMeta usually reaches the client before Processed
+        let processed = SlotStatus::SlotProcessed as i32;
+        for slot in 0..1_000 {
+            observe(&mut dedup, &make_block_meta_msg(slot));
+            assert!(matches!(
+                observe(&mut dedup, &make_slot_msg(slot, processed)),
+                Observation::New
+            ));
+        }
+
+        assert_eq!(dedup.slot_order.len(), retention);
+        assert_eq!(dedup.sealed.len(), retention);
+        assert!(dedup.inflight.is_empty());
     }
 }
