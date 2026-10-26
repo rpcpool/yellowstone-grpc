@@ -10,7 +10,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
-- yellowstone-grpc-client 16.0.0
+- yellowstone-grpc-client 16.0.1
 - yellowstone-grpc-napi 0.3.1
 - @triton-one/yellowstone-grpc@9.0.1
 
