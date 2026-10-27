@@ -1,0 +1,48 @@
+# Known stall sources at 300 streams: reconnect storms with from_slot replay, many full-block
+# subscribers, many deshred subscribers, and a large share of slow readers.
+name = "stress"
+description = "Reconnect storms with from_slot, 12 block subscribers, 16 deshred subscribers, 10% slow readers."
+
+[window]
+slots = 1000
+prefill_slots = 300
+warmup_secs = 60
+
+[plugin]
+replay_stored_slots = 300
+
+[mix]
+streams = 300
+blocks = 12
+deshred = 16
+# Unary load of a moderately busy node.
+unary = { get_slot = 120, get_latest_blockhash = 120, get_block_height = 120, ping = 1 }
+
+[[cases]]
+name = "baseline"
+deshred = [4]
+
+[[cases]]
+name = "churn"
+deshred = [4]
+[cases.mix.churn]
+share = 30
+every_secs = 30
+from_slot_back = 150
+
+[[cases]]
+name = "blocks"
+blocks = [12]
+deshred = [4]
+
+[[cases]]
+name = "deshred"
+deshred = [16]
+
+[[cases]]
+name = "slow"
+deshred = [4]
+[cases.mix.slow]
+share = 10
+bandwidth_mbps = 2
+delay_ms = 20

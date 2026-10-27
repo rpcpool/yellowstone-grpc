@@ -311,13 +311,16 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_int_str"
     )]
     pub channel_capacity: usize,
-    /// Capacity of the processed broadcast ring, defaults to `channel_capacity`
+    /// Capacity, in batches, of the processed broadcast ring that streams filtering their own
+    /// batches read (see `route.rs`). Defaults to `channel_capacity`.
     #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
     pub processed_broadcast_capacity: Option<usize>,
-    /// Capacity of the confirmed broadcast ring, defaults to `channel_capacity`
+    /// Capacity, in batches, of the confirmed broadcast ring that streams filtering their own
+    /// batches read (see `route.rs`). Defaults to `channel_capacity`.
     #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
     pub confirmed_broadcast_capacity: Option<usize>,
-    /// Capacity of the finalized broadcast ring, defaults to `channel_capacity`
+    /// Capacity, in batches, of the finalized broadcast ring that streams filtering their own
+    /// batches read (see `route.rs`). Defaults to `channel_capacity`.
     #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
     pub finalized_broadcast_capacity: Option<usize>,
     #[serde(default = "ConfigGrpc::default_contact_info_channel_capacity")]
@@ -719,16 +722,16 @@ pub struct ConfigGrpcCapacities {
     /// `channel_capacity`. The shared gossip ring stays `grpc.contact_info_channel_capacity`.
     #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
     pub contact_info_channel_capacity: Option<usize>,
-    /// Capacity of the processed broadcast ring. Defaults to `processed_broadcast_capacity`,
-    /// then `channel_capacity`.
+    /// Capacity, in batches, of the processed broadcast ring. Defaults to
+    /// `processed_broadcast_capacity`, then `channel_capacity`.
     #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
     pub internal_processed_channel_capacity: Option<usize>,
-    /// Capacity of the confirmed broadcast ring. Defaults to `confirmed_broadcast_capacity`,
-    /// then `channel_capacity`.
+    /// Capacity, in batches, of the confirmed broadcast ring. Defaults to
+    /// `confirmed_broadcast_capacity`, then `channel_capacity`.
     #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
     pub internal_confirmed_channel_capacity: Option<usize>,
-    /// Capacity of the finalized broadcast ring. Defaults to `finalized_broadcast_capacity`,
-    /// then `channel_capacity`.
+    /// Capacity, in batches, of the finalized broadcast ring. Defaults to
+    /// `finalized_broadcast_capacity`, then `channel_capacity`.
     #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
     pub internal_finalized_channel_capacity: Option<usize>,
     /// Weight of an account update in a Subscribe queue. Defaults to `1`.

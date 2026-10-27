@@ -16,7 +16,8 @@ use {
         message::{
             CommitmentLevel, Message, MessageAccount, MessageAccountInfo, MessageBlock,
             MessageBlockFooter, MessageBlockMeta, MessageDeshredTransaction, MessageEntry,
-            MessageEntryUpdateParent, MessageSlot, MessageTransaction, SlotStatus,
+            MessageEntryUpdateParent, MessageSlot, MessageTransaction, MessageTransactionInfo,
+            SlotStatus,
         },
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
@@ -214,6 +215,36 @@ pub struct BlocksFilterStats {
     pub include_len: usize,
     /// Number of explicit exclusion toggles on this filter.
     pub exclude_len: usize,
+}
+
+/// Keys an update must carry for a [`Filter`] to match it, so a subscriber index can skip the
+/// filters an update cannot match. A filter group without such a key sets its `*_any` flag.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct FilterKeys {
+    /// Pubkeys of the account filters that list pubkeys and have no cuckoo filter.
+    pub accounts: Vec<Pubkey>,
+    /// The offset and first 32 bytes of a memcmp of at least 32 bytes, for the other account
+    /// filters that have one, such as the mint of token accounts.
+    pub data: Vec<(usize, Pubkey)>,
+    /// Owners of the other account filters that list owners.
+    pub owners: Vec<Pubkey>,
+    /// An account filter lists neither, so it can match any account.
+    pub accounts_any: bool,
+    /// One required key of each transaction filter, or else all its include keys.
+    pub transactions: Vec<Pubkey>,
+    /// A transaction filter has neither, so it can match any transaction.
+    pub transactions_any: bool,
+    /// An indexed transaction filter also matches the owners of token balances.
+    pub token_owners: bool,
+    pub account_filters: usize,
+    /// Transaction and transaction status filters.
+    pub transaction_filters: usize,
+    pub entries: bool,
+    pub update_parent: bool,
+    pub slots: bool,
+    pub blocks: bool,
+    pub blocks_meta: bool,
+    pub block_footer: bool,
 }
 
 /// Aggregate statistics view across all filter groups.
@@ -415,6 +446,77 @@ impl Filter {
         self.commitment
     }
 
+    /// An upper bound of the keys [`Self::keys`] lists, counted without collecting them.
+    pub fn keys_upper_bound(&self) -> usize {
+        let accounts = self.accounts.aggregates().iter().map(|aggregate| {
+            match (&aggregate.accounts, &aggregate.accounts_cuckoo) {
+                (Some(accounts), None) => accounts.len(),
+                _ => aggregate.owners.as_ref().map_or(1, |owners| owners.len()),
+            }
+        });
+        let transactions = self
+            .transactions
+            .filters
+            .iter()
+            .chain(&self.transactions_status.filters)
+            .map(|(_name, inner)| inner.account_include.len().max(1));
+        accounts.chain(transactions).sum()
+    }
+
+    /// The keys a subscriber index needs to find this filter; see [`FilterKeys`].
+    pub fn keys(&self) -> FilterKeys {
+        let mut keys = FilterKeys {
+            account_filters: self.accounts.aggregates().len(),
+            transaction_filters: self.transactions.filters.len()
+                + self.transactions_status.filters.len(),
+            ..FilterKeys::default()
+        };
+        for aggregate in self.accounts.aggregates() {
+            if let (Some(accounts), None) = (&aggregate.accounts, &aggregate.accounts_cuckoo) {
+                keys.accounts.extend(accounts);
+            } else if let Some(data) = aggregate.data_key() {
+                keys.data.push(data);
+            } else if let Some(owners) = &aggregate.owners {
+                keys.owners.extend(owners);
+            } else {
+                keys.accounts_any = true;
+            }
+        }
+        for (_name, inner) in self
+            .transactions
+            .filters
+            .iter()
+            .chain(&self.transactions_status.filters)
+        {
+            if let Some(required) = inner.account_required.first() {
+                keys.transactions.push(*required);
+            } else if !inner.account_include.is_empty() && inner.account_cuckoo.is_none() {
+                keys.transactions.extend(&inner.account_include.vec);
+            } else {
+                keys.transactions_any = true;
+                continue;
+            }
+            keys.token_owners |= inner.token_accounts.is_some();
+        }
+        for list in [&mut keys.accounts, &mut keys.owners, &mut keys.transactions] {
+            list.sort_unstable();
+            list.dedup();
+        }
+        keys.data.sort_unstable();
+        keys.data.dedup();
+        keys.entries = !self.entries.filters.is_empty();
+        keys.update_parent = !self.entries.update_parent_filters.is_empty();
+        keys.slots = !self.slots.filters.is_empty();
+        keys.blocks = !self.blocks.filters.is_empty();
+        keys.blocks_meta = !self.blocks_meta.filters.is_empty();
+        keys.block_footer = self
+            .block_footer
+            .filters
+            .iter()
+            .any(|names| !names.is_empty());
+        keys
+    }
+
     pub fn get_updates(
         &self,
         message: &Message,
@@ -506,6 +608,15 @@ impl FilterAccountAggregate {
             owners: None,
             account_state: None,
         }
+    }
+
+    /// The offset and first 32 bytes of this filter's first memcmp of at least 32 bytes.
+    fn data_key(&self) -> Option<(usize, Pubkey)> {
+        let state = self.account_state.as_ref()?;
+        state.memcmp.iter().find_map(|(offset, bytes)| {
+            let key = bytes.get(..32)?;
+            Some((*offset, Pubkey::try_from(key).ok()?))
+        })
     }
 
     const fn match_txn_signature(&self, txn_signature: &Option<Signature>) -> bool {
@@ -1447,16 +1558,12 @@ impl FilterAccountsState {
         if self.lamports.iter().any(|f| !f.is_match(lamports)) {
             return false;
         }
-        for (offset, bytes) in self.memcmp.iter() {
-            if data.len() < *offset + bytes.len() {
-                return false;
-            }
-            let data = &data[*offset..*offset + bytes.len()];
-            if data != bytes {
-                return false;
-            }
-        }
-        true
+        self.memcmp.iter().all(|(offset, bytes)| {
+            offset
+                .checked_add(bytes.len())
+                .and_then(|end| data.get(*offset..end))
+                .is_some_and(|window| window == bytes.as_slice())
+        })
     }
 }
 
@@ -1725,10 +1832,7 @@ impl FilterTransactions {
                 // configured mode skips the scan entirely.
                 let token_owners: Option<&FoldHashSet<Pubkey>> =
                     inner.token_accounts.map(|mode| match mode {
-                        TokenAccountsMode::All => message
-                            .transaction
-                            .token_owners_all
-                            .get_or_init(|| owners_in_any_balance(&message.transaction.meta)),
+                        TokenAccountsMode::All => token_balance_owners(&message.transaction),
                         TokenAccountsMode::BalanceChanged => message
                             .transaction
                             .token_owners_changed
@@ -1803,6 +1907,14 @@ impl FilterTransactions {
             message.created_at
         )
     }
+}
+
+/// Owners of every pre or post token balance on the tx, cached on it. A superset of the owners
+/// whose balance changed.
+pub fn token_balance_owners(transaction: &MessageTransactionInfo) -> &FoldHashSet<Pubkey> {
+    transaction
+        .token_owners_all
+        .get_or_init(|| owners_in_any_balance(&transaction.meta))
 }
 
 /// Owners of every parseable pre OR post token balance on the tx.

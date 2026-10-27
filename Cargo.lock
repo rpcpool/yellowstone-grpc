@@ -6345,6 +6345,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "tikv-jemalloc-sys"
+version = "0.6.1+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd8aa5b2ab86a2cefa406d889139c162cbb230092f7d1d7cbc1716405d852a3b"
+dependencies = [
+ "cc",
+ "libc",
+]
+
+[[package]]
+name = "tikv-jemallocator"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0359b4327f954e0567e69fb191cf1436617748813819c94b8cd4a431422d053a"
+dependencies = [
+ "libc",
+ "tikv-jemalloc-sys",
+]
+
+[[package]]
 name = "time"
 version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7405,6 +7425,43 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "yellowstone-grpc-bench"
+version = "0.1.0"
+dependencies = [
+ "agave-geyser-plugin-interface",
+ "anyhow",
+ "bs58",
+ "bytes",
+ "clap",
+ "crossbeam-channel",
+ "env_logger",
+ "flate2",
+ "futures",
+ "h2",
+ "http",
+ "libc",
+ "libloading",
+ "log",
+ "prost",
+ "prost-types",
+ "serde",
+ "serde_json",
+ "solana-hash",
+ "solana-message",
+ "solana-pubkey 4.4.0",
+ "solana-signature",
+ "solana-transaction",
+ "solana-transaction-status",
+ "tikv-jemallocator",
+ "tokio",
+ "toml 0.8.23",
+ "tonic",
+ "yellowstone-grpc-geyser",
+ "yellowstone-grpc-proto",
+ "zstd",
 ]
 
 [[package]]

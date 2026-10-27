@@ -92,6 +92,8 @@ const STALE_SLOT_THRESHOLD: Slot = 300;
 // `add()` call would be wasteful; running it only this often keeps the amortized cost
 // negligible relative to normal message volume.
 const STALE_GC_INTERVAL: Slot = 50;
+/// A bank this many slots behind the newest slot is swept unsealed, so it never seals.
+pub(crate) const UNSEALED_BANK_HORIZON: Slot = STALE_SLOT_THRESHOLD + STALE_GC_INTERVAL;
 
 enum TrySealError {
     NotSealable,
@@ -1086,9 +1088,13 @@ impl BlockMachineStorage {
         }
     }
 
-    /// The banks that have not sealed yet, so are not in [`Self::replay_from_slot`].
-    pub fn unsealed_bank_ids(&self) -> Vec<BankId> {
-        self.banks.keys().copied().collect()
+    /// The ids and slots of the banks that have not sealed yet, so are not in
+    /// [`Self::replay_from_slot`].
+    pub fn unsealed_banks(&self) -> Vec<(BankId, Slot)> {
+        self.banks
+            .values()
+            .map(|bank| (bank.bank_id, bank.slot))
+            .collect()
     }
 
     pub const fn min_replayable_slot(&self) -> Option<Slot> {

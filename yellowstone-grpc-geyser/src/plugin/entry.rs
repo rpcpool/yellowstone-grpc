@@ -154,6 +154,7 @@ impl GeyserPlugin for Plugin {
             .enable_all()
             .build()
             .map_err(|error| GeyserPluginError::Custom(Box::new(error)))?;
+        crate::trace::start(runtime.handle());
 
         let file_watcher = crate::file_watcher::FileWatcher::new().map_err(|error| {
             GeyserPluginError::Custom(format!("failed to create file watcher: {error:?}").into())

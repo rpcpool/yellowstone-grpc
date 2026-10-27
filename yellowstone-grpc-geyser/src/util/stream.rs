@@ -149,6 +149,9 @@ struct Shared {
     semaphore: Semaphore,
     /// Total weight the channel can hold.
     capacity: usize,
+    /// Whether the receiver's last poll found the queue empty, kept only with `latency-trace`.
+    #[cfg(feature = "latency-trace")]
+    idle: std::sync::atomic::AtomicBool,
 }
 
 impl Shared {
@@ -177,7 +180,7 @@ impl Shared {
 /// clone of the [`Weigher`] `W`.
 pub struct LoadAwareSender<T, W> {
     shared: Arc<Shared>,
-    inner: UnboundedSender<(u32, T)>,
+    inner: UnboundedSender<(u32, EnqueuedAt, T)>,
     weigher: W,
 }
 
@@ -204,8 +207,47 @@ impl<T, W: Clone> Clone for LoadAwareSender<T, W> {
 /// Dropping it closes the channel and wakes every sender waiting for capacity.
 pub struct LoadAwareReceiver<T> {
     shared: Arc<Shared>,
-    inner: UnboundedReceiver<(u32, T)>,
+    inner: UnboundedReceiver<(u32, EnqueuedAt, T)>,
 }
+
+/// Enqueue time of an item, kept only with the `latency-trace` feature. The low bit marks an
+/// item that found the receiver waiting on an empty queue.
+#[cfg(feature = "latency-trace")]
+type EnqueuedAt = u64;
+#[cfg(not(feature = "latency-trace"))]
+type EnqueuedAt = ();
+
+#[cfg(feature = "latency-trace")]
+fn enqueued_at(shared: &Shared) -> EnqueuedAt {
+    let woke = shared
+        .idle
+        .swap(false, std::sync::atomic::Ordering::Relaxed);
+    (crate::trace::mono_ns() & !1) | u64::from(woke)
+}
+#[cfg(not(feature = "latency-trace"))]
+const fn enqueued_at(_shared: &Shared) -> EnqueuedAt {}
+
+#[cfg(feature = "latency-trace")]
+fn record_residence(enqueued: EnqueuedAt) {
+    let residence = crate::trace::mono_ns().saturating_sub(enqueued & !1);
+    crate::trace::record(crate::trace::Stage::QueueResidence, residence);
+    if enqueued & 1 == 1 {
+        crate::trace::record(crate::trace::Stage::WakeResidence, residence);
+    }
+}
+#[cfg(not(feature = "latency-trace"))]
+const fn record_residence(_enqueued: EnqueuedAt) {}
+
+#[cfg(feature = "latency-trace")]
+fn record_idle<T>(shared: &Shared, polled: &Poll<T>) {
+    if polled.is_pending() {
+        shared
+            .idle
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+#[cfg(not(feature = "latency-trace"))]
+const fn record_idle<T>(_shared: &Shared, _polled: &Poll<T>) {}
 
 impl<T> Drop for LoadAwareReceiver<T> {
     fn drop(&mut self) {
@@ -254,6 +296,8 @@ where
     let shared = Arc::new(Shared {
         semaphore: Semaphore::new(weighted_capacity),
         capacity: weighted_capacity,
+        #[cfg(feature = "latency-trace")]
+        idle: std::sync::atomic::AtomicBool::new(false),
     });
     let sender = LoadAwareSender {
         shared: Arc::clone(&shared),
@@ -309,8 +353,8 @@ where
             }
         }
         self.inner
-            .send((weight, item))
-            .map_err(|err| SendError(err.0 .1))
+            .send((weight, enqueued_at(&self.shared), item))
+            .map_err(|err| SendError(err.0 .2))
     }
 
     /// Sends an item without waiting.
@@ -339,8 +383,8 @@ where
             Err(TryAcquireError::Closed) => return Err(TrySendError::Closed(item)),
         }
         self.inner
-            .send((weight, item))
-            .map_err(|err| TrySendError::Closed(err.0 .1))
+            .send((weight, enqueued_at(&self.shared), item))
+            .map_err(|err| TrySendError::Closed(err.0 .2))
     }
 
     /// Returns the weight currently held by the channel.
@@ -379,8 +423,11 @@ impl<T> LoadAwareReceiver<T> {
     /// [`Poll::Ready`] with the next item, or with [`None`] once the channel is empty and every
     /// [`LoadAwareSender`] is dropped. [`Poll::Pending`] otherwise.
     pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        self.inner.poll_recv(cx).map(|maybe| {
-            maybe.map(|(weight, item)| {
+        let polled = self.inner.poll_recv(cx);
+        record_idle(&self.shared, &polled);
+        polled.map(|maybe| {
+            maybe.map(|(weight, enqueued, item)| {
+                record_residence(enqueued);
                 self.shared.semaphore.add_permits(weight as usize);
                 item
             })
