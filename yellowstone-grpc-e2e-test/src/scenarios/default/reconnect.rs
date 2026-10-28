@@ -7,6 +7,7 @@ use {
     anyhow::{ensure, Context, Result},
     arc_swap::ArcSwap,
     futures::{channel::mpsc, StreamExt as FuturesStreamExt},
+    solana_pubkey::Pubkey,
     std::{
         collections::{HashMap, HashSet},
         future::Future,
@@ -40,6 +41,8 @@ const SLOTS_AFTER_RECONNECT: usize = 12;
 const BLOCK_METAS_BEFORE_CUT: usize = 3;
 const OUTAGE: Duration = Duration::from_secs(2);
 const TIMEOUT: Duration = Duration::from_secs(240);
+// Every bank writes SlotHistory inside `freeze()`: after CreatedBank, before BlockMeta.
+const SLOT_HISTORY: Pubkey = Pubkey::from_str_const("SysvarS1otHistory11111111111111111111111111");
 
 #[derive(Default)]
 struct ReconnectProgress {
@@ -118,7 +121,7 @@ where
     })
 }
 
-/// Cuts the stream right after a transaction of a bank with no block meta yet, once
+/// Cuts the stream right after the SlotHistory write of a bank with no block meta yet, once
 /// `BLOCK_METAS_BEFORE_CUT` block metas arrived. The cut always lands mid-bank, after a checkpoint.
 struct CutMidBank<S> {
     inner: Option<S>,
@@ -165,11 +168,16 @@ where
                     self.block_metas += 1;
                     self.complete.insert((meta.slot, meta.bank_id));
                 }
-                // A transaction comes after its bank's CreatedBank, unlike construction-time
-                // sysvar writes, so the cut never lands before the bank is opened.
-                Some(UpdateOneof::Transaction(tx))
+                // Vote transactions are not a cut point: Alpenglow moves votes into the block footer.
+                Some(UpdateOneof::Account(update))
                     if self.block_metas >= BLOCK_METAS_BEFORE_CUT
-                        && !self.complete.contains(&(tx.slot, tx.bank_id)) =>
+                        && update
+                            .account
+                            .as_ref()
+                            .is_some_and(|account| account.pubkey == SLOT_HISTORY.as_ref())
+                        && update.bank_id.is_some_and(|bank_id| {
+                            !self.complete.contains(&(update.slot, bank_id))
+                        }) =>
                 {
                     self.cut_next = true;
                 }
@@ -265,8 +273,7 @@ fn block_machine_request() -> SubscribeRequest {
     }
 }
 
-/// Every bank writes sysvars and has vote transactions: enough payloads to cut and rebuild a
-/// bank, and a fraction of the full firehose a replay would otherwise resend.
+/// Sysvar writes only, so replay stays small.
 fn narrow_payloads(subscription: &mut SubscribeRequest) {
     subscription.accounts = HashMap::from([(
         "test".to_string(),
@@ -275,13 +282,7 @@ fn narrow_payloads(subscription: &mut SubscribeRequest) {
             ..Default::default()
         },
     )]);
-    subscription.transactions = HashMap::from([(
-        "test".to_string(),
-        yellowstone_grpc_proto::geyser::SubscribeRequestFilterTransactions {
-            vote: Some(true),
-            ..Default::default()
-        },
-    )]);
+    subscription.transactions = HashMap::new();
 }
 
 fn connector(
@@ -746,15 +747,24 @@ mod tests {
         })
     }
 
+    fn slot_history_of(slot: u64) -> Result<SubscribeUpdate, Status> {
+        let mut update = account_of(slot)?;
+        if let Some(UpdateOneof::Account(account)) = &mut update.update_oneof {
+            account.account.as_mut().unwrap().pubkey = SLOT_HISTORY.to_bytes().to_vec();
+        }
+        Ok(update)
+    }
+
     #[tokio::test]
     async fn cut_lands_mid_bank_after_enough_block_metas() {
-        let mut updates = vec![tx_of(1), meta(1), meta(2)];
+        let mut updates = vec![slot_history_of(1), meta(1), meta(2)];
         updates.extend([
-            tx_of(3),
+            slot_history_of(3),
             meta(3),
-            tx_of(3),
+            slot_history_of(3),
             account_of(4),
             tx_of(4),
+            slot_history_of(4),
             tx_of(4),
         ]);
         let mut stream = CutMidBank::new(futures::stream::iter(updates));
@@ -766,9 +776,8 @@ mod tests {
             }
         };
         assert_eq!(error.code(), yellowstone_grpc_proto::tonic::Code::Aborted);
-        // Slot 3's late transaction belongs to a complete bank. Slot 4's account comes before its
-        // CreatedBank, so only slot 4's first transaction triggers the cut.
-        assert_eq!(delivered.len(), 8);
+        // Slot 3's late SlotHistory belongs to a complete bank. Only slot 4's SlotHistory cuts.
+        assert_eq!(delivered.len(), 9);
         assert!(stream.next().await.is_none());
     }
 

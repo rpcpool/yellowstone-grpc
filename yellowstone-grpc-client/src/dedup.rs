@@ -1,7 +1,7 @@
 use {
     futures::stream::{Stream, StreamExt},
     std::{
-        collections::{HashMap, HashSet, VecDeque},
+        collections::{BTreeMap, HashMap, HashSet, VecDeque},
         hash::{DefaultHasher, Hash, Hasher},
         task::Poll,
     },
@@ -201,7 +201,7 @@ impl<T> ReplayBuffer<T> {
             return;
         }
         self.quarantine
-            .retain(|slot, _| state.inflight.contains_key(slot) || state.sealed.contains_key(slot));
+            .retain(|slot, _| state.slots.contains_key(slot));
     }
 
     fn flush(&mut self, slot: u64, blockmeta: T) {
@@ -357,21 +357,24 @@ struct SlotState {
     statuses: HashSet<BankStatus>, // inflight_slot_statuses[slot] + slot_processed[slot]
 }
 
+/// A tracked slot is inflight until its BlockMeta seals it.
+#[derive(Debug, Clone)]
+enum TrackedSlot {
+    Inflight(SlotState),
+    Sealed(SealedSlot),
+}
+
 #[derive(Debug, Clone)]
 /// Tracks seen messages per slot so we can filter duplicates during replay after reconnect.
 pub struct DedupState {
-    inflight: HashMap<u64, SlotState>,
-    sealed: HashMap<u64, SealedSlot>,
-    slot_order: VecDeque<u64>,
+    slots: BTreeMap<u64, TrackedSlot>,
     slot_retention: usize,
 }
 
 impl Default for DedupState {
     fn default() -> Self {
         Self {
-            inflight: Default::default(),
-            sealed: Default::default(),
-            slot_order: Default::default(),
+            slots: Default::default(),
             slot_retention: DEFAULT_SLOT_RETENTION,
         }
     }
@@ -458,11 +461,10 @@ impl DedupState {
         }
     }
 
-    fn slot_mut(&mut self, slot: u64) -> &mut SlotState {
-        if !self.inflight.contains_key(&slot) && !self.sealed.contains_key(&slot) {
-            self.slot_order.push_back(slot);
-        }
-        self.inflight.entry(slot).or_default()
+    fn slot_mut(&mut self, slot: u64) -> &mut TrackedSlot {
+        self.slots
+            .entry(slot)
+            .or_insert_with(|| TrackedSlot::Inflight(SlotState::default()))
     }
 
     /// Classify a message for the dedup/quarantine layer
@@ -476,35 +478,31 @@ impl DedupState {
                     // A replay resends the CreatedBank of a bank already seen: a duplicate. Without
                     // a bank_id two banks look alike, so it stays a reset.
                     let seen = bank_id.is_some()
-                        && self
-                            .sealed
-                            .get(&slot)
-                            .map(|sealed| &sealed.statuses)
-                            .into_iter()
-                            .chain(self.inflight.get(&slot).map(|state| &state.statuses))
-                            .any(|statuses| statuses.contains(&key));
+                        && self.slots.get(&slot).is_some_and(|tracked| match tracked {
+                            TrackedSlot::Inflight(state) => state.statuses.contains(&key),
+                            TrackedSlot::Sealed(sealed) => sealed.statuses.contains(&key),
+                        });
                     if seen {
                         return Observation::Duplicate;
                     }
                     // A new bank wipes prior state, which recovers from a rollback; during
                     // replay it keeps the partial state so the replay can be reconciled.
-                    let partial = self.inflight.get(&slot);
-                    if !partial.is_some_and(|state| state.replaying) {
+                    let replaying = matches!(
+                        self.slots.get(&slot),
+                        Some(TrackedSlot::Inflight(state)) if state.replaying
+                    );
+                    if !replaying {
                         self.clear_slot(slot);
                     }
                 }
 
                 // Sealed slots keep a compressed status set for post-seal dedup
                 // (Confirmed / Finalized arrive after BlockMeta).
-                if let Some(s) = self.sealed.get_mut(&slot) {
-                    if !s.statuses.insert(key) {
-                        return Observation::Duplicate;
-                    }
-                    return Observation::New;
-                }
-
-                let state = self.slot_mut(slot);
-                if !state.statuses.insert(key) {
+                let statuses = match self.slot_mut(slot) {
+                    TrackedSlot::Inflight(state) => &mut state.statuses,
+                    TrackedSlot::Sealed(sealed) => &mut sealed.statuses,
+                };
+                if !statuses.insert(key) {
                     return Observation::Duplicate;
                 }
                 self.prune();
@@ -512,23 +510,23 @@ impl DedupState {
             }
 
             DedupKey::BlockMeta(blockhash) => {
-                // Completed slots use their stored blockhash as the replay verdict.
-                if let Some(sealed) = self.sealed.get_mut(&slot) {
-                    let same = sealed.blockhash.as_ref() == Some(&blockhash);
-                    sealed.blockhash = Some(blockhash);
-                    return Observation::ReplayComplete { same };
-                }
+                let tracked = self.slot_mut(slot);
+                let state = match tracked {
+                    // Completed slots use their stored blockhash as the replay verdict.
+                    TrackedSlot::Sealed(sealed) => {
+                        let same = sealed.blockhash.as_ref() == Some(&blockhash);
+                        sealed.blockhash = Some(blockhash);
+                        return Observation::ReplayComplete { same };
+                    }
+                    TrackedSlot::Inflight(state) => std::mem::take(state),
+                };
 
                 // First BlockMeta for this slot: seal it. The SlotState is destroyed;
                 // only the blockhash and statuses survive in the compressed SealedSlot.
-                let state = self.inflight.remove(&slot).unwrap_or_default();
-                self.sealed.insert(
-                    slot,
-                    SealedSlot {
-                        blockhash: Some(blockhash),
-                        statuses: state.statuses,
-                    },
-                );
+                *tracked = TrackedSlot::Sealed(SealedSlot {
+                    blockhash: Some(blockhash),
+                    statuses: state.statuses,
+                });
                 self.prune();
                 if state.replaying {
                     Observation::PartialReplayComplete { keys: state.keys }
@@ -541,16 +539,11 @@ impl DedupState {
             payload => {
                 // Sealed slot: hold for quarantine. The verdict comes when the
                 // replayed BlockMeta arrives; until then we buffer without deduping.
-                if self.sealed.contains_key(&slot)
-                    || self
-                        .inflight
-                        .get(&slot)
-                        .is_some_and(|state| state.replaying)
-                {
-                    return Observation::Replay;
-                }
-
-                let state = self.slot_mut(slot);
+                let state = match self.slot_mut(slot) {
+                    TrackedSlot::Sealed(_) => return Observation::Replay,
+                    TrackedSlot::Inflight(state) if state.replaying => return Observation::Replay,
+                    TrackedSlot::Inflight(state) => state,
+                };
                 if state.keys.contains(&payload) {
                     return Observation::Duplicate;
                 }
@@ -561,30 +554,24 @@ impl DedupState {
         }
     }
 
-    /// Keeps tracked slots bounded to the retention window.
+    /// Evicts the lowest slots beyond the retention window.
     pub fn prune(&mut self) {
-        while self.slot_order.len() > self.slot_retention {
-            match self.slot_order.pop_front() {
-                Some(slot) => {
-                    self.inflight.remove(&slot);
-                    self.sealed.remove(&slot);
-                }
-                None => break,
-            }
+        while self.slots.len() > self.slot_retention {
+            self.slots.pop_first();
         }
     }
 
     /// Preserve partial slots and quarantine their replay until BlockMeta arrives.
     pub(crate) fn prepare_for_replay(&mut self) {
-        for state in self.inflight.values_mut() {
-            state.replaying = true;
+        for tracked in self.slots.values_mut() {
+            if let TrackedSlot::Inflight(state) = tracked {
+                state.replaying = true;
+            }
         }
     }
 
     pub(crate) fn clear_slot(&mut self, slot: u64) {
-        self.inflight.remove(&slot);
-        self.sealed.remove(&slot);
-        self.slot_order.retain(|s| *s != slot);
+        self.slots.remove(&slot);
     }
 }
 
@@ -784,7 +771,7 @@ mod tests {
         assert_eq!(stream.next().await.unwrap().unwrap(), first);
         assert_eq!(stream.next().await.unwrap().unwrap(), status);
         assert_eq!(stream.replay.quarantine[&10].len(), 2);
-        assert!(stream.state.inflight[&10].replaying);
+        assert!(inflight(&stream.state, 10).replaying);
         assert_eq!(stream.next().await.unwrap().unwrap(), second);
         assert!(matches!(
             stream.next().await.unwrap().unwrap().update_oneof,
@@ -809,6 +796,13 @@ mod tests {
         assert_eq!(stream.next().await.unwrap().unwrap(), second);
         assert!(stream.next().await.unwrap().is_ok());
         assert!(stream.next().await.is_none());
+    }
+
+    fn inflight(dedup: &DedupState, slot: u64) -> &SlotState {
+        match &dedup.slots[&slot] {
+            TrackedSlot::Inflight(state) => state,
+            TrackedSlot::Sealed(_) => panic!("slot {slot} is sealed"),
+        }
     }
 
     fn bank_status(slot: u64, status: i32, bank_id: u64) -> SubscribeUpdate {
@@ -1176,15 +1170,14 @@ mod tests {
         let account = make_account_msg(600);
         observe(&mut dedup, &make_slot_msg(600, 0));
         observe(&mut dedup, &account);
-        let keys = dedup.inflight[&600].keys.clone();
-        let statuses = dedup.inflight[&600].statuses.clone();
+        let keys = inflight(&dedup, 600).keys.clone();
+        let statuses = inflight(&dedup, 600).statuses.clone();
 
         for _ in 0..2 {
             dedup.prepare_for_replay();
-            assert!(dedup.sealed.is_empty());
-            assert!(dedup.inflight[&600].replaying);
-            assert_eq!(dedup.inflight[&600].keys, keys);
-            assert_eq!(dedup.inflight[&600].statuses, statuses);
+            assert!(inflight(&dedup, 600).replaying);
+            assert_eq!(inflight(&dedup, 600).keys, keys);
+            assert_eq!(inflight(&dedup, 600).statuses, statuses);
             assert!(matches!(observe(&mut dedup, &account), Observation::Replay));
         }
         let result = observe(&mut dedup, &make_block_meta_msg(600));
@@ -1192,8 +1185,7 @@ mod tests {
             panic!("partial replay must be reconciled");
         };
         assert_eq!(delivered, keys);
-        assert!(!dedup.inflight.contains_key(&600));
-        assert!(dedup.sealed.contains_key(&600));
+        assert!(matches!(dedup.slots[&600], TrackedSlot::Sealed(_)));
     }
 
     #[test]
@@ -1228,6 +1220,34 @@ mod tests {
             assert!(matches!(observe(&mut dedup, &created), Observation::New));
             observe(&mut dedup, &make_block_meta_msg(900));
         }
+    }
+
+    #[test]
+    fn test_block_meta_only_slots_are_pruned() {
+        let mut dedup = DedupState::with_slot_retention(5);
+
+        for slot in 1..=10_000 {
+            observe(&mut dedup, &make_block_meta_msg(slot));
+        }
+
+        assert_eq!(dedup.slots.len(), 5);
+        for slot in 9_996..=10_000 {
+            assert!(matches!(dedup.slots[&slot], TrackedSlot::Sealed(_)));
+        }
+    }
+
+    #[test]
+    fn test_mixed_slots_registered_once() {
+        let mut dedup = DedupState::with_slot_retention(3);
+
+        for slot in 1..=1_000 {
+            if slot % 2 == 0 {
+                observe(&mut dedup, &make_slot_msg(slot, 0));
+            }
+            observe(&mut dedup, &make_block_meta_msg(slot));
+        }
+
+        assert_eq!(dedup.slots.len(), 3);
     }
 
     #[test]

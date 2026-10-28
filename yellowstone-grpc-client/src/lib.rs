@@ -56,6 +56,9 @@ use {hyper::rt, tower::Service};
 
 #[cfg(feature = "test-tools")]
 pub mod test_tools;
+/// Lets benches drive `DedupStream` with a scripted stream.
+#[cfg(feature = "test-tools")]
+pub use crate::dedup::ReconnectCounter;
 /// Generic over the transport so tests can drive it with a scripted connector.
 #[cfg(any(test, feature = "test-tools"))]
 pub use crate::reconnect_geyser_stream::ReconnectStream;

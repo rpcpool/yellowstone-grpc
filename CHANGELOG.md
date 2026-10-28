@@ -10,6 +10,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-client 16.0.1
+- yellowstone-grpc-napi 0.3.2
+- @triton-one/yellowstone-grpc@9.0.2
+
+### Fixes
+
+- client: `DedupStream` prunes slots whose first message is a `BlockMeta`. They were sealed without being added to the retention queue, so with a `blocks_meta` filter and no `slots` filter the dedup state grew by one entry per slot until the process ran out of memory. [#925](https://github.com/rpcpool/yellowstone-grpc/pull/925)
+
+## 2026-10-20
+
 - yellowstone-grpc-client 16.0.0
 - yellowstone-grpc-napi 0.3.1
 - @triton-one/yellowstone-grpc@9.0.1
