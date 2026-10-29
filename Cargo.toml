@@ -106,14 +106,14 @@ notify = "8.2.0"
 agave-geyser-plugin-interface = "5.0.0"
 
 # Agave Monorepo
-agave-feature-set = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-rc.1" }
-agave-votor-messages = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-rc.1" }
-solana-account-decoder = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-rc.1" }
-solana-entry = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-rc.1" }
+agave-feature-set = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
+agave-votor-messages = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
+solana-account-decoder = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
+solana-entry = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
 solana-logger = "3.0.0"
-solana-storage-proto = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-rc.1" }
-solana-transaction-context = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-rc.1" }
-solana-transaction-status = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0-rc.1" }
+solana-storage-proto = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
+solana-transaction-context = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
+solana-transaction-status = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
 
 # Solana SDK
 solana-message = "5.1.0"
@@ -138,7 +138,7 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.12.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "16.0.1" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "17.0.0-rc7+solana.4.4.0.rc.1" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "17.0.0-rc8+solana.4.4.0" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "14.0.1", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }
