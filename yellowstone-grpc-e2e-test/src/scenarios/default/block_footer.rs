@@ -1,5 +1,5 @@
-//! Scenarios that need an Alpenglow cluster: block footers only exist there.
-//! They run only with `--module alpenglow`.
+//! Block footer scenarios, one subfile per topic: `stream` (footers on their own filter, live),
+//! `filters` (which subscriptions get footers) and `replay` (footers in a `from_slot` replay).
 
 use {
     anyhow::{ensure, Context, Result},
@@ -13,9 +13,9 @@ use {
     },
 };
 
-pub mod block_footer;
 pub mod filters;
 pub mod replay;
+pub mod stream;
 
 const FILTER_NAME: &str = "test";
 // Blocks land every ~400ms, so a gap this long means the stream is stuck.
