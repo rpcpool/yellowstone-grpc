@@ -5,6 +5,7 @@ pub mod cache_ext;
 pub mod config;
 pub mod contact_info;
 pub mod file_watcher;
+pub mod geyser_subscriber;
 pub mod grpc;
 pub mod metered;
 pub mod metrics;

@@ -10,6 +10,23 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-geyser 16.2.0
+
+### Breaking
+
+- plugin: only the first `SubscribeRequest` that asks for something can replay. `from_slot` on any later request is ignored, and a subscription with a startup snapshot never replays. Empty requests (no filter, no `from_slot`) before the first real one don't count, so `subscribe()` followed by a request with `from_slot` still replays: the Rust and TS SDKs' `subscribe()` send an empty request first. The plugin subscribes the client to no live channel until its first real request. STR-763
+- plugin: at confirmed and finalized, a bank's commitment statuses arrive after its content and block meta, in the order Processed, Confirmed, Finalized. They used to arrive first, as soon as block reconstruction produced them. A bank's `CreatedBank` now arrives at confirmed and finalized with the bank's content, once, instead of as it landed. STR-763
+
+### Fixes
+
+- plugin: a `from_slot` replay joins the live stream with no duplicate and no gap, at every commitment. A bank that sealed between the client's subscription and the replay was sent twice. At processed, a bank in progress at connect now arrives whole, `CreatedBank` included, and a bank sealed but still waiting for its Processed status is no longer sent twice. STR-763
+
+### Misc
+
+- e2e: `replay-ordering` runs at processed, confirmed and finalized and checks every bank across the switch from replay to live. New `replay-contiguous` checks that a replay from one slot behind the tip loses no slot. The block footer scenarios run with the `default` module, under `scenarios/default/block_footer/`; the `alpenglow` tag and module are gone. `--tags` and `--exclude-tags` take comma-separated lists.
+
+## 2026-10-26
+
 - yellowstone-grpc-client 16.0.1
 - yellowstone-grpc-napi 0.3.2
 - @triton-one/yellowstone-grpc@9.0.2

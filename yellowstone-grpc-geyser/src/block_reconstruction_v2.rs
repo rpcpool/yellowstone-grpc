@@ -269,7 +269,6 @@ impl BankBuffer {
 
         let pre_computed_message_block = Arc::new(MessageBlock::new(
             Arc::clone(&block_meta),
-            Arc::clone(&created_bank),
             self.transactions,
             account_info_vec,
             self.entries,
@@ -311,6 +310,10 @@ impl FrozenBank {
     /// [`Self::created_bank`] and [`Self::created_bank_index`] to put it back.
     pub fn messages(&self) -> Arc<Vec<Message>> {
         Arc::clone(&self.original_messages)
+    }
+
+    pub const fn bank_id(&self) -> BankId {
+        self.bank_id
     }
 
     /// The `CreatedBank` status the plugin received for this bank.
@@ -1086,9 +1089,13 @@ impl BlockMachineStorage {
         }
     }
 
-    /// The banks that have not sealed yet, so are not in [`Self::replay_from_slot`].
-    pub fn unsealed_bank_ids(&self) -> Vec<BankId> {
-        self.banks.keys().copied().collect()
+    /// The banks from `slot` up that have not sealed yet, so are not in
+    /// [`Self::replay_from_slot`]: each bank's slot, id and messages so far, in arrival order.
+    pub fn unsealed_banks(&self, slot: Slot) -> impl Iterator<Item = (Slot, BankId, &[Message])> {
+        self.banks
+            .values()
+            .filter(move |bank| bank.slot >= slot)
+            .map(|bank| (bank.slot, bank.bank_id, bank.original_messages.as_slice()))
     }
 
     pub const fn min_replayable_slot(&self) -> Option<Slot> {
@@ -1360,10 +1367,6 @@ mod tests {
             .iter()
             .all(|message| !matches!(message, Message::Slot(_))));
         assert!(Arc::ptr_eq(&frozen.created_bank(), &created_bank));
-        assert!(Arc::ptr_eq(
-            &frozen.get_message_block().created_bank,
-            &created_bank
-        ));
         assert_eq!(frozen.created_bank_index(), 2);
     }
 
