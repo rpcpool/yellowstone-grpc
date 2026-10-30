@@ -72,43 +72,32 @@ async fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    info!("connecting with bank recovery");
+    info!("connecting with auto reconnect");
     let (_sink, mut stream) = client.subscribe_with_reconnect(Some(request)).await?;
     let mut count = 0u64;
 
     while let Some(msg) = stream.next().await {
         match msg {
-            Ok(ReconnectEvent::DiscardBanks {
-                banks,
-                reason,
-                replacement,
-                winners,
-            }) => {
-                // Stateful consumers must remove these banks before applying replacement updates.
-                info!("discard banks={banks:?} reason={reason:?} replacement={replacement:?} winners={winners:?}");
+            Ok(ReconnectEvent::Missing { from_slot, to_slot }) => {
+                // Slots after from_slot, up to and including to_slot, may be incomplete.
+                info!("missing slots after {from_slot:?} through {to_slot}");
             }
-            Ok(ReconnectEvent::Update { generation, update }) => {
+            Ok(ReconnectEvent::Update(update)) => {
                 count += 1;
                 match update.update_oneof.as_ref() {
                     Some(UpdateOneof::Slot(slot)) => {
                         if count.is_multiple_of(10) {
-                            info!("slot={} generation={generation} count={count}", slot.slot);
+                            info!("slot={} count={count}", slot.slot);
                         }
                     }
                     Some(UpdateOneof::Account(acc)) => {
                         if count.is_multiple_of(100) {
-                            info!(
-                                "account update slot={} generation={generation} count={count}",
-                                acc.slot
-                            );
+                            info!("account update slot={} count={count}", acc.slot);
                         }
                     }
                     Some(UpdateOneof::Transaction(tx)) => {
                         if count.is_multiple_of(100) {
-                            info!(
-                                "transaction slot={} generation={generation} count={count}",
-                                tx.slot
-                            );
+                            info!("transaction slot={} count={count}", tx.slot);
                         }
                     }
                     _ => {}

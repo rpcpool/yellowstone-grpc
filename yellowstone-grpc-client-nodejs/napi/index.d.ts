@@ -110,12 +110,6 @@ export declare function encodeDeshredTx(data: Uint8Array, encoding: WasmUiTransa
 
 export declare function encodeTx(data: Uint8Array, encoding: WasmUiTransactionEncoding, maxSupportedTransactionVersion: number | undefined | null, showRewards: boolean): string
 
-export interface JsBankRef {
-  generation: string
-  slot: string
-  bankId: string
-}
-
 /**
  * ChannelOptions from JS.
  *
@@ -149,10 +143,6 @@ export declare const enum JsCompressionAlgorithm {
   Zstd = 1
 }
 
-export declare const enum JsDiscardReason {
-  IncompleteDelivery = 'IncompleteDelivery'
-}
-
 export interface JsReconnectBackoff {
   initialIntervalMs?: number
   multiplier?: number
@@ -165,27 +155,20 @@ export interface JsReconnectConfig {
   backoff?: JsReconnectBackoff
   /** Unsupported for bank recovery. */
   slotRetention?: number
-  /** Unsupported for bank recovery. */
+  /** Where a reconnect resumes; `Replay` when unset. */
   policy?: JsReconnectPolicy
 }
 
 export type JsReconnectEvent =
-  | { type: 'Update', generation: string, update: Buffer }
-  | { type: 'DiscardBanks', banks: Array<JsBankRef>, reason: JsDiscardReason, replacement: JsReplacementReplay, winners: Array<JsSlotWinner> }
+  | { type: 'Update'; update: Buffer }
+  | { type: 'Missing'; fromSlot?: string; toSlot: string }
 
 export declare const enum JsReconnectPolicy {
-  RecoverMissedData = 'RecoverMissedData',
-  SkipMissedData = 'SkipMissedData'
+  /** Replay from the slot after the last finalized one (the default). */
+  Replay = 'Replay',
+  /** Resume at the live tip. */
+  NoReplay = 'NoReplay'
 }
-
-export interface JsReplacementReplay {
-  fromSlot: string
-  generation: string
-}
-
-export type JsSlotWinner =
-  | { type: 'Unknown', slot: string }
-  | { type: 'Finalized', slot: string, blockhash: string }
 
 export declare const enum WasmUiTransactionEncoding {
   Binary = 0,

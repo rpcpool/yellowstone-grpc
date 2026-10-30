@@ -27,17 +27,18 @@ Please refer to [examples/typescript](../examples/typescript/README.md) for some
 
 ### Auto reconnect
 
-Use `subscribeWithReconnect()` to receive bank-aware recovery events. The optional fourth constructor argument configures the retry backoff. Ordinary `subscribe()` and `subscribeDeshred()` streams do not reconnect.
+Use `subscribeWithReconnect()` to get a stream that reconnects by itself. Each reconnect first emits a `Missing` event with the range that may be incomplete, then replays from the slot after the last finalized one, or starts at the latest slot if the server refuses the replay. The optional fourth constructor argument configures the retry backoff. Ordinary `subscribe()` and `subscribeDeshred()` streams do not reconnect.
 
 ```ts
 import Client, { ReconnectEvent } from "@triton-one/yellowstone-grpc";
 
 const client = new Client(endpoint, xToken, channelOptions, {
   backoff: {
-    initialIntervalMs: 100,
+    initialIntervalMs: 300,
     multiplier: 2,
-    maxRetries: 10,
+    maxRetries: 6,
   },
+  policy: "Replay", // or "NoReplay" to always reconnect at the latest slot
 });
 
 await client.connect();
@@ -45,22 +46,18 @@ const stream = await client.subscribeWithReconnect(request);
 
 stream.on("data", (event: ReconnectEvent) => {
   if (event.type === "Update") {
-    applyUpdate(event.generation, event.update);
+    applyUpdate(event.update);
   } else {
-    for (const bank of event.banks) {
-      removeBank(bank.generation, bank.slot, bank.bankId);
-    }
-    recordRecovery(event.replacement, event.winners);
+    // Slots after fromSlot, up to and including toSlot, may be incomplete; a replay resends them.
+    dropPartialState(event.fromSlot, event.toSlot);
   }
 });
-stream.on("error", (error) => console.error("Recovery failed", error));
+stream.on("error", (error) => console.error("Reconnect failed", error));
 ```
 
-The application supplies `applyUpdate`, `removeBank`, and `recordRecovery`. Keep state by `(generation, slot, bankId)`. Bank IDs identify banks within one connection; they are not stable across connections. All generation, slot, and bank ID values are decimal strings to preserve uint64 precision.
+The application supplies `applyUpdate` and `dropPartialState`. `fromSlot` is the last finalized slot before the disconnect; it is absent when nothing was finalized yet. Slot values are decimal strings to preserve uint64 precision.
 
-Apply each `DiscardBanks` event before processing the following replacement updates. Remove only the listed bank identities. `IncompleteDelivery` means that delivery was interrupted; it does not mean that a bank lost consensus. `replacement` gives the inclusive replay boundary and the connection generation that supplies replacement updates. Each slot winner is either `{ type: "Finalized", slot, blockhash }` or `{ type: "Unknown", slot }` for a proven skipped slot.
-
-Recovery requires processed commitment, no startup snapshots, and no initial `fromSlot`. It waits for finalized winner evidence before emitting discards and replacement updates. Recovery buffers updates without a size cap while waiting for this evidence. Failed replay or exhausted retries terminates the stream with an error. Request writes and pings use the same `stream.write(request)` API as ordinary subscriptions.
+Reconnecting subscriptions require processed commitment and no startup snapshots. Exhausted retries end the stream with an error. After subscribing, only ping requests can be written with `stream.write(request)`.
 
 To migrate reconnecting subscriptions, replace `subscribe()` with `subscribeWithReconnect()` and handle both event variants. Remove `enabled`, `policy`, and `slotRetention` from the fourth constructor argument; these options are rejected because they do not configure bank recovery. Omit the fourth argument to use the default backoff with `subscribeWithReconnect()`.
 
