@@ -84,7 +84,13 @@ export declare class GrpcClient {
    * which handles Node stream lifecycle and protobuf payload decoding.
    */
   subscribe(initialRequestBytes?: Buffer | undefined | null): Promise<DuplexStream>
-  /** Opens a subscription that emits updates and bank recovery events. */
+  /**
+   * Creates a subscription that reconnects after a recoverable failure.
+   *
+   * The returned stream yields `Update` events, and one `Disconnected` event per dropped
+   * connection naming the banks to discard. The client's reconnect options pick the retry
+   * schedule and whether a reconnect replays from the last confirmed slot.
+   */
   subscribeWithReconnect(initialRequestBytes?: Buffer | undefined | null): Promise<ReconnectDuplexStream>
   /**
    * Creates a deshred subscription stream bound to this client connection.
@@ -96,13 +102,13 @@ export declare class GrpcClient {
   subscribeDeshred(): Promise<DuplexStreamDeshred>
 }
 
+/** A subscription that reconnects after a recoverable failure. */
 export declare class ReconnectDuplexStream {
   read(): Promise<JsReconnectEvent | undefined | null>
   close(): void
+  /** Sends a new request on the live connection. A reconnect subscribes with the latest one. */
   writeRaw(requestBytes: Buffer): Promise<undefined>
 }
-
-export const AUTORECONNECT_FILTER_KEY: string
 
 export declare function decodeTxError(err: Array<number>): string
 
@@ -110,8 +116,8 @@ export declare function encodeDeshredTx(data: Uint8Array, encoding: WasmUiTransa
 
 export declare function encodeTx(data: Uint8Array, encoding: WasmUiTransactionEncoding, maxSupportedTransactionVersion: number | undefined | null, showRewards: boolean): string
 
+/** A bank: its slot and its `bank_id`. Both are uint64, sent as decimal strings. */
 export interface JsBankRef {
-  generation: string
   slot: string
   bankId: string
 }
@@ -149,43 +155,46 @@ export declare const enum JsCompressionAlgorithm {
   Zstd = 1
 }
 
-export declare const enum JsDiscardReason {
-  IncompleteDelivery = 'IncompleteDelivery'
-}
-
 export interface JsReconnectBackoff {
   initialIntervalMs?: number
   multiplier?: number
   maxRetries?: number
 }
 
+/** Options of `subscribeWithReconnect()`. Plain subscriptions never reconnect. */
 export interface JsReconnectConfig {
-  /** Unsupported. Call subscribeWithReconnect to enable recovery. */
+  /** Unsupported: rejected. Call subscribeWithReconnect to reconnect. */
   enabled?: boolean
   backoff?: JsReconnectBackoff
-  /** Unsupported for bank recovery. */
+  /** Unsupported: rejected. */
   slotRetention?: number
-  /** Unsupported for bank recovery. */
+  /** Where a reconnect resumes. Defaults to `Replay`. */
   policy?: JsReconnectPolicy
+  /**
+   * With `Replay`, how many slots before the last confirmed slot to replay from. Defaults
+   * to 0. Rejected with `NoReplay`.
+   */
+  slotsBehind?: number
 }
 
+/** An item of a `ReconnectDuplexStream`. */
 export type JsReconnectEvent =
-  | { type: 'Update', generation: string, update: Buffer }
-  | { type: 'DiscardBanks', banks: Array<JsBankRef>, reason: JsDiscardReason, replacement: JsReplacementReplay, winners: Array<JsSlotWinner> }
+  | { type: 'Update'; update: Buffer }
+  | { type: 'Disconnected'; partialBanks: Array<JsBankRef>; replayFromSlot?: string }
 
+/** Where a reconnect resumes. */
 export declare const enum JsReconnectPolicy {
-  RecoverMissedData = 'RecoverMissedData',
-  SkipMissedData = 'SkipMissedData'
+  /** Resume at the live tip; what the server sent during the outage is lost. */
+  NoReplay = 'NoReplay',
+  /** Replay from `slotsBehind` slots before the last confirmed slot seen. The default. */
+  Replay = 'Replay'
 }
 
-export interface JsReplacementReplay {
-  fromSlot: string
-  generation: string
-}
-
-export type JsSlotWinner =
-  | { type: 'Unknown', slot: string }
-  | { type: 'Finalized', slot: string, blockhash: string }
+/**
+ * Name of the filters a reconnecting subscription adds to every request. Reserved: a user
+ * filter must not use it.
+ */
+export const RECONNECT_FILTER_KEY: string
 
 export declare const enum WasmUiTransactionEncoding {
   Binary = 0,

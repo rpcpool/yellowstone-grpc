@@ -3,89 +3,53 @@ use futures::StreamExt;
 use napi::{bindgen_prelude::*, Env};
 use napi_derive::napi;
 use prost::Message;
-use yellowstone_grpc_client::{DiscardReason, ReconnectEvent, SlotWinner, SubscribeRequestSink};
+use yellowstone_grpc_client::{BankRef, ReconnectEvent, SubscribeRequestSink};
 use yellowstone_grpc_proto::tonic::Status;
 
 use crate::{client::GrpcClient, napi_error_with_cause, DuplexStream, DuplexStreamInner};
 
+/// A bank: its slot and its `bank_id`. Both are uint64, sent as decimal strings.
 #[napi(object)]
 pub struct JsBankRef {
-  pub generation: String,
   pub slot: String,
   pub bank_id: String,
 }
 
-#[napi(object)]
-pub struct JsReplacementReplay {
-  pub from_slot: String,
-  pub generation: String,
+impl From<BankRef> for JsBankRef {
+  fn from(bank: BankRef) -> Self {
+    Self {
+      slot: bank.slot.to_string(),
+      bank_id: bank.bank_id.to_string(),
+    }
+  }
 }
 
-#[napi]
-pub enum JsSlotWinner {
-  Unknown { slot: String },
-  Finalized { slot: String, blockhash: String },
-}
-
-#[napi(string_enum)]
-pub enum JsDiscardReason {
-  IncompleteDelivery,
-}
-
+/// An item of a `ReconnectDuplexStream`.
 #[napi]
 pub enum JsReconnectEvent {
-  Update {
-    generation: String,
-    update: Buffer,
-  },
-  DiscardBanks {
-    banks: Vec<JsBankRef>,
-    reason: JsDiscardReason,
-    replacement: JsReplacementReplay,
-    winners: Vec<JsSlotWinner>,
+  /// An encoded `SubscribeUpdate`.
+  Update { update: Buffer },
+  /// The connection dropped. Discard `partial_banks`; the stream reconnects from
+  /// `replay_from_slot`, or at the live tip without it.
+  Disconnected {
+    partial_banks: Vec<JsBankRef>,
+    replay_from_slot: Option<String>,
   },
 }
 
 impl From<ReconnectEvent> for JsReconnectEvent {
   fn from(event: ReconnectEvent) -> Self {
     match event {
-      ReconnectEvent::Update { generation, update } => Self::Update {
-        generation: generation.to_string(),
+      ReconnectEvent::Update(update) => Self::Update {
         update: update.encode_to_vec().into(),
       },
-      ReconnectEvent::DiscardBanks {
-        banks,
-        reason,
-        replacement,
-        winners,
-      } => Self::DiscardBanks {
-        banks: banks
+      ReconnectEvent::Disconnected(disconnected) => Self::Disconnected {
+        partial_banks: disconnected
+          .partial_banks
           .into_iter()
-          .map(|bank| JsBankRef {
-            generation: bank.generation.to_string(),
-            slot: bank.slot.to_string(),
-            bank_id: bank.bank_id.to_string(),
-          })
+          .map(JsBankRef::from)
           .collect(),
-        reason: match reason {
-          DiscardReason::IncompleteDelivery => JsDiscardReason::IncompleteDelivery,
-        },
-        replacement: JsReplacementReplay {
-          from_slot: replacement.from_slot.to_string(),
-          generation: replacement.generation.to_string(),
-        },
-        winners: winners
-          .into_iter()
-          .map(|winner| match winner {
-            SlotWinner::Unknown { slot } => JsSlotWinner::Unknown {
-              slot: slot.to_string(),
-            },
-            SlotWinner::Finalized { slot, blockhash } => JsSlotWinner::Finalized {
-              slot: slot.to_string(),
-              blockhash,
-            },
-          })
-          .collect(),
+        replay_from_slot: disconnected.replay_from_slot.map(|slot| slot.to_string()),
       },
     }
   }
@@ -94,6 +58,7 @@ impl From<ReconnectEvent> for JsReconnectEvent {
 type EventStream = BoxStream<'static, std::result::Result<ReconnectEvent, Status>>;
 type ReconnectInner = DuplexStreamInner<SubscribeRequestSink, EventStream>;
 
+/// A subscription that reconnects after a recoverable failure.
 #[napi]
 pub struct ReconnectDuplexStream {
   inner: ReconnectInner,
@@ -160,6 +125,7 @@ impl ReconnectDuplexStream {
     Ok(())
   }
 
+  /// Sends a new request on the live connection. A reconnect subscribes with the latest one.
   #[napi]
   pub fn write_raw<'env>(
     &self,
@@ -192,53 +158,58 @@ impl Drop for ReconnectDuplexStream {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use yellowstone_grpc_client::{BankRef, ReplacementReplay};
+  use yellowstone_grpc_client::Disconnected;
+  use yellowstone_grpc_proto::prelude::SubscribeUpdate;
 
   #[test]
-  fn discard_preserves_uint64_bank_identities_and_winner_variants() {
-    let event = JsReconnectEvent::from(ReconnectEvent::DiscardBanks {
-      banks: vec![BankRef {
-        generation: u64::MAX,
+  fn disconnected_keeps_uint64_banks_and_replay_slot() {
+    let event = JsReconnectEvent::from(ReconnectEvent::Disconnected(Disconnected {
+      partial_banks: vec![BankRef {
         slot: u64::MAX - 1,
-        bank_id: u64::MAX - 2,
+        bank_id: u64::MAX,
       }],
-      reason: DiscardReason::IncompleteDelivery,
-      replacement: ReplacementReplay {
-        from_slot: u64::MAX - 1,
-        generation: u64::MAX,
-      },
-      winners: vec![
-        SlotWinner::Finalized {
-          slot: u64::MAX - 1,
-          blockhash: "winner".into(),
-        },
-        SlotWinner::Unknown { slot: u64::MAX },
-      ],
-    });
-    let JsReconnectEvent::DiscardBanks {
-      banks,
-      reason,
-      replacement,
-      winners,
+      replay_from_slot: Some(u64::MAX - 2),
+    }));
+    let JsReconnectEvent::Disconnected {
+      partial_banks,
+      replay_from_slot,
     } = event
     else {
-      panic!("expected DiscardBanks");
+      panic!("expected Disconnected");
     };
-    assert_eq!(banks[0].generation, u64::MAX.to_string());
-    assert_eq!(banks[0].slot, (u64::MAX - 1).to_string());
-    assert_eq!(banks[0].bank_id, (u64::MAX - 2).to_string());
-    assert!(matches!(reason, JsDiscardReason::IncompleteDelivery));
-    assert_eq!(replacement.from_slot, (u64::MAX - 1).to_string());
-    assert_eq!(replacement.generation, u64::MAX.to_string());
-    assert!(
-      matches!(&winners[0], JsSlotWinner::Finalized { slot, blockhash }
-      if slot == &(u64::MAX - 1).to_string() && blockhash == "winner")
-    );
-    assert!(matches!(&winners[1], JsSlotWinner::Unknown { slot } if slot == &u64::MAX.to_string()));
+    assert_eq!(partial_banks[0].slot, (u64::MAX - 1).to_string());
+    assert_eq!(partial_banks[0].bank_id, u64::MAX.to_string());
+    assert_eq!(replay_from_slot, Some((u64::MAX - 2).to_string()));
+  }
+
+  #[test]
+  fn disconnected_without_replay_has_no_replay_slot() {
+    let event = JsReconnectEvent::from(ReconnectEvent::Disconnected(Disconnected {
+      partial_banks: vec![],
+      replay_from_slot: None,
+    }));
+    assert!(matches!(
+      event,
+      JsReconnectEvent::Disconnected { partial_banks, replay_from_slot: None } if partial_banks.is_empty()
+    ));
+  }
+
+  #[test]
+  fn update_is_the_encoded_subscribe_update() {
+    let update = SubscribeUpdate {
+      filters: vec!["accounts".to_owned()],
+      ..Default::default()
+    };
+    let JsReconnectEvent::Update { update: bytes } =
+      JsReconnectEvent::from(ReconnectEvent::Update(update.clone()))
+    else {
+      panic!("expected Update");
+    };
+    assert_eq!(SubscribeUpdate::decode(bytes.as_ref()).unwrap(), update);
   }
 
   #[tokio::test]
-  async fn close_releases_recovery_stream_and_rejects_writes() {
+  async fn close_releases_the_stream_and_rejects_writes() {
     let (sink, _requests) = futures::channel::mpsc::channel(1);
     let (updates, stream) = tokio::sync::mpsc::channel(1);
     let duplex = ReconnectDuplexStream {

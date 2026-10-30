@@ -313,11 +313,15 @@ impl GrpcClient {
     crate::subscribe_duplex_stream(env, self, initial_request_bytes)
   }
 
-  /// Opens a subscription that emits updates and bank recovery events.
+  /// Creates a subscription that reconnects after a recoverable failure.
+  ///
+  /// The returned stream yields `Update` events, and one `Disconnected` event per dropped
+  /// connection naming the banks to discard. The client's reconnect options pick the retry
+  /// schedule and whether a reconnect replays from the last confirmed slot.
   #[napi]
   pub fn subscribe_with_reconnect<'env>(
     &self,
-    env: &'env Env,
+    env: &'env napi::Env,
     initial_request_bytes: Option<Buffer>,
   ) -> napi::Result<PromiseRaw<'env, crate::reconnect::ReconnectDuplexStream>> {
     crate::reconnect::subscribe_with_reconnect(env, self, initial_request_bytes)

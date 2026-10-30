@@ -25,19 +25,19 @@ npm run build
 
 Please refer to [examples/typescript](../examples/typescript/README.md) for some usage examples.
 
-### Auto reconnect
+### Reconnecting subscriptions
 
-Use `subscribeWithReconnect()` to receive bank-aware recovery events. The optional fourth constructor argument configures the retry backoff. Ordinary `subscribe()` and `subscribeDeshred()` streams do not reconnect.
+`subscribeWithReconnect()` opens a subscription that reconnects by itself after a recoverable
+failure. Ordinary `subscribe()` and `subscribeDeshred()` streams never reconnect. The fourth
+constructor argument configures it:
 
 ```ts
 import Client, { ReconnectEvent } from "@triton-one/yellowstone-grpc";
 
 const client = new Client(endpoint, xToken, channelOptions, {
-  backoff: {
-    initialIntervalMs: 100,
-    multiplier: 2,
-    maxRetries: 10,
-  },
+  backoff: { initialIntervalMs: 100, multiplier: 2, maxRetries: 10 },
+  policy: "Replay", // or "NoReplay"
+  slotsBehind: 0,
 });
 
 await client.connect();
@@ -45,24 +45,55 @@ const stream = await client.subscribeWithReconnect(request);
 
 stream.on("data", (event: ReconnectEvent) => {
   if (event.type === "Update") {
-    applyUpdate(event.generation, event.update);
+    applyUpdate(event.update);
   } else {
-    for (const bank of event.banks) {
-      removeBank(bank.generation, bank.slot, bank.bankId);
+    // The connection dropped: drop what you hold of these banks.
+    for (const bank of event.partialBanks) {
+      removeBank(bank.slot, bank.bankId);
     }
-    recordRecovery(event.replacement, event.winners);
   }
 });
-stream.on("error", (error) => console.error("Recovery failed", error));
+stream.on("error", (error) => console.error("subscription failed", error));
 ```
 
-The application supplies `applyUpdate`, `removeBank`, and `recordRecovery`. Keep state by `(generation, slot, bankId)`. Bank IDs identify banks within one connection; they are not stable across connections. All generation, slot, and bank ID values are decimal strings to preserve uint64 precision.
+The application supplies `applyUpdate` and `removeBank`. The stream yields two kinds of events:
 
-Apply each `DiscardBanks` event before processing the following replacement updates. Remove only the listed bank identities. `IncompleteDelivery` means that delivery was interrupted; it does not mean that a bank lost consensus. `replacement` gives the inclusive replay boundary and the connection generation that supplies replacement updates. Each slot winner is either `{ type: "Finalized", slot, blockhash }` or `{ type: "Unknown", slot }` for a proven skipped slot.
+- `Update`: a `SubscribeUpdate`, as `subscribe()` yields it.
+- `Disconnected`: the connection dropped, and every later event comes from the new connection.
+  `partialBanks` lists the banks you received part of (account writes, transactions,
+  transaction statuses, entries or a CreatedBank status) but not their Block, block footer or
+  block meta. The server sends those after all of a bank's content, so these are the only banks
+  you may hold in part: discard them. `replayFromSlot` is where the new connection replays
+  from, or `null` when it resumes at the live tip. Slots and bank IDs are decimal strings, to
+  keep uint64 precision.
 
-Recovery requires processed commitment, no startup snapshots, and no initial `fromSlot`. It waits for finalized winner evidence before emitting discards and replacement updates. Recovery buffers updates without a size cap while waiting for this evidence. Failed replay or exhausted retries terminates the stream with an error. Request writes and pings use the same `stream.write(request)` API as ordinary subscriptions.
+With `policy: "Replay"` (the default), a reconnect replays from `slotsBehind` slots before the
+last confirmed slot the stream saw, or from the first request's `fromSlot` before any confirmed
+slot is known. The replay resends every partial bank whole, and also
+banks you already hold whole: handle duplicates. A replayed bank carries only the latest write of
+each account (the server keeps one write per account and bank), so it can have fewer account
+updates than the same bank delivered live, with the same final state. With `policy: "NoReplay"`, a reconnect
+resumes at the live tip, and what the server sent during the outage is lost. Either way, the
+stream drops whatever a later connection sends of a partial bank that no replay resends.
 
-To migrate reconnecting subscriptions, replace `subscribe()` with `subscribeWithReconnect()` and handle both event variants. Remove `enabled`, `policy`, and `slotRetention` from the fourth constructor argument; these options are rejected because they do not configure bank recovery. Omit the fourth argument to use the default backoff with `subscribeWithReconnect()`.
+The stream adds block meta and slot filters named `RECONNECT_FILTER_KEY` (`"__reconn"`) to every
+request, and hides the updates only they match: no filter of yours may use that name. A request
+written to the stream (`stream.write(request)`) changes the filters of the live connection and of
+every reconnect. Put `fromSlot` in the request passed to `subscribeWithReconnect()`: the server
+ignores it on later writes. The stream ends with an error on an unrecoverable status, on a failed
+reconnect, or once its retry budget is spent.
+
+The retry budget is `backoff.maxRetries` reconnects in a row. Each reconnect waits a delay
+first: `initialIntervalMs`, then multiplied by `multiplier` for each next one in a row. A
+connection that delivers a bank's Block, block footer or block meta refills the budget; a ping or
+a slot status alone does not, so a server that accepts and then drops cannot keep the stream
+reconnecting forever.
+
+To see reconnects against a real endpoint, run `node try-reconnect.js` after `npm run build:dev`.
+It reads `TEST_ENDPOINT` (and `TEST_TOKEN`) from `.env`, connects through a local proxy that cuts
+the connection every few seconds, and prints each `Disconnected` event, the partial banks it
+drops, and the banks a replay resends. `--no-replay` and `--cut-every <seconds>` change the
+policy and the cut interval.
 
 ### Compressed account filters
 
@@ -215,7 +246,7 @@ The public SDK always returns the generated protobuf-compatible types from
 
 - Unary methods return generated response objects (for example `PongResponse`,
   `GetSlotResponse`, `GetVersionResponse`) instead of raw N-API wrapper shapes.
-- Ordinary subscription stream updates are normalized to `SubscribeUpdate` with top-level oneof fields (`account`, `slot`, `transaction`, etc). Reconnecting subscriptions emit `ReconnectEvent` objects whose `Update` variant contains a `SubscribeUpdate`.
+- Ordinary subscription stream updates are normalized to `SubscribeUpdate` with top-level oneof fields (`account`, `slot`, `transaction`, etc). Reconnecting subscriptions emit `ReconnectEvent` objects; their `Update` variant holds a `SubscribeUpdate`.
 - The internal N-API `Js...` objects are an implementation detail and are
   converted automatically by the SDK wrapper.
 
