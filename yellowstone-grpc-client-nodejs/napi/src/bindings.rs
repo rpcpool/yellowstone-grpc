@@ -47,11 +47,14 @@ pub struct JsChannelOptions {
   pub grpc_tcp_nodelay: Option<bool>,
 }
 
+/// Where a reconnect resumes.
 #[napi(string_enum)]
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JsReconnectPolicy {
-  RecoverMissedData,
-  SkipMissedData,
+  /// Resume at the live tip; what the server sent during the outage is lost.
+  NoReplay,
+  /// Replay from `slotsBehind` slots before the last confirmed slot seen. The default.
+  Replay,
 }
 
 #[napi(object)]
@@ -62,16 +65,20 @@ pub struct JsReconnectBackoff {
   pub max_retries: Option<u32>,
 }
 
+/// Options of `subscribeWithReconnect()`. Plain subscriptions never reconnect.
 #[napi(object)]
 #[derive(Deserialize, Debug, Clone)]
 pub struct JsReconnectConfig {
-  /// Unsupported. Call subscribeWithReconnect to enable recovery.
+  /// Unsupported: rejected. Call subscribeWithReconnect to reconnect.
   pub enabled: Option<bool>,
   pub backoff: Option<JsReconnectBackoff>,
-  /// Unsupported for bank recovery.
+  /// Unsupported: rejected.
   pub slot_retention: Option<u32>,
-  /// Unsupported for bank recovery.
+  /// Where a reconnect resumes. Defaults to `Replay`.
   pub policy: Option<JsReconnectPolicy>,
+  /// With `Replay`, how many slots before the last confirmed slot to replay from. Defaults
+  /// to 0. Rejected with `NoReplay`.
+  pub slots_behind: Option<u32>,
 }
 
 impl Default for JsChannelOptions {

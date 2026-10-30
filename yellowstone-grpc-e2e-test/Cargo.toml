@@ -10,7 +10,6 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-arc-swap = { workspace = true }
 futures = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 chrono = { workspace = true }
