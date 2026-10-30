@@ -70,11 +70,11 @@ struct VerificationResult {
 enum Commands {
     /// List all available e2e subscriber scenarios.
     List {
-        /// Only show scenarios that carry this tag (repeatable; any match passes).
-        #[arg(long = "tags", value_name = "TAG")]
+        /// Only show scenarios that carry this tag (repeatable or comma-separated; any match passes).
+        #[arg(long = "tags", value_name = "TAG", value_delimiter = ',')]
         tags: Vec<String>,
-        /// Hide scenarios that carry this tag (repeatable; any match excludes). Wins over `--tags`.
-        #[arg(long = "exclude-tags", value_name = "TAG")]
+        /// Hide scenarios that carry this tag (repeatable or comma-separated; any match excludes). Wins over `--tags`.
+        #[arg(long = "exclude-tags", value_name = "TAG", value_delimiter = ',')]
         exclude_tags: Vec<String>,
         /// Only show scenarios from this module (e.g. `default`, `extra`).
         #[arg(long = "module", value_name = "MODULE", default_value = "default")]
@@ -82,11 +82,11 @@ enum Commands {
     },
     /// Run all e2e subscriber scenarios.
     All {
-        /// Only run scenarios that carry this tag (repeatable; any match passes).
-        #[arg(long = "tags", value_name = "TAG")]
+        /// Only run scenarios that carry this tag (repeatable or comma-separated; any match passes).
+        #[arg(long = "tags", value_name = "TAG", value_delimiter = ',')]
         tags: Vec<String>,
-        /// Skip scenarios that carry this tag (repeatable; any match excludes). Wins over `--tags`.
-        #[arg(long = "exclude-tags", value_name = "TAG")]
+        /// Skip scenarios that carry this tag (repeatable or comma-separated; any match excludes). Wins over `--tags`.
+        #[arg(long = "exclude-tags", value_name = "TAG", value_delimiter = ',')]
         exclude_tags: Vec<String>,
         /// Only run scenarios from this module (e.g. `default`, `extra`).
         #[arg(long = "module", value_name = "MODULE", default_value = "default")]
@@ -653,6 +653,31 @@ mod tests {
             cli.json_file.as_deref(),
             Some(std::path::Path::new("/tmp/result.json"))
         );
+    }
+
+    /// `--tags` and `--exclude-tags` take a comma-separated list, repeated or not.
+    #[test]
+    fn parses_comma_separated_tags() {
+        let cli = Cli::try_parse_from([
+            "yellowstone-e2e",
+            "all",
+            "--tags",
+            "replay,ordering",
+            "--exclude-tags",
+            "block-footer,gossip",
+            "--exclude-tags",
+            "ratelimit",
+        ])
+        .unwrap();
+
+        let Commands::All {
+            tags, exclude_tags, ..
+        } = cli.command
+        else {
+            panic!("expected the `all` command");
+        };
+        assert_eq!(tags, ["replay", "ordering"]);
+        assert_eq!(exclude_tags, ["block-footer", "gossip", "ratelimit"]);
     }
 
     /// Scenarios are run by name, and a `params` entry is named after its values' `Debug`

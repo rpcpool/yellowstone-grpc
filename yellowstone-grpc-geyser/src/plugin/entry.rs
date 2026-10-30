@@ -422,15 +422,11 @@ impl GeyserPlugin for Plugin {
                     )
                 }
                 SlotStatus::CreatedBank => {
-                    // CreatedBank in particular is critical to the life-cycle of a block reconstruction,
-                    // but it is not forwarded to the subscribed client from block_reconstruction_loop,
-                    // so it must be sent to geyser_loop to ensure subscribers receive it.
+                    // geyser_loop broadcasts it at processed, and block reconstruction needs it to
+                    // seal the bank. At confirmed and finalized, block reconstruction sends it with
+                    // the bank's content when the bank reaches that level, so it is not broadcast
+                    // there now.
                     inner.send_message(message.clone());
-                    // FirstShredReceived/Completed/CreatedBank/Dead slot status updates for Confirmed/Finalized commitment subscribers are not explicitly sent by the block reconstruction loop.
-                    // Therefore we explicitly need to forward these updates to the subscribers for all commitment levels, the geyser_loop will take care of forwarding them to the Processed commitment level.
-                    let messages = Arc::new(vec![message.clone()]);
-                    inner.send_broadcast_message(CommitmentLevel::Confirmed, Arc::clone(&messages));
-                    inner.send_broadcast_message(CommitmentLevel::Finalized, messages);
                 }
             }
 
@@ -458,9 +454,9 @@ impl GeyserPlugin for Plugin {
             inner.send_message(message.clone());
 
             match status {
+                // geyser_loop broadcasts them at processed. They name no bank, so confirmed and
+                // finalized subscribers get them here, as they land, to follow the slot's life.
                 SlotStatus::FirstShredReceived | SlotStatus::Completed | SlotStatus::Dead(_) => {
-                    // FirstShredReceived/Completed/CreatedBank/Dead slot status updates for Confirmed/Finalized commitment subscribers are not explicitly sent by the block reconstruction loop.
-                    // Therefore we explicitly need to forward these updates to the subscribers for all commitment levels, the geyser_loop will take care of forwarding them to the Processed commitment level.
                     let messages = Arc::new(vec![message.clone()]);
                     inner.send_broadcast_message(CommitmentLevel::Confirmed, Arc::clone(&messages));
                     inner.send_broadcast_message(CommitmentLevel::Finalized, messages);

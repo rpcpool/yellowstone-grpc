@@ -1,6 +1,7 @@
 use {
     crate::{grpc::new_client, scenarios::RunConfig},
     anyhow::{bail, ensure, Context, Result},
+    futures::SinkExt,
     solana_pubkey::Pubkey,
     std::{
         collections::{HashMap, HashSet},
@@ -446,16 +447,226 @@ pub async fn it_should_support_block_subscription_replay(config: &RunConfig) -> 
     Ok(())
 }
 
-/// Verifies replay message ordering matches the live broadcast path:
-/// block data (Account/Transaction/Entry) before Block before BlockMeta before slot status.
-#[test_helper(name = "replay-ordering", tags = ["ordering", "replay"])]
-pub async fn it_should_verify_replay_ordering_matches_live_path(config: &RunConfig) -> Result<()> {
+/// How many slots behind the processed tip [`it_should_replay_after_sdk_subscribe`] replays
+/// from.
+const SDK_SUBSCRIBE_REPLAY_DEPTH: u64 = 10;
+/// How many slots past `from_slot` the first replayed block meta may be, for slots the leader
+/// skipped.
+const SDK_SUBSCRIBE_SKIPPED_SLOTS: u64 = 3;
+
+/// Verifies a replay asked for the way users ask with the SDK: `subscribe()`, which sends an
+/// empty request first, then the request with `from_slot` on the sink.
+///
+/// ```text
+/// client:  subscribe() ──► {}                      asks for nothing: not the first request
+///          sink.send   ──► { blocks_meta, from_slot }  the first request: replays
+/// ```
+///
+/// The server must not take the empty request as the first request, which alone can replay.
+/// The check: a block meta from near `from_slot` arrives, which only the replay can send, since
+/// those slots froze before the client connected.
+#[test_helper(name = "replay-after-sdk-subscribe", tags = ["replay"])]
+pub async fn it_should_replay_after_sdk_subscribe(config: &RunConfig) -> Result<()> {
     let mut client = new_client(config).await?;
+    let tip = client.get_slot(None).await.context("get_slot")?.slot;
+    let from_slot = tip.saturating_sub(SDK_SUBSCRIBE_REPLAY_DEPTH);
 
-    let resp = client.get_slot(None).await.context("get_slot")?;
-    let tip = resp.slot;
-    let from_slot = tip.saturating_sub(10);
+    let (mut sink, mut stream) = client.subscribe().await.context("subscribe")?;
+    sink.send(SubscribeRequest {
+        blocks_meta: HashMap::from([("meta".to_string(), Default::default())]),
+        from_slot: Some(from_slot),
+        ..Default::default()
+    })
+    .await
+    .context("send the request with from_slot")?;
 
+    let first_block_meta = tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(update) = stream.next().await {
+            let update = update.context("stream should yield updates without error")?;
+            if let Some(UpdateOneof::BlockMeta(block_meta)) = update.update_oneof {
+                return Ok(block_meta.slot);
+            }
+        }
+        bail!("stream ended before any block meta")
+    })
+    .await
+    .context("no block meta within 30s")??;
+
+    log::info!("tip {tip}, from_slot {from_slot}, first block meta for slot {first_block_meta}");
+    ensure!(
+        first_block_meta <= from_slot + SDK_SUBSCRIBE_SKIPPED_SLOTS,
+        "the first block meta is for slot {first_block_meta}, not near from_slot {from_slot}: \
+         the replay was ignored (tip at connect {tip})"
+    );
+    Ok(())
+}
+
+/// How many slots before the commitment's own tip [`it_should_join_replay_and_live_stream`]
+/// replays from. Starting from the confirmed or finalized tip, not the processed one, reaches
+/// further back at confirmed and further still at finalized, so the replay holds banks already
+/// at that commitment, while staying inside the server's replay buffer.
+const JOIN_REPLAY_DEPTH: u64 = 10;
+
+/// Banks that reach the commitment, past the tip at connect, before the test stops.
+const JOIN_LIVE_BANKS_TO_CHECK: usize = 3;
+/// How many slots past the processed tip at connect
+/// [`it_should_replay_contiguous_slots_from_the_tip`] reads.
+const CONTIGUOUS_SLOTS_PAST_TIP: u64 = 10;
+
+/// When [`join_replay_and_live_stream`] stops reading.
+#[derive(Clone, Copy)]
+enum JoinUntil {
+    /// Once this many banks at or past the processed tip at connect reached the commitment.
+    LiveBanks(usize),
+    /// Once the slot this far past the processed tip at connect reached the commitment. Every
+    /// slot from `from_slot` to it must have reached it too, so a slot its leader skipped fails
+    /// the check. See [`it_should_replay_contiguous_slots_from_the_tip`].
+    ContiguousPastTip(u64),
+}
+const JOIN_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// What a client received of one bank, keyed by `(slot, bank_id)`.
+#[derive(Default)]
+struct JoinedBank {
+    created_bank: bool,
+    transactions: HashSet<Vec<u8>>,
+    entries: HashSet<u64>,
+    block: bool,
+    footer: bool,
+    block_meta: bool,
+    /// Commitment statuses, in arrival order.
+    statuses: Vec<SlotStatus>,
+}
+
+/// Verifies a `from_slot` replay joins the live stream with every bank once, whole and in
+/// order, at `commitment`, across the switch from replay to live:
+///
+/// ```text
+/// time ───────────────────────────────────────────────────────────────────────►
+/// channel:   from_slot ... commitment tip ... processed tip │ ...
+///                                                         L, R
+/// replay:    from_slot ... commitment tip                     (already at `commitment`)
+/// live:                                     ... processed tip   ...  (reach it later)
+/// client:    every bank once: content, Block, footer, block meta, then Processed,
+///            Confirmed, Finalized in order
+///
+/// from_slot = commitment tip - JOIN_REPLAY_DEPTH
+/// ```
+///
+/// For every bank from `from_slot` on:
+/// - its CreatedBank arrives once, at every commitment, before its block meta;
+/// - no transaction or entry arrives twice, and all of them arrive before its Block;
+/// - then the Block, then the footer (Alpenglow), then the block meta, each once;
+/// - every transaction and entry the block meta counts has arrived by then;
+/// - its commitment statuses arrive after its block meta, each once, in the order
+///   Processed, Confirmed, Finalized;
+///
+/// It stops once `JOIN_LIVE_BANKS_TO_CHECK` banks at or past the processed tip at connect
+/// reached `commitment`, and fails if no bank at or before the commitment's tip at connect did,
+/// so both replayed and live banks are checked.
+#[test_helper(
+    name = "replay-ordering",
+    tags = ["ordering", "replay"],
+    params = [
+        CommitmentLevelProto::Processed,
+        CommitmentLevelProto::Confirmed,
+        CommitmentLevelProto::Finalized,
+    ]
+)]
+pub async fn it_should_join_replay_and_live_stream(
+    config: &RunConfig,
+    commitment: CommitmentLevelProto,
+) -> Result<()> {
+    let until = JoinUntil::LiveBanks(JOIN_LIVE_BANKS_TO_CHECK);
+    tokio::time::timeout(
+        JOIN_TIMEOUT,
+        join_replay_and_live_stream(config, commitment, JOIN_REPLAY_DEPTH, until),
+    )
+    .await
+    .with_context(|| {
+        format!("{commitment:?}: timed out before {JOIN_LIVE_BANKS_TO_CHECK} live banks")
+    })?
+}
+
+/// Verifies a replay from one slot behind the commitment's tip loses no slot: every slot from
+/// there to `CONTIGUOUS_SLOTS_PAST_TIP` slots past the processed tip at connect reaches the
+/// client at `commitment`, each bank whole and in order, as [`it_should_join_replay_and_live_stream`]
+/// checks.
+///
+/// # Can fail on a skipped slot
+///
+/// It assumes every slot in the range has a bank. A leader that skips its slot leaves that slot
+/// with no bank at all, so it never reaches `commitment`, and this test fails listing it as
+/// missing although nothing was lost. Re-run it, or check the slot is skipped on the cluster
+/// (for example with `solana block <slot>`), before reading such a failure as data loss.
+///
+/// ```text
+/// time ──────────────────────────────────────────────────────────────────────►
+/// slots:    tip-1   tip   tip+1   tip+2   ...   tip+10       (tip: commitment's tip)
+///                       L, R
+/// replay:   tip-1   tip
+/// live:                   tip+1   tip+2   ...   tip+10
+/// client:   tip-1   tip   tip+1   tip+2   ...   tip+10       none missing, none twice
+/// ```
+#[test_helper(
+    name = "replay-contiguous",
+    tags = ["ordering", "replay"],
+    params = [
+        CommitmentLevelProto::Processed,
+        CommitmentLevelProto::Confirmed,
+        CommitmentLevelProto::Finalized,
+    ]
+)]
+pub async fn it_should_replay_contiguous_slots_from_the_tip(
+    config: &RunConfig,
+    commitment: CommitmentLevelProto,
+) -> Result<()> {
+    let until = JoinUntil::ContiguousPastTip(CONTIGUOUS_SLOTS_PAST_TIP);
+    tokio::time::timeout(
+        JOIN_TIMEOUT,
+        join_replay_and_live_stream(config, commitment, 1, until),
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "{commitment:?}: timed out before the slot {CONTIGUOUS_SLOTS_PAST_TIP} past the tip"
+        )
+    })?
+}
+
+/// Replays from `depth` slots behind the commitment's tip, then reads the live stream until
+/// `until`, checking every bank as [`it_should_join_replay_and_live_stream`] describes.
+async fn join_replay_and_live_stream(
+    config: &RunConfig,
+    commitment: CommitmentLevelProto,
+    depth: u64,
+    until: JoinUntil,
+) -> Result<()> {
+    let reached_status = match commitment {
+        CommitmentLevelProto::Processed => SlotStatus::SlotProcessed,
+        CommitmentLevelProto::Confirmed => SlotStatus::SlotConfirmed,
+        CommitmentLevelProto::Finalized => SlotStatus::SlotFinalized,
+    };
+    const STATUS_ORDER: [SlotStatus; 3] = [
+        SlotStatus::SlotProcessed,
+        SlotStatus::SlotConfirmed,
+        SlotStatus::SlotFinalized,
+    ];
+
+    let mut client = new_client(config).await?;
+    // Banks up to `commitment_tip` were at `commitment` at connect, so they come from the
+    // replay; banks from `processed_tip` on were not sealed yet, so they come live.
+    let processed_tip = client
+        .get_slot(Some(CommitmentLevelProto::Processed))
+        .await
+        .context("get_slot at processed")?
+        .slot;
+    let commitment_tip = client
+        .get_slot(Some(commitment))
+        .await
+        .with_context(|| format!("get_slot at {commitment:?}"))?
+        .slot;
+    let from_slot = commitment_tip.saturating_sub(depth);
     let subscription = SubscribeRequest {
         slots: HashMap::from([(
             "test".to_string(),
@@ -464,141 +675,259 @@ pub async fn it_should_verify_replay_ordering_matches_live_path(config: &RunConf
                 ..Default::default()
             },
         )]),
-        blocks: HashMap::from([(
-            "test".to_string(),
-            SubscribeRequestFilterBlocks {
-                include_accounts: Some(true),
-                include_transactions: Some(true),
-                include_entries: Some(true),
-                ..Default::default()
-            },
-        )]),
-        blocks_meta: HashMap::from([("test".to_string(), Default::default())]),
         accounts: HashMap::from([(
             "test".to_string(),
             SubscribeRequestFilterAccounts {
-                account: vec![],
+                account: MUST_HAVE_SYSVAR_ACCOUNTS.map(str::to_string).to_vec(),
                 ..Default::default()
             },
         )]),
-        transactions: HashMap::from([("test".to_string(), Default::default())]),
+        transactions: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterTransactions::default(),
+        )]),
         entry: HashMap::from([("test".to_string(), Default::default())]),
+        // Light blocks: only where the Block falls matters here.
+        blocks: HashMap::from([(
+            "test".to_string(),
+            SubscribeRequestFilterBlocks {
+                include_accounts: Some(false),
+                include_transactions: Some(false),
+                include_entries: Some(false),
+                ..Default::default()
+            },
+        )]),
+        block_footer: HashMap::from([("test".to_string(), Default::default())]),
+        blocks_meta: HashMap::from([("test".to_string(), Default::default())]),
+        commitment: Some(commitment as i32),
         from_slot: Some(from_slot),
-        commitment: Some(1),
         ..Default::default()
     };
-
     let mut stream = client
         .subscribe_once(subscription)
         .await
         .context("subscription should succeed")?;
-
     log::info!(
-        "current tip slot is {}, subscribing from slot {}",
-        tip,
-        from_slot
+        "{commitment:?}: processed tip {processed_tip}, {commitment:?} tip {commitment_tip}, \
+         replaying from slot {from_slot}"
     );
 
-    // Track message ordering per slot
-    #[derive(Default)]
-    struct SlotOrdering {
-        last_data_seq: Option<usize>,
-        block_seq: Option<usize>,
-        blockmeta_seq: Option<usize>,
-        first_status_seq: Option<usize>,
-    }
+    let mut banks: HashMap<(u64, u64), JoinedBank> = HashMap::new();
+    let mut replayed_reached = 0usize;
+    let mut live_reached = 0usize;
+    // Slots with a bank that reached `commitment`.
+    let mut reached_slots = HashSet::new();
+    let finished = |live_reached: usize, reached_slots: &HashSet<u64>| match until {
+        JoinUntil::LiveBanks(banks) => live_reached >= banks,
+        JoinUntil::ContiguousPastTip(past) => reached_slots.contains(&(processed_tip + past)),
+    };
 
-    let mut slot_orderings: HashMap<u64, SlotOrdering> = HashMap::new();
-    let mut seq: usize = 0;
-    let mut validated_slots = 0usize;
-    const TARGET_VALIDATED_SLOTS: usize = 3;
-
-    while let Some(update) = stream.next().await {
-        if validated_slots >= TARGET_VALIDATED_SLOTS {
-            break;
-        }
-        let update = update.context("stream should yield updates without error")?;
+    while !finished(live_reached, &reached_slots) {
+        let update = stream
+            .next()
+            .await
+            .context("stream ended")?
+            .context("stream should yield updates without error")?;
         let Some(update_oneof) = update.update_oneof else {
             continue;
         };
-
         match update_oneof {
-            UpdateOneof::Account(ev) => {
-                let ordering = slot_orderings.entry(ev.slot).or_default();
-                ordering.last_data_seq = Some(seq);
-                seq += 1;
-            }
-            UpdateOneof::Transaction(ev) => {
-                let ordering = slot_orderings.entry(ev.slot).or_default();
-                ordering.last_data_seq = Some(seq);
-                seq += 1;
-            }
-            UpdateOneof::Entry(ev) => {
-                let ordering = slot_orderings.entry(ev.slot).or_default();
-                ordering.last_data_seq = Some(seq);
-                seq += 1;
-            }
-            UpdateOneof::Block(ev) => {
-                let ordering = slot_orderings.entry(ev.slot).or_default();
-                ordering.block_seq = Some(seq);
-                seq += 1;
-            }
-            UpdateOneof::BlockMeta(ev) => {
-                let ordering = slot_orderings.entry(ev.slot).or_default();
-                ordering.blockmeta_seq = Some(seq);
-                seq += 1;
-
-                // BlockMeta is the last content message before slot status.
-                // Validate ordering for this slot if we have all phases.
-                let ordering = slot_orderings.get(&ev.slot).unwrap();
-                if let (Some(last_data), Some(block), Some(blockmeta)) = (
-                    ordering.last_data_seq,
-                    ordering.block_seq,
-                    ordering.blockmeta_seq,
+            UpdateOneof::Slot(slot) => {
+                let status = slot.status();
+                // Lifecycle events that name no bank go out as they land, at every commitment.
+                if matches!(
+                    status,
+                    SlotStatus::SlotFirstShredReceived
+                        | SlotStatus::SlotCompleted
+                        | SlotStatus::SlotDead
                 ) {
-                    ensure!(
-                        last_data < block,
-                        "slot {}: block data (seq {last_data}) must arrive before Block (seq {block})",
-                        ev.slot
-                    );
-                    ensure!(
-                        block < blockmeta,
-                        "slot {}: Block (seq {block}) must arrive before BlockMeta (seq {blockmeta})",
-                        ev.slot
-                    );
-                    validated_slots += 1;
-                    log::info!(
-                        "slot {}: ordering verified {validated_slots}/{TARGET_VALIDATED_SLOTS}",
-                        ev.slot
-                    );
+                    continue;
                 }
-            }
-            UpdateOneof::Slot(ev) => {
-                let ordering = slot_orderings.entry(ev.slot).or_default();
-                if ordering.first_status_seq.is_none() {
-                    ordering.first_status_seq = Some(seq);
-
-                    // If we already have blockmeta, verify status comes after
-                    if let Some(blockmeta) = ordering.blockmeta_seq {
-                        ensure!(
-                            blockmeta < seq,
-                            "slot {}: BlockMeta (seq {blockmeta}) must arrive before slot status (seq {seq})",
-                            ev.slot
-                        );
+                if slot.slot < from_slot {
+                    continue;
+                }
+                let bank_id = slot.bank_id.with_context(|| {
+                    format!("slot {}: {status:?} should have a bank_id", slot.slot)
+                })?;
+                let bank = banks.entry((slot.slot, bank_id)).or_default();
+                if status == SlotStatus::SlotCreatedBank {
+                    ensure!(
+                        !bank.created_bank,
+                        "slot {} bank {bank_id}: CreatedBank arrived twice",
+                        slot.slot
+                    );
+                    ensure!(
+                        !bank.block_meta,
+                        "slot {} bank {bank_id}: CreatedBank arrived after the block meta",
+                        slot.slot
+                    );
+                    bank.created_bank = true;
+                    continue;
+                }
+                ensure!(
+                    bank.block_meta,
+                    "slot {} bank {bank_id}: {status:?} arrived before the block meta",
+                    slot.slot
+                );
+                let expected = STATUS_ORDER.get(bank.statuses.len());
+                ensure!(
+                    expected == Some(&status),
+                    "slot {} bank {bank_id}: {status:?} after {:?}, expected {expected:?}",
+                    slot.slot,
+                    bank.statuses
+                );
+                bank.statuses.push(status);
+                if status == reached_status {
+                    reached_slots.insert(slot.slot);
+                    if slot.slot <= commitment_tip {
+                        replayed_reached += 1;
+                    } else if slot.slot >= processed_tip {
+                        live_reached += 1;
                     }
                 }
-                seq += 1;
             }
-            UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => continue,
-            _ => continue,
+            UpdateOneof::Account(account) => {
+                let Some(bank_id) = account.bank_id else {
+                    continue;
+                };
+                if account.slot < from_slot {
+                    continue;
+                }
+                let bank = banks.entry((account.slot, bank_id)).or_default();
+                ensure!(
+                    !bank.block,
+                    "slot {} bank {bank_id}: an account arrived after the Block",
+                    account.slot
+                );
+            }
+            UpdateOneof::Transaction(transaction) => {
+                if transaction.slot < from_slot {
+                    continue;
+                }
+                let key = (transaction.slot, transaction.bank_id);
+                let bank = banks.entry(key).or_default();
+                ensure!(
+                    !bank.block,
+                    "slot {} bank {}: a transaction arrived after the Block",
+                    key.0,
+                    key.1
+                );
+                let signature = transaction
+                    .transaction
+                    .context("transaction update should have a transaction")?
+                    .signature;
+                ensure!(
+                    bank.transactions.insert(signature),
+                    "slot {} bank {}: a transaction arrived twice",
+                    key.0,
+                    key.1
+                );
+            }
+            UpdateOneof::Entry(entry) => {
+                if entry.slot < from_slot {
+                    continue;
+                }
+                let key = (entry.slot, entry.bank_id);
+                let bank = banks.entry(key).or_default();
+                ensure!(
+                    !bank.block,
+                    "slot {} bank {}: an entry arrived after the Block",
+                    key.0,
+                    key.1
+                );
+                ensure!(
+                    bank.entries.insert(entry.index),
+                    "slot {} bank {}: entry {} arrived twice",
+                    key.0,
+                    key.1,
+                    entry.index
+                );
+            }
+            UpdateOneof::Block(block) => {
+                if block.slot < from_slot {
+                    continue;
+                }
+                let key = (block.slot, block.bank_id);
+                let bank = banks.entry(key).or_default();
+                ensure!(
+                    !bank.block && !bank.footer && !bank.block_meta,
+                    "slot {} bank {}: Block arrived twice, or after the footer or block meta",
+                    key.0,
+                    key.1
+                );
+                bank.block = true;
+            }
+            UpdateOneof::BlockFooter(footer) => {
+                if footer.slot < from_slot {
+                    continue;
+                }
+                let key = (footer.slot, footer.bank_id);
+                let bank = banks.entry(key).or_default();
+                ensure!(
+                    bank.block && !bank.footer && !bank.block_meta,
+                    "slot {} bank {}: footer arrived twice, before the Block or after the block meta",
+                    key.0,
+                    key.1
+                );
+                bank.footer = true;
+            }
+            UpdateOneof::BlockMeta(meta) => {
+                if meta.slot < from_slot {
+                    continue;
+                }
+                let key = (meta.slot, meta.bank_id);
+                let bank = banks.entry(key).or_default();
+                ensure!(
+                    !bank.block_meta,
+                    "slot {} bank {}: block meta arrived twice",
+                    key.0,
+                    key.1
+                );
+                ensure!(
+                    bank.created_bank && bank.block,
+                    "slot {} bank {}: block meta arrived before CreatedBank or the Block",
+                    key.0,
+                    key.1
+                );
+                ensure!(
+                    bank.transactions.len() as u64 == meta.executed_transaction_count,
+                    "slot {} bank {}: {} of {} transactions before the block meta",
+                    key.0,
+                    key.1,
+                    bank.transactions.len(),
+                    meta.executed_transaction_count
+                );
+                ensure!(
+                    bank.entries.len() as u64 == meta.entries_count,
+                    "slot {} bank {}: {} of {} entries before the block meta",
+                    key.0,
+                    key.1,
+                    bank.entries.len(),
+                    meta.entries_count
+                );
+                bank.block_meta = true;
+            }
+            UpdateOneof::Ping(_) | UpdateOneof::Pong(_) => {}
+            other => bail!("unexpected update type: {other:?}"),
         }
     }
 
     ensure!(
-        validated_slots >= TARGET_VALIDATED_SLOTS,
-        "should have validated ordering for at least {TARGET_VALIDATED_SLOTS} slots, got {validated_slots}"
+        replayed_reached > 0,
+        "{commitment:?}: no replayed bank, from slot {from_slot} to {commitment_tip}, reached {commitment:?}"
     );
-
+    if let JoinUntil::ContiguousPastTip(past) = until {
+        let missing: Vec<u64> = (from_slot..=processed_tip + past)
+            .filter(|slot| !reached_slots.contains(slot))
+            .collect();
+        ensure!(
+            missing.is_empty(),
+            "{commitment:?}: slots from {from_slot} to {} that never reached {commitment:?} \
+             (lost, or skipped by their leader): {missing:?}",
+            processed_tip + past
+        );
+    }
+    log::info!("{commitment:?}: {replayed_reached} replayed and {live_reached} live banks checked");
     Ok(())
 }
 

@@ -13,7 +13,7 @@ The CLI binary is `yellowstone-e2e` and supports:
 
 - `src/scenarios.rs`: shared scenario registry (`Scenario`, `RunConfig`) and module declarations.
 - `src/scenarios/default.rs`: default scenario module.
-- `src/scenarios/alpenglow.rs`: Alpenglow-only scenarios (block footers), split into `alpenglow/block_footer.rs`, `alpenglow/filters.rs` and `alpenglow/replay.rs`.
+- `src/scenarios/default/block_footer.rs`: block footer scenarios, split into `block_footer/stream.rs`, `block_footer/filters.rs` and `block_footer/replay.rs`. They run with the `default` module, and alone with `--tags block-footer`.
 - `src/scenarios/extra.rs`: extra scenario module.
 - `src/scenarios/ratelimit.rs`: rate-limit scenarios.
 - `src/bin/yellowstone-e2e.rs`: CLI entrypoint.

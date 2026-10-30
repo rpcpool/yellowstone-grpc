@@ -10,13 +10,13 @@ use {
 };
 
 /// Verifies block footers stream on their own filter and each one comes before the block meta of the same bank.
-#[test_helper(name = "block-footer", tags = ["block-footer", "alpenglow"])]
+#[test_helper(name = "block-footer", tags = ["block-footer"])]
 pub async fn block_footer_should_match_block_meta(config: &RunConfig) -> Result<()> {
     footers_should_precede_block_meta(config, CommitmentLevel::Processed).await
 }
 
 /// Verifies confirmed subscribers receive block footers, each before the block meta of the same bank.
-#[test_helper(name = "block-footer-confirmed", tags = ["block-footer", "alpenglow"])]
+#[test_helper(name = "block-footer-confirmed", tags = ["block-footer"])]
 pub async fn block_footer_should_match_block_meta_at_confirmed(config: &RunConfig) -> Result<()> {
     footers_should_precede_block_meta(config, CommitmentLevel::Confirmed).await
 }
@@ -26,7 +26,7 @@ async fn footers_should_precede_block_meta(
     commitment: CommitmentLevel,
 ) -> Result<()> {
     const TARGET_MATCHED: usize = 5;
-    // Only Alpenglow blocks carry a footer. Give up after this many block metas.
+    // Give up after this many block metas without a footer.
     const MAX_BLOCK_META: usize = 150;
 
     let mut client = crate::grpc::new_client(config).await?;
@@ -85,9 +85,7 @@ async fn footers_should_precede_block_meta(
                 }
                 if block_metas.len() >= MAX_BLOCK_META && matched < TARGET_MATCHED {
                     if footers.is_empty() {
-                        bail!(
-                            "no block footer in {MAX_BLOCK_META} block metas; the cluster may not run Alpenglow"
-                        );
+                        bail!("no block footer in {MAX_BLOCK_META} block metas");
                     }
                     bail!(
                         "only {matched}/{TARGET_MATCHED} footers matched a block meta on (slot, bank_id) after {MAX_BLOCK_META} block metas ({} footers received)",

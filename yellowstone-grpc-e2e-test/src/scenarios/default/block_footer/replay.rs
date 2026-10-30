@@ -10,7 +10,7 @@ use {
 };
 
 /// Verifies `from_slot` replay sends each bank's block footer before its block meta.
-#[test_helper(name = "block-footer-replay", tags = ["block-footer", "alpenglow", "replay"])]
+#[test_helper(name = "block-footer-replay", tags = ["block-footer", "replay"])]
 pub async fn block_footer_should_replay_before_block_meta(config: &RunConfig) -> Result<()> {
     const REPLAY_DEPTH: u64 = 10;
     // Slots skipped by their leader have no block, so require only some replayed banks.
