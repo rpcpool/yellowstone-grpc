@@ -102,11 +102,11 @@ const bankId = "18446744073709551614";
 const request = SubscribeRequest.fromPartial({
   accounts: { accounts: { account: ["11111111111111111111111111111111"] } },
 });
-function account(lamports: string): SubscribeUpdate {
+function account(lamports: string, slot = "100"): SubscribeUpdate {
   return SubscribeUpdate.fromPartial({
     filters: ["accounts"],
     account: {
-      slot: "100",
+      slot,
       bankId,
       account: {
         pubkey: Buffer.alloc(32, 1),
@@ -118,33 +118,22 @@ function account(lamports: string): SubscribeUpdate {
 }
 
 describe("native reconnect subscriptions", () => {
-  test("discards partial banks before replacement updates and forwards request writes", async () => {
+  test("reports the missing slots before the live updates and forwards request writes", async () => {
     let first!: ServerHttp2Stream;
     const server = await startServer((stream, _request, index) => {
       if (index === 1) {
         first = stream;
+        // Slot 99 is finalized; slot 100 is cut off mid-block.
+        send(
+          stream,
+          SubscribeUpdate.fromPartial({
+            filters: [AUTORECONNECT_FILTER_KEY],
+            slot: { slot: "99", status: SlotStatus.SLOT_FINALIZED },
+          }),
+        );
         send(stream, account("10"));
       } else {
-        send(stream, account("20"));
-        send(
-          stream,
-          SubscribeUpdate.fromPartial({
-            filters: [AUTORECONNECT_FILTER_KEY],
-            blockMeta: {
-              slot: "100",
-              bankId,
-              blockhash: "winner",
-              parentSlot: "99",
-            },
-          }),
-        );
-        send(
-          stream,
-          SubscribeUpdate.fromPartial({
-            filters: [AUTORECONNECT_FILTER_KEY],
-            slot: { slot: "100", bankId, status: SlotStatus.SLOT_FINALIZED },
-          }),
-        );
+        send(stream, account("20", "105"));
       }
     });
     let stream: ClientReconnectDuplexStream | undefined;
@@ -157,22 +146,19 @@ describe("native reconnect subscriptions", () => {
       const events = stream[Symbol.asyncIterator]();
       expect((await events.next()).value).toEqual({
         type: "Update",
-        generation: "0",
         update: account("10"),
       });
       fail(first);
       expect((await events.next()).value).toEqual({
-        type: "DiscardBanks",
-        banks: [{ generation: "0", slot: "100", bankId }],
-        reason: "IncompleteDelivery",
-        replacement: { generation: "1", fromSlot: "100" },
-        winners: [{ type: "Finalized", slot: "100", blockhash: "winner" }],
+        type: "Missing",
+        fromSlot: "99",
+        toSlot: "100",
       });
       expect((await events.next()).value).toEqual({
         type: "Update",
-        generation: "1",
-        update: account("20"),
+        update: account("20", "105"),
       });
+      // The reconnect replays from the slot after the last finalized one.
       expect(server.requests[1].fromSlot).toBe("100");
       expect(server.requests[1].slots).toHaveProperty(AUTORECONNECT_FILTER_KEY);
       const ping = SubscribeRequest.fromPartial({ ping: { id: 42 } });
@@ -182,7 +168,6 @@ describe("native reconnect subscriptions", () => {
       const pong = (await events.next()).value as ReconnectEvent;
       expect(pong).toMatchObject({
         type: "Update",
-        generation: "1",
         update: { pong: { id: 42 } },
       });
     } finally {
@@ -221,21 +206,19 @@ describe("native reconnect subscriptions", () => {
     },
   );
 
-  test("rejects unsupported recovery requests before opening a subscription", async () => {
+  test("rejects non-processed commitment before opening a subscription", async () => {
     const server = await startServer(() => {
       throw new Error("unexpected subscription");
     });
     try {
       const client = new Client(server.endpoint, undefined, undefined);
       await client.connect();
-      for (const invalid of [
-        { ...request, commitment: CommitmentLevel.CONFIRMED },
-        { ...request, fromSlot: "100" },
-      ]) {
-        await expect(client.subscribeWithReconnect(invalid)).rejects.toThrow(
-          "failed to open reconnect subscription",
-        );
-      }
+      await expect(
+        client.subscribeWithReconnect({
+          ...request,
+          commitment: CommitmentLevel.CONFIRMED,
+        }),
+      ).rejects.toThrow("failed to open reconnect subscription");
       expect(server.requests).toHaveLength(0);
     } finally {
       await server.close();
@@ -265,12 +248,7 @@ describe("native reconnect subscriptions", () => {
     }
   });
 
-  test.each([
-    { enabled: true },
-    { enabled: false },
-    { slotRetention: 250 },
-    { policy: "SkipMissedData" },
-  ])(
+  test.each([{ enabled: true }, { enabled: false }, { slotRetention: 250 }])(
     "rejects obsolete options %j instead of silently ignoring them",
     async (options) => {
       const client = new Client(
@@ -291,7 +269,6 @@ describe("reconnect stream lifecycle", () => {
     const native = {
       read: jest.fn(async () => ({
         type: "Update",
-        generation: "0",
         update: SubscribeUpdate.encode(account("10")).finish(),
       })),
       close: jest.fn(),
@@ -307,7 +284,6 @@ describe("reconnect stream lifecycle", () => {
       expect(stream.readableLength).toBe(1);
       expect(stream.read()).toEqual({
         type: "Update",
-        generation: "0",
         update: account("10"),
       });
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -338,7 +314,6 @@ describe("reconnect stream lifecycle", () => {
     stream.destroy();
     resolveRead({
       type: "Update",
-      generation: "0",
       update: SubscribeUpdate.encode(account("10")).finish(),
     });
     await new Promise<void>((resolve) => setImmediate(resolve));

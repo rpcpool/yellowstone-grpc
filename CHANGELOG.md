@@ -10,10 +10,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-client 17.0.0
 - yellowstone-grpc-geyser 16.2.0
+- yellowstone-grpc-napi 0.4.0
+- @triton-one/yellowstone-grpc@10.0.0
 
 ### Breaking
 
+- client, ts-client: `subscribe_with_reconnect` replays each reconnect from the slot after the last finalized one, or reconnects live when the server refuses the replay. `ReconnectConfig::policy` picks `ReconnectPolicy::Replay` (the default) or `NoReplay`, which always reconnects live. As soon as the new connection is up it emits `ReconnectEvent::Missing { from_slot, to_slot }`, the slots that may be incomplete, instead of discarding and repairing banks; `ReconnectionPolicy`, `AutoReconnect`, `DedupStream`, `DedupState`, `DEFAULT_SLOT_RETENTION`, `ReconnectCounter` and the bank-repair types are removed.
 - plugin: only the first `SubscribeRequest` that asks for something can replay. `from_slot` on any later request is ignored, and a subscription with a startup snapshot never replays. Empty requests (no filter, no `from_slot`) before the first real one don't count, so `subscribe()` followed by a request with `from_slot` still replays: the Rust and TS SDKs' `subscribe()` send an empty request first. The plugin subscribes the client to no live channel until its first real request. STR-763
 - plugin: at confirmed and finalized, a bank's commitment statuses arrive after its content and block meta, in the order Processed, Confirmed, Finalized. They used to arrive first, as soon as block reconstruction produced them. A bank's `CreatedBank` now arrives at confirmed and finalized with the bank's content, once, instead of as it landed. STR-763
 

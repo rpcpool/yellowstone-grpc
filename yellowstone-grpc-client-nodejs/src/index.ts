@@ -144,24 +144,18 @@ export interface ReconnectOptions {
     multiplier?: number;
     maxRetries?: number;
   };
+  /** Where a reconnect resumes: "Replay" (the default) or "NoReplay" at the live tip. */
+  policy?: "Replay" | "NoReplay";
 }
 
-/** Connection-scoped bank identity. All uint64 values are decimal strings. */
-export type BankRef = napi.JsBankRef;
-export type ReplacementReplay = napi.JsReplacementReplay;
-export type SlotWinner = napi.JsSlotWinner;
-export type DiscardReason = "IncompleteDelivery";
-
-/** DiscardBanks must be applied before subsequent replacement updates. */
+/**
+ * Missing: slots after `fromSlot` up to and including `toSlot` may be incomplete.
+ * `fromSlot` is the last finalized slot before the disconnect, absent if none was finalized yet.
+ * Slots are decimal strings.
+ */
 export type ReconnectEvent =
-  | { type: "Update"; generation: string; update: SubscribeUpdate }
-  | {
-      type: "DiscardBanks";
-      banks: BankRef[];
-      reason: DiscardReason;
-      replacement: ReplacementReplay;
-      winners: SlotWinner[];
-    };
+  | { type: "Update"; update: SubscribeUpdate }
+  | { type: "Missing"; fromSlot?: string; toSlot: string };
 
 function isRecordObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -364,7 +358,10 @@ export default class Client {
       this._insecureEndpoint,
       this._insecureXToken,
       this._channelOptions,
-      this._reconnectOptions,
+      this._reconnectOptions && {
+        ...this._reconnectOptions,
+        policy: this._reconnectOptions.policy as napi.JsReconnectPolicy | undefined,
+      },
     );
   }
 
@@ -695,10 +692,9 @@ export class ClientReconnectDuplexStream extends SubscriptionDuplexStream<
       case "Update":
         return {
           type: "Update",
-          generation: event.generation,
           update: SubscribeUpdateMessage.decode(event.update),
         };
-      case "DiscardBanks":
+      case "Missing":
         return event;
       default:
         throw new Error("Unknown native reconnect event; check SDK and native binding versions");

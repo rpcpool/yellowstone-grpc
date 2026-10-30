@@ -50,8 +50,10 @@ pub struct JsChannelOptions {
 #[napi(string_enum)]
 #[derive(Deserialize, Debug, Clone)]
 pub enum JsReconnectPolicy {
-  RecoverMissedData,
-  SkipMissedData,
+  /// Replay from the slot after the last finalized one (the default).
+  Replay,
+  /// Resume at the live tip.
+  NoReplay,
 }
 
 #[napi(object)]
@@ -70,7 +72,7 @@ pub struct JsReconnectConfig {
   pub backoff: Option<JsReconnectBackoff>,
   /// Unsupported for bank recovery.
   pub slot_retention: Option<u32>,
-  /// Unsupported for bank recovery.
+  /// Where a reconnect resumes; `Replay` when unset.
   pub policy: Option<JsReconnectPolicy>,
 }
 

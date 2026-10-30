@@ -1,7 +1,11 @@
-mod dedup;
 mod reconnect;
-mod reconnect_geyser_stream;
 
+pub use {
+    crate::reconnect::{
+        Backoff, GrpcConnector, ReconnectEvent, ReconnectGeyserStream, TonicGrpcConnector,
+    },
+    tonic::{service::Interceptor, transport::ClientTlsConfig},
+};
 use {
     crate::reconnect::{TonicGeyserClientOptions, AUTORECONNECT_FILTER_KEY},
     arc_swap::ArcSwap,
@@ -40,28 +44,11 @@ use {
         SubscribeUpdateGossip,
     },
 };
-pub use {
-    crate::{
-        dedup::{DedupState, DedupStream, DEFAULT_SLOT_RETENTION},
-        reconnect::{
-            AutoReconnect, Backoff, DiscardReason, GrpcConnector, ReplacementReplay, SlotWinner,
-            TonicGrpcConnector,
-        },
-        reconnect_geyser_stream::{BankRef, ReconnectEvent, ReconnectGeyserStream},
-    },
-    tonic::{service::Interceptor, transport::ClientTlsConfig},
-};
 #[cfg(feature = "test-tools")]
 use {hyper::rt, tower::Service};
 
 #[cfg(feature = "test-tools")]
 pub mod test_tools;
-/// Lets benches drive `DedupStream` with a scripted stream.
-#[cfg(feature = "test-tools")]
-pub use crate::dedup::ReconnectCounter;
-/// Generic over the transport so tests can drive it with a scripted connector.
-#[cfg(any(test, feature = "test-tools"))]
-pub use crate::reconnect_geyser_stream::ReconnectStream;
 
 #[derive(Debug, Clone)]
 pub struct InterceptorXToken {
@@ -93,42 +80,27 @@ pub enum GeyserGrpcClientError {
 
 pub type GeyserGrpcClientResult<T> = Result<T, GeyserGrpcClientError>;
 
-#[derive(Clone, Debug)]
-pub enum ReconnectionPolicy {
-    /// Resumes at the latest slot after a disconnect.
-    ///
-    /// # Warning
-    ///
-    /// Data produced during the outage is not delivered and cannot be recovered
-    /// later. Only use this when your application acts on the current tip and has
-    /// no use for history.
-    SkipMissedData,
-    /// Best-effort replay of retained frozen banks with slot-based dedup.
-    /// Does not guarantee complete processed history. See the client README.
-    RecoverMissedData { slot_retention: usize },
-}
-
 /// Configuration for reconnecting subscriptions and manually composed reconnect streams.
-/// Ordinary subscriptions do not reconnect; use `subscribe_with_reconnect` for bank recovery.
-#[derive(Clone, Debug)]
+/// Ordinary subscriptions do not reconnect; use `subscribe_with_reconnect`.
+#[derive(Clone, Debug, Default)]
 pub struct ReconnectConfig {
-    /// Retry schedule for reconnect attempts. Resets after each successful
-    /// connection, so the budget is per outage, not per stream.
+    /// Delay and number of reconnect attempts. The budget refills each time a full block
+    /// (BlockMeta) arrives, so it is per outage, not per stream.
     pub backoff: Backoff,
 
-    /// Policy for manually composed streams; `subscribe_with_reconnect` always uses bank recovery.
-    pub policy: ReconnectionPolicy,
+    /// Where a reconnect resumes.
+    pub policy: ReconnectPolicy,
 }
 
-impl Default for ReconnectConfig {
-    fn default() -> Self {
-        Self {
-            backoff: Backoff::default(),
-            policy: ReconnectionPolicy::RecoverMissedData {
-                slot_retention: DEFAULT_SLOT_RETENTION,
-            },
-        }
-    }
+/// Where a reconnect resumes. [`ReconnectEvent::Missing`] is emitted either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReconnectPolicy {
+    /// Replay from the slot after the last finalized one, so the missing range arrives whole.
+    /// Falls back to the live tip when nothing is finalized yet or the server refuses.
+    #[default]
+    Replay,
+    /// Resume at the live tip. Slots produced during the outage are not resent.
+    NoReplay,
 }
 
 impl ReconnectConfig {
@@ -137,8 +109,8 @@ impl ReconnectConfig {
         self
     }
 
-    pub const fn with_slot_retention(mut self, slot_retention: usize) -> Self {
-        self.policy = ReconnectionPolicy::RecoverMissedData { slot_retention };
+    pub const fn with_policy(mut self, policy: ReconnectPolicy) -> Self {
+        self.policy = policy;
         self
     }
 }
@@ -380,7 +352,7 @@ enum SubscribeRequestSinkErrorKind {
     #[error(transparent)]
     Send(mpsc::SendError),
     #[error(
-        "bank replay requires fixed filters; only ping requests may be sent after subscribing"
+        "subscribe_with_reconnect requires fixed filters; only ping requests may be sent after subscribing"
     )]
     UnverifiedReplay,
 }
@@ -539,11 +511,10 @@ impl GeyserGrpcClient {
         ))
     }
 
-    /// Subscribe with immediate bank-aware updates and explicit recovery failures.
+    /// Subscribe with a stream that reconnects at the latest slot after a disconnect.
     ///
-    /// Processed updates are immediate during normal delivery; recovery waits for finalized winners.
-    /// Skipped slots report Unknown. Discards precede buffered replacement updates.
-    /// Recovery buffers updates without a size cap until finalized winners are known.
+    /// Each reconnect replays from the slot after the last finalized one, when the server allows.
+    /// Each reconnect first emits [`ReconnectEvent::Missing`] with the missed gap.
     pub async fn subscribe_with_reconnect(
         &mut self,
         request: Option<SubscribeRequest>,
@@ -552,12 +523,9 @@ impl GeyserGrpcClient {
         if request.commitment.unwrap_or_default() != 0 || self.geyser_client_opts.x_request_snapshot
         {
             return Err(Status::failed_precondition(
-                "bank replay requires processed commitment without startup snapshots",
+                "rewind requires processed commitment without startup snapshots",
             )
             .into());
-        }
-        if request.from_slot.is_some() {
-            return Err(reconnect::unverified_replay().into());
         }
         request
             .blocks_meta
@@ -582,9 +550,8 @@ impl GeyserGrpcClient {
             Arc::clone(&sink.inner),
         );
         let stream =
-            AutoReconnect::new(stream, connector, Arc::clone(&sink.shared), config.backoff)
-                .with_bank_replay();
-        Ok((sink, ReconnectGeyserStream::new(stream)))
+            ReconnectGeyserStream::new(stream, connector, Arc::clone(&sink.shared), config);
+        Ok((sink, stream))
     }
 
     pub async fn subscribe_once(
@@ -1159,227 +1126,5 @@ mod tests {
         let sent = rx.next().await.expect("receiver should get the request");
         assert_eq!(sent, SubscribeRequest::default());
         assert_eq!(**shared.load(), SubscribeRequest::default());
-    }
-}
-
-#[cfg(test)]
-mod bank_recovery_flow_test {
-    use {
-        super::*,
-        futures::{channel::mpsc, StreamExt},
-        yellowstone_grpc_proto::prelude::{
-            subscribe_update::UpdateOneof, SlotStatus, SubscribeUpdateAccount,
-            SubscribeUpdateAccountInfo, SubscribeUpdateBlockMeta, SubscribeUpdateSlot,
-        },
-    };
-
-    type TestStream = mpsc::UnboundedReceiver<Result<SubscribeUpdate, tonic::Status>>;
-
-    #[derive(Clone)]
-    struct TestConnector {
-        replacement: Arc<Mutex<Option<TestStream>>>,
-        requests: Arc<Mutex<Vec<Option<u64>>>>,
-    }
-
-    impl GrpcConnector for TestConnector {
-        type Stream = TestStream;
-        type ConnectError = GeyserGrpcClientError;
-        type ConnectFuture = std::future::Ready<Result<Self::Stream, Self::ConnectError>>;
-
-        fn connect(
-            &self,
-            _request: Arc<SubscribeRequest>,
-            from_slot: Option<u64>,
-        ) -> Self::ConnectFuture {
-            self.requests.lock().unwrap().push(from_slot);
-
-            std::future::ready(self.replacement.lock().unwrap().take().ok_or_else(|| {
-                GeyserGrpcClientError::TonicStatus(Status::unavailable(
-                    "unexpected extra reconnect",
-                ))
-            }))
-        }
-    }
-
-    fn account(lamports: u64, write_version: u64) -> SubscribeUpdate {
-        SubscribeUpdate {
-            filters: vec!["accounts".into()],
-            update_oneof: Some(UpdateOneof::Account(SubscribeUpdateAccount {
-                slot: 100,
-                bank_id: Some(7),
-                account: Some(SubscribeUpdateAccountInfo {
-                    pubkey: vec![1; 32],
-                    lamports,
-                    write_version,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })),
-            ..Default::default()
-        }
-    }
-
-    fn block_meta() -> SubscribeUpdate {
-        SubscribeUpdate {
-            // Control-only metadata must still reach recovery machinery.
-            filters: vec![AUTORECONNECT_FILTER_KEY.into()],
-            update_oneof: Some(UpdateOneof::BlockMeta(SubscribeUpdateBlockMeta {
-                slot: 100,
-                bank_id: 7,
-                blockhash: "11111111111111111111111111111111".into(),
-                parent_slot: 99,
-                ..Default::default()
-            })),
-            ..Default::default()
-        }
-    }
-
-    fn finalized() -> SubscribeUpdate {
-        SubscribeUpdate {
-            filters: vec![AUTORECONNECT_FILTER_KEY.into()],
-            update_oneof: Some(UpdateOneof::Slot(SubscribeUpdateSlot {
-                slot: 100,
-                bank_id: Some(7),
-                status: SlotStatus::SlotFinalized as i32,
-                ..Default::default()
-            })),
-            ..Default::default()
-        }
-    }
-
-    async fn next_event<S>(stream: &mut S) -> ReconnectEvent
-    where
-        S: futures::Stream<Item = Result<ReconnectEvent, Status>> + Unpin,
-    {
-        tokio::time::timeout(Duration::from_secs(2), stream.next())
-            .await
-            .expect("stream stalled")
-            .expect("stream ended")
-            .expect("stream returned an error")
-    }
-
-    fn assert_account(
-        event: ReconnectEvent,
-        expected_generation: u64,
-        expected_slot: u64,
-        expected_lamports: u64,
-        expected_write_version: u64,
-    ) {
-        let ReconnectEvent::Update { generation, update } = event else {
-            panic!("expected an account update, got {event:?}");
-        };
-        assert_eq!(generation, expected_generation);
-        assert_eq!(update.filters, vec!["accounts".to_owned()]);
-
-        let Some(UpdateOneof::Account(account)) = update.update_oneof else {
-            panic!("expected account payload");
-        };
-        assert_eq!(account.slot, expected_slot);
-        assert_eq!(account.bank_id, Some(7));
-
-        let info = account.account.unwrap();
-        assert_eq!(info.lamports, expected_lamports);
-        assert_eq!(info.write_version, expected_write_version);
-    }
-
-    #[tokio::test]
-    async fn partial_bank_reconnect_waits_for_finality() {
-        let (a_tx, a_rx) = mpsc::unbounded();
-        let (b_tx, b_rx) = mpsc::unbounded();
-        let requests = Arc::new(Mutex::new(Vec::new()));
-
-        let connector = TestConnector {
-            replacement: Arc::new(Mutex::new(Some(b_rx))),
-            requests: Arc::clone(&requests),
-        };
-
-        let inner = AutoReconnect::new(
-            a_rx,
-            connector,
-            Arc::new(ArcSwap::new(Arc::new(SubscribeRequest::default()))),
-            Backoff::default(),
-        )
-        .with_bank_replay();
-
-        let mut stream = ReconnectStream::new(inner);
-
-        // A: processed data arrives immediately, before BlockMeta.
-        a_tx.unbounded_send(Ok(account(10, 1))).unwrap();
-        assert_account(next_event(&mut stream).await, 0, 100, 10, 1);
-
-        // A disconnects while bank 7 is partial.
-        a_tx.unbounded_send(Err(Status::unavailable("disconnect A")))
-            .unwrap();
-
-        // Poll through reconnect. B is open but has sent nothing.
-        assert!(futures::poll!(stream.next()).is_pending());
-        assert_eq!(*requests.lock().unwrap(), vec![Some(100)]);
-
-        // B reuses bank ID 7 and sends repeated writes to one account.
-        b_tx.unbounded_send(Ok(account(20, 2))).unwrap();
-        b_tx.unbounded_send(Ok(account(30, 3))).unwrap();
-
-        // Replacement data must remain buffered.
-        assert!(futures::poll!(stream.next()).is_pending());
-
-        // BlockMeta completes the bank, but finality is still missing.
-        b_tx.unbounded_send(Ok(block_meta())).unwrap();
-        assert!(futures::poll!(stream.next()).is_pending());
-
-        // Finality permits the discard decision.
-        b_tx.unbounded_send(Ok(finalized())).unwrap();
-
-        let event = next_event(&mut stream).await;
-        let ReconnectEvent::DiscardBanks {
-            banks,
-            reason,
-            replacement,
-            winners,
-        } = event
-        else {
-            panic!("expected discard before replacement, got {event:?}");
-        };
-
-        assert_eq!(
-            banks,
-            vec![BankRef {
-                generation: 0,
-                slot: 100,
-                bank_id: 7,
-            }]
-        );
-        assert_eq!(reason, DiscardReason::IncompleteDelivery);
-        assert_eq!(
-            replacement,
-            ReplacementReplay {
-                from_slot: 100,
-                generation: 1,
-            }
-        );
-        assert_eq!(
-            winners,
-            vec![SlotWinner::Finalized {
-                slot: 100,
-                blockhash: "11111111111111111111111111111111".into(),
-            }]
-        );
-
-        // Both replacement writes follow the discard, in order.
-        assert_account(next_event(&mut stream).await, 1, 100, 20, 2);
-        assert_account(next_event(&mut stream).await, 1, 100, 30, 3);
-
-        // Internal metadata/status messages and duplicates do not leak.
-        assert!(futures::poll!(stream.next()).is_pending());
-
-        // Normal processed delivery resumes without waiting for finality.
-        let mut live = account(40, 4);
-        if let Some(UpdateOneof::Account(account)) = &mut live.update_oneof {
-            account.slot = 101;
-        }
-        b_tx.unbounded_send(Ok(live)).unwrap();
-
-        assert_account(next_event(&mut stream).await, 1, 101, 40, 4);
-        assert!(futures::poll!(stream.next()).is_pending());
-        assert_eq!(requests.lock().unwrap().len(), 1);
     }
 }

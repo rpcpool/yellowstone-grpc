@@ -3,89 +3,32 @@ use futures::StreamExt;
 use napi::{bindgen_prelude::*, Env};
 use napi_derive::napi;
 use prost::Message;
-use yellowstone_grpc_client::{DiscardReason, ReconnectEvent, SlotWinner, SubscribeRequestSink};
+use yellowstone_grpc_client::{ReconnectEvent, SubscribeRequestSink};
 use yellowstone_grpc_proto::tonic::Status;
 
 use crate::{client::GrpcClient, napi_error_with_cause, DuplexStream, DuplexStreamInner};
 
-#[napi(object)]
-pub struct JsBankRef {
-  pub generation: String,
-  pub slot: String,
-  pub bank_id: String,
-}
-
-#[napi(object)]
-pub struct JsReplacementReplay {
-  pub from_slot: String,
-  pub generation: String,
-}
-
-#[napi]
-pub enum JsSlotWinner {
-  Unknown { slot: String },
-  Finalized { slot: String, blockhash: String },
-}
-
-#[napi(string_enum)]
-pub enum JsDiscardReason {
-  IncompleteDelivery,
-}
-
 #[napi]
 pub enum JsReconnectEvent {
   Update {
-    generation: String,
     update: Buffer,
   },
-  DiscardBanks {
-    banks: Vec<JsBankRef>,
-    reason: JsDiscardReason,
-    replacement: JsReplacementReplay,
-    winners: Vec<JsSlotWinner>,
+  /// Slots after `from_slot` up to and including `to_slot` may be incomplete.
+  Missing {
+    from_slot: Option<String>,
+    to_slot: String,
   },
 }
 
 impl From<ReconnectEvent> for JsReconnectEvent {
   fn from(event: ReconnectEvent) -> Self {
     match event {
-      ReconnectEvent::Update { generation, update } => Self::Update {
-        generation: generation.to_string(),
+      ReconnectEvent::Update(update) => Self::Update {
         update: update.encode_to_vec().into(),
       },
-      ReconnectEvent::DiscardBanks {
-        banks,
-        reason,
-        replacement,
-        winners,
-      } => Self::DiscardBanks {
-        banks: banks
-          .into_iter()
-          .map(|bank| JsBankRef {
-            generation: bank.generation.to_string(),
-            slot: bank.slot.to_string(),
-            bank_id: bank.bank_id.to_string(),
-          })
-          .collect(),
-        reason: match reason {
-          DiscardReason::IncompleteDelivery => JsDiscardReason::IncompleteDelivery,
-        },
-        replacement: JsReplacementReplay {
-          from_slot: replacement.from_slot.to_string(),
-          generation: replacement.generation.to_string(),
-        },
-        winners: winners
-          .into_iter()
-          .map(|winner| match winner {
-            SlotWinner::Unknown { slot } => JsSlotWinner::Unknown {
-              slot: slot.to_string(),
-            },
-            SlotWinner::Finalized { slot, blockhash } => JsSlotWinner::Finalized {
-              slot: slot.to_string(),
-              blockhash,
-            },
-          })
-          .collect(),
+      ReconnectEvent::Missing { from_slot, to_slot } => Self::Missing {
+        from_slot: from_slot.map(|slot| slot.to_string()),
+        to_slot: to_slot.to_string(),
       },
     }
   }
@@ -192,49 +135,30 @@ impl Drop for ReconnectDuplexStream {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use yellowstone_grpc_client::{BankRef, ReplacementReplay};
 
   #[test]
-  fn discard_preserves_uint64_bank_identities_and_winner_variants() {
-    let event = JsReconnectEvent::from(ReconnectEvent::DiscardBanks {
-      banks: vec![BankRef {
-        generation: u64::MAX,
-        slot: u64::MAX - 1,
-        bank_id: u64::MAX - 2,
-      }],
-      reason: DiscardReason::IncompleteDelivery,
-      replacement: ReplacementReplay {
-        from_slot: u64::MAX - 1,
-        generation: u64::MAX,
-      },
-      winners: vec![
-        SlotWinner::Finalized {
-          slot: u64::MAX - 1,
-          blockhash: "winner".into(),
-        },
-        SlotWinner::Unknown { slot: u64::MAX },
-      ],
+  fn missing_preserves_uint64_slots() {
+    let event = JsReconnectEvent::from(ReconnectEvent::Missing {
+      from_slot: Some(u64::MAX - 1),
+      to_slot: u64::MAX,
     });
-    let JsReconnectEvent::DiscardBanks {
-      banks,
-      reason,
-      replacement,
-      winners,
-    } = event
-    else {
-      panic!("expected DiscardBanks");
+    let JsReconnectEvent::Missing { from_slot, to_slot } = event else {
+      panic!("expected Missing");
     };
-    assert_eq!(banks[0].generation, u64::MAX.to_string());
-    assert_eq!(banks[0].slot, (u64::MAX - 1).to_string());
-    assert_eq!(banks[0].bank_id, (u64::MAX - 2).to_string());
-    assert!(matches!(reason, JsDiscardReason::IncompleteDelivery));
-    assert_eq!(replacement.from_slot, (u64::MAX - 1).to_string());
-    assert_eq!(replacement.generation, u64::MAX.to_string());
-    assert!(
-      matches!(&winners[0], JsSlotWinner::Finalized { slot, blockhash }
-      if slot == &(u64::MAX - 1).to_string() && blockhash == "winner")
-    );
-    assert!(matches!(&winners[1], JsSlotWinner::Unknown { slot } if slot == &u64::MAX.to_string()));
+    assert_eq!(from_slot, Some((u64::MAX - 1).to_string()));
+    assert_eq!(to_slot, u64::MAX.to_string());
+
+    let event = JsReconnectEvent::from(ReconnectEvent::Missing {
+      from_slot: None,
+      to_slot: 42,
+    });
+    assert!(matches!(
+      event,
+      JsReconnectEvent::Missing {
+        from_slot: None,
+        ..
+      }
+    ));
   }
 
   #[tokio::test]

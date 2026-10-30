@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-client"
-version = "16.0.1"
+version = "17.0.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Simple Client"
@@ -34,13 +34,7 @@ tower = { workspace = true, features = ["util"] }
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "tonic-compression"] }
 
 [dev-dependencies]
-criterion = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-
-[[bench]]
-name = "dedup"
-harness = false
-required-features = ["test-tools"]
 
 [lints]
 workspace = true

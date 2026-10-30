@@ -1,7 +1,11 @@
-use crate::bindings::{JsChannelOptions, JsCompressionAlgorithm, JsReconnectConfig};
+use crate::bindings::{
+  JsChannelOptions, JsCompressionAlgorithm, JsReconnectConfig, JsReconnectPolicy,
+};
 use napi::bindgen_prelude::{Result, Status};
 use std::time::Duration;
-use yellowstone_grpc_client::{Backoff, ClientTlsConfig, GeyserGrpcBuilder, ReconnectConfig};
+use yellowstone_grpc_client::{
+  Backoff, ClientTlsConfig, GeyserGrpcBuilder, ReconnectConfig, ReconnectPolicy,
+};
 use yellowstone_grpc_proto::tonic::codec::CompressionEncoding;
 
 fn to_napi_cause(status: Status, source: &dyn std::error::Error) -> napi::Error {
@@ -32,16 +36,19 @@ fn reconnect_config_from_js(
     return Ok(None);
   };
 
-  if reconnect_config.enabled.is_some()
-    || reconnect_config.policy.is_some()
-    || reconnect_config.slot_retention.is_some()
-  {
+  if reconnect_config.enabled.is_some() || reconnect_config.slot_retention.is_some() {
     return Err(invalid_arg(
-      "reconnect.enabled, policy, and slotRetention are unsupported; use subscribeWithReconnect() with backoff options only",
+      "reconnect.enabled and slotRetention are unsupported; use subscribeWithReconnect() with backoff and policy options only",
     ));
   }
 
   let mut native_config = ReconnectConfig::default();
+  if let Some(policy) = reconnect_config.policy {
+    native_config.policy = match policy {
+      JsReconnectPolicy::Replay => ReconnectPolicy::Replay,
+      JsReconnectPolicy::NoReplay => ReconnectPolicy::NoReplay,
+    };
+  }
 
   if let Some(backoff) = reconnect_config.backoff {
     let initial_interval = backoff
@@ -283,17 +290,11 @@ mod tests {
 
   #[test]
   fn rejects_obsolete_reconnect_options() {
-    use crate::bindings::{JsReconnectConfig, JsReconnectPolicy};
-    for (enabled, policy, slot_retention) in [
-      (Some(true), None, None),
-      (Some(false), None, None),
-      (None, Some(JsReconnectPolicy::SkipMissedData), None),
-      (None, Some(JsReconnectPolicy::RecoverMissedData), None),
-      (None, None, Some(300)),
-    ] {
+    use crate::bindings::JsReconnectConfig;
+    for (enabled, slot_retention) in [(Some(true), None), (Some(false), None), (None, Some(300))] {
       let error = super::reconnect_config_from_js(Some(JsReconnectConfig {
         enabled,
-        policy,
+        policy: None,
         slot_retention,
         backoff: None,
       }))
@@ -304,7 +305,7 @@ mod tests {
 
   #[tokio::test]
   async fn get_client_builder_applies_reconnect_config() {
-    use crate::bindings::{JsReconnectBackoff, JsReconnectConfig};
+    use crate::bindings::{JsReconnectBackoff, JsReconnectConfig, JsReconnectPolicy};
     use std::time::Duration;
 
     let builder = get_client_builder(
@@ -319,7 +320,7 @@ mod tests {
           max_retries: Some(8),
         }),
         slot_retention: None,
-        policy: None,
+        policy: Some(JsReconnectPolicy::NoReplay),
       }),
     )
     .await
@@ -332,6 +333,10 @@ mod tests {
     assert_eq!(config.backoff.initial_interval, Duration::from_millis(125));
     assert_eq!(config.backoff.multiplier, 1.5);
     assert_eq!(config.backoff.max_retries, 8);
+    assert_eq!(
+      config.policy,
+      yellowstone_grpc_client::ReconnectPolicy::NoReplay
+    );
   }
 
   #[tokio::test]
