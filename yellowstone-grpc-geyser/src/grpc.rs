@@ -839,6 +839,18 @@ enum Listener {
     Unix(AutoClosableUnixListenerStream, Option<AuthConfig>), // path needed to remove the socket file on exit
 }
 
+fn make_legacy_tcp_listener(
+    incoming: TritonTcpIncoming,
+    server_config: Option<&Arc<ServerConfig>>,
+) -> Listener {
+    if let Some(server_config) = server_config {
+        let tls_acceptor = TlsAcceptor::from(Arc::clone(server_config));
+        Listener::Tls(TlsIncoming::new(incoming, tls_acceptor), None)
+    } else {
+        Listener::Tcp(incoming, None)
+    }
+}
+
 #[derive(Clone)]
 struct XTokenInterceptor {
     x_token: Option<AsciiMetadataValue>,
@@ -1047,29 +1059,10 @@ impl GrpcService {
             if config.tls_config.is_some() && config.cert_dir.is_some() {
                 log::warn!("Both tls_config and cert_dir are set; cert_dir will take precedence and tls_config will be ignored");
             }
-            let mut maybe_tls_server_config = if let Some(tls) = &config.tls_config {
-                let cert_pem = std::fs::read(&tls.cert_path)
-                    .context("failed to read TLS cert file")
-                    .unwrap();
-                let key = std::fs::read(&tls.key_path)
-                    .context("failed to read TLS key file")
-                    .unwrap();
-
-                let cert_der =
-                    CertificateDer::from_pem_slice(&cert_pem).context("tls cert_path")?;
-                let key_der = PrivateKeyDer::from_pem_slice(&key).context("tls key_path")?;
-                let mut server_config = ServerConfig::builder()
-                    .with_no_client_auth()
-                    .with_single_cert(vec![cert_der], key_der)?;
-                // gRPC over TLS requires ALPN negotiation for HTTP/2.
-                server_config.alpn_protocols = vec![b"h2".to_vec()];
-                Some(server_config)
-            } else {
-                None
-            };
-
-            // Cert-dir has precedence over tls_config if both are set.
-            if let Some(cert_dir) = &config.cert_dir {
+            // `cert_dir` takes precedence over `tls_config`, as documented in ConfigGrpc.
+            // Build only the selected configuration so an ignored `tls_config` cannot
+            // prevent the server from starting (for example, if its files are missing).
+            let maybe_tls_server_config = if let Some(cert_dir) = &config.cert_dir {
                 let resolver = build_sni_resolver_from_cert_dir(cert_dir.clone())?;
                 let hot_resolver = HotResolvesServerCertUsingSni::from(resolver);
                 let hot_resolver = Arc::new(hot_resolver);
@@ -1082,8 +1075,24 @@ impl GrpcService {
                     .with_cert_resolver(dyn_resolver);
                 // gRPC over TLS requires ALPN negotiation for HTTP/2.
                 server_config.alpn_protocols = vec![b"h2".to_vec()];
-                let _ = maybe_tls_server_config.replace(server_config);
-            }
+                Some(Arc::new(server_config))
+            } else if let Some(tls) = &config.tls_config {
+                let cert_pem =
+                    std::fs::read(&tls.cert_path).context("failed to read TLS cert file")?;
+                let key = std::fs::read(&tls.key_path).context("failed to read TLS key file")?;
+
+                let cert_der =
+                    CertificateDer::from_pem_slice(&cert_pem).context("tls cert_path")?;
+                let key_der = PrivateKeyDer::from_pem_slice(&key).context("tls key_path")?;
+                let mut server_config = ServerConfig::builder()
+                    .with_no_client_auth()
+                    .with_single_cert(vec![cert_der], key_der)?;
+                // gRPC over TLS requires ALPN negotiation for HTTP/2.
+                server_config.alpn_protocols = vec![b"h2".to_vec()];
+                Some(Arc::new(server_config))
+            } else {
+                None
+            };
 
             log::warn!("The 'address' field is deprecated; please use the 'listen' field with an array of addresses instead");
             for address in addresses {
@@ -1100,7 +1109,9 @@ impl GrpcService {
                             "binding gRPC server to TCP socket: {}",
                             incoming.local_addr()?
                         );
-                        listeners.push(Listener::Tcp(incoming, None));
+                        let listener =
+                            make_legacy_tcp_listener(incoming, maybe_tls_server_config.as_ref());
+                        listeners.push(listener);
                     }
                     GrpcAddress::Unix { path, mode } => {
                         if config.tls_config.is_some() || config.cert_dir.is_some() {
@@ -3110,6 +3121,37 @@ mod tests {
             SubscribeRequestFilterSlots,
         },
     };
+
+    #[tokio::test]
+    async fn legacy_tcp_listener_uses_tls_when_server_config_is_present() {
+        let incoming = TritonTcpIncoming::bind("127.0.0.1:0")
+            .await
+            .expect("TCP listener should bind");
+
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        let server_config = Arc::new(
+            ServerConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .expect("supported TLS protocol versions")
+                .with_no_client_auth()
+                .with_cert_resolver(Arc::new(rustls::server::ResolvesServerCertUsingSni::new())),
+        );
+
+        let listener = make_legacy_tcp_listener(incoming, Some(&server_config));
+
+        assert!(matches!(listener, Listener::Tls(..)));
+    }
+
+    #[tokio::test]
+    async fn legacy_tcp_listener_remains_plain_tcp_without_tls_config() {
+        let incoming = TritonTcpIncoming::bind("127.0.0.1:0")
+            .await
+            .expect("TCP listener should bind");
+
+        let listener = make_legacy_tcp_listener(incoming, None);
+
+        assert!(matches!(listener, Listener::Tcp(..)));
+    }
 
     /// The empty request an SDK's `subscribe()` sends, and requests that only set options,
     /// ask for nothing.
