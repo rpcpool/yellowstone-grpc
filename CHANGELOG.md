@@ -10,6 +10,28 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-geyser 16.2.1
+
+### Features
+
+- plugin: the geyser loop and block reconstruction route each update straight into the queues of the clients whose filters can match it. They find these clients through an index of filter keys. A routed client does not read the broadcast, so it does not wake for a batch that holds no update for it. A `Subscribe` client is routed when every filter in its request is one of these, with up to 8192 keys in all:
+  - account filters with an `account` list and no `cuckoo_accounts_filter`, with a 32-byte `memcmp` at offset 0 or 32, or with an `owner` list;
+  - transaction and transaction status filters with no `token_accounts` and either an `account_required` list or an `account_include` list without `cuckoo_account_include`;
+  - slot, entry, block meta and block footer filters.
+
+  Every other client reads the broadcast. A filter change can move a client between the broadcast and its route. Such a move neither loses nor repeats an update within one commitment level. A routed client whose queue is full ends with the same error status and disconnect reason as a broadcast client. A filter that panics while routing ends its client with the disconnect reason `filter_failed`.
+
+### Fixes
+
+- plugin: a memcmp filter with an offset near the end of the address space no longer panics.
+
+### Misc
+
+- plugin: each commitment level has one sender: the geyser loop at processed, and block reconstruction at confirmed and finalized. Block reconstruction hands the geyser loop its output for processed: the block, block footer, block meta and the Processed, Confirmed and Finalized statuses. It sends `FirstShredReceived`, `Completed` and `Dead` at confirmed and finalized when it reads them from the geyser loop. A commitment level change can repeat or miss a slot status, because the two senders send it at different times.
+- plugin: the ping task observes `yellowstone_grpc_geyser_subscriber_queue_size` every 10 s for each `Subscribe` client, because a routed client does not wake for each update.
+
+## 2026-10-30
+
 - yellowstone-grpc-geyser 16.2.0
 - yellowstone-grpc-client 17.0.0
 - yellowstone-grpc-napi 0.4.0

@@ -415,6 +415,81 @@ impl Filter {
         self.commitment
     }
 
+    /// Keys that find every message this filter matches, or `None` when an index cannot serve it.
+    pub(crate) fn route_keys(&self) -> Option<Vec<crate::route::RouteKey>> {
+        use crate::route::{RouteKey, MAX_ROUTE_KEYS, MEMCMP_OFFSETS};
+
+        fn extend(
+            keys: &mut Vec<RouteKey>,
+            list: impl ExactSizeIterator<Item = RouteKey>,
+        ) -> Option<()> {
+            (keys.len() + list.len() <= MAX_ROUTE_KEYS).then(|| keys.extend(list))
+        }
+
+        if !self.blocks.filters.is_empty() {
+            return None;
+        }
+        let mut keys = Vec::new();
+        for aggregate in self.accounts.aggregates() {
+            let memcmp = aggregate
+                .account_state
+                .iter()
+                .flat_map(|state| &state.memcmp)
+                .filter(|(offset, _)| MEMCMP_OFFSETS.contains(offset))
+                .find_map(|(offset, bytes)| {
+                    let bytes = bytes.as_slice().try_into().ok()?;
+                    Some(RouteKey::Memcmp(*offset, bytes))
+                });
+            match (
+                &aggregate.accounts,
+                &aggregate.accounts_cuckoo,
+                memcmp,
+                &aggregate.owners,
+            ) {
+                (Some(accounts), None, _, _) => {
+                    extend(&mut keys, accounts.iter().copied().map(RouteKey::Account))?
+                }
+                (_, _, Some(memcmp), _) => keys.push(memcmp),
+                (_, _, None, Some(owners)) => {
+                    extend(&mut keys, owners.iter().copied().map(RouteKey::Owner))?
+                }
+                _ => return None,
+            }
+        }
+        let transactions = self.transactions.filters.iter();
+        for (_name, inner) in transactions.chain(&self.transactions_status.filters) {
+            if inner.token_accounts.is_some() {
+                return None;
+            }
+            if let Some(required) = inner.account_required.iter().min() {
+                keys.push(RouteKey::Transaction(*required));
+            } else if !inner.account_include.is_empty() && inner.account_cuckoo.is_none() {
+                let include = inner.account_include.vec.iter().copied();
+                extend(&mut keys, include.map(RouteKey::Transaction))?;
+            } else {
+                return None;
+            }
+        }
+        if !self.slots.filters.is_empty() {
+            keys.push(RouteKey::Slots);
+        }
+        if !self.entries.filters.is_empty() {
+            keys.push(RouteKey::Entries);
+        }
+        if !self.entries.update_parent_filters.is_empty() {
+            keys.push(RouteKey::UpdateParent);
+        }
+        if !self.blocks_meta.filters.is_empty() {
+            keys.push(RouteKey::BlocksMeta);
+        }
+        if !self.block_footer.filters.iter().all(Vec::is_empty) {
+            keys.push(RouteKey::BlockFooter);
+        }
+        keys.sort_unstable();
+        keys.dedup();
+        (keys.len() <= MAX_ROUTE_KEYS).then_some(keys)
+    }
+
     pub fn get_updates(
         &self,
         message: &Message,
@@ -1413,16 +1488,12 @@ impl FilterAccountsState {
         if self.lamports.iter().any(|f| !f.is_match(lamports)) {
             return false;
         }
-        for (offset, bytes) in self.memcmp.iter() {
-            if data.len() < *offset + bytes.len() {
-                return false;
-            }
-            let data = &data[*offset..*offset + bytes.len()];
-            if data != bytes {
-                return false;
-            }
-        }
-        true
+        self.memcmp.iter().all(|(offset, bytes)| {
+            offset
+                .checked_add(bytes.len())
+                .and_then(|end| data.get(*offset..end))
+                .is_some_and(|data| data == bytes.as_slice())
+        })
     }
 }
 
@@ -4481,6 +4552,36 @@ mod account_filter_regression_tests {
             false,
         );
         assert!(linear_scan(&over_budget, &miss).is_empty());
+    }
+
+    #[test]
+    fn memcmp_offset_near_usize_max_matches_nothing() {
+        let request = SubscribeRequest {
+            accounts: HashMap::from([(
+                "memcmp".to_owned(),
+                SubscribeRequestFilterAccounts {
+                    filters: vec![SubscribeRequestFilterAccountsFilter {
+                        filter: Some(AccountsFilterDataOneof::Memcmp(
+                            SubscribeRequestFilterAccountsFilterMemcmp {
+                                offset: u64::MAX - 1,
+                                data: Some(AccountsFilterMemcmpOneof::Bytes(MEMCMP_BYTES.to_vec())),
+                            },
+                        )),
+                    }],
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        let filter = crate::plugin::filter::fixtures::filter(&request);
+        let account = account_info(
+            Pubkey::new_from_array([1; 32]),
+            Pubkey::new_from_array([2; 32]),
+            valid_token_data(),
+            1,
+            false,
+        );
+        assert!(sorted_matches(&filter, account).is_empty());
     }
 }
 

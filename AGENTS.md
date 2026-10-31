@@ -68,15 +68,15 @@ content (any order)   block footer   block meta   Processed   Confirmed   Finali
   Finalized. A subscriber below Finalized still gets the higher statuses, when the bank
   reaches them.
 - **Lifecycle events** are not held back. FirstShredReceived, Completed and Dead name no bank:
-  they go out as they land, at every commitment (the plugin entry point, `plugin/entry.rs`,
-  sends them to confirmed and finalized). CreatedBank goes out as it lands at processed, and
-  with the bank's content at confirmed and finalized, never as it lands there: `entry.rs` must
-  not broadcast it, or confirmed subscribers get it twice.
+  they go out as they land, at every commitment (block reconstruction sends them to confirmed
+  and finalized). CreatedBank goes out as it lands at processed, and with the bank's content at
+  confirmed and finalized, never as it lands there: block reconstruction must not send it with
+  them, or confirmed subscribers get it twice.
 
 Where: `GrpcService::take_in` in `yellowstone-grpc-geyser/src/grpc.rs`. A commitment status
 is never broadcast on a channel before that channel's copy of the bank's content and block
 meta. Block reconstruction holds a bank's footer, block meta and statuses until the bank
-seals (`BlockReconstructionMessage::SealGated`), then broadcasts, per channel:
+seals (`BlockReconstructionMessage::SealGated`), then sends, per channel:
 
 - the channel the bank just reached: its CreatedBank and content (confirmed and finalized),
   its Block, footer and block meta, then every status up to this one, in order;
@@ -84,8 +84,7 @@ seals (`BlockReconstructionMessage::SealGated`), then broadcasts, per channel:
 - the higher channels: nothing yet; they get it all when the bank reaches them.
 
 The replay keeps the same order for each bank. Tested by
-`live_order_is_content_then_meta_then_statuses_at_every_commitment`, which drives
-`geyser_loop` directly, so it does not cover `plugin/entry.rs`, and end to end by
+`live_order_is_content_then_meta_then_statuses_at_every_commitment`, and end to end by
 `replay-ordering[Processed|Confirmed|Finalized]`.
 
 ### The replay and the live stream overlap, never leave a gap
@@ -105,7 +104,7 @@ client:                   b4   b5
 
 An overlap is dropped; a gap cannot be recovered. Any change to the replay path must keep the
 two overlapping. `ReplayCut` tells the client where R falls on its receiver: `last_taken_in`
-(the last raw batch block reconstruction took in), `last_sent` (the last batch it broadcast)
+(the last raw batch block reconstruction took in), `last_sent` (the last batch it sent)
 and `next_taken_in` (the one raw batch that can be in neither, see below). The cuts are the
 very `Arc`s that went out, found with `Arc::ptr_eq`: no lock, counter or atomic. Keep it that
 way: the broadcast send and the live receive are the hot path.
@@ -131,11 +130,12 @@ data silently.
 
 Every batch in block reconstruction's queue went out live, maybe before the client
 subscribed, so the replay must hold all of them; `next_taken_in` recovers only one.
-`block_reconstruction_loop` uses a `biased` `select!` with three arms, in this order:
+`block_reconstruction_loop` uses a `biased` `select!` with four arms, in this order:
 
 1. the queue;
 2. the build arm, `consume_budget()` while a request is pending: it builds the replay;
-3. the request arm, while none is pending: it only stores the request.
+3. the route changes;
+4. the request arm, while none is pending: it only stores the request.
 
 So a replay is built only when a queue read made after its request was taken reads `Pending`.
 
@@ -158,22 +158,23 @@ So a replay is built only when a queue read made after its request was taken rea
   waits long enough for the client's live receiver to lag, the replay fails with an error;
   nothing is lost silently.
 
-### Block reconstruction broadcasts only through `BroadcastPosition::send`
+### Block reconstruction sends only through `BroadcastPosition::send`
 
-`last_sent` is the client's cut for block reconstruction's own batches. A direct
-`broadcast.send` from block reconstruction leaves it stale, and clients then keep repeated
-batches as new.
+`last_sent` is the client's cut for block reconstruction's own batches. A send that bypasses
+it leaves it stale, and clients then keep repeated batches as new. A replay's answer goes on
+the relay to `geyser_loop` too, behind the batches relayed before it, so the client's receiver
+holds `last_sent` when the answer arrives.
 
 ### `BlockReconstructionMessage` is named by whether its content was broadcast
 
 `BroadcastBatch` is the very `Arc` `geyser_loop` broadcast, so it is a cut and updates
-`last_taken_in`. `SealGated` (block metas, footers, commitment statuses) is never broadcast by
-`geyser_loop`, so it is never a cut. If a broadcast event is ever sent another way (say a
+`last_taken_in`. `SealGated` (block metas, footers, commitment statuses) is never in a raw
+batch, so it is never a cut. If a broadcast event is ever sent another way (say a
 `BroadcastSingle`), it must update `last_taken_in` too.
 
 ### A sealed bank is not out at processed until its Processed status arrives
 
-Block reconstruction broadcasts a bank's Block, BlockMeta and Processed status only when the
+Block reconstruction sends a bank's Block, BlockMeta and Processed status only when the
 status arrives, which can be after the bank sealed. A processed replay therefore sends only
 the data of a bank not in `BroadcastPosition::sent_at_processed`, and leaves its block and
 statuses to the live stream. Including them sends them twice.

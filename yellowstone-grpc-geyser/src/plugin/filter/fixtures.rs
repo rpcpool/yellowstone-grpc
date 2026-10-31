@@ -1,7 +1,7 @@
 use {
     crate::plugin::{
         convert_to,
-        filter::name::FilterNames,
+        filter::{limits::FilterLimits, name::FilterNames, Filter},
         message::{
             MessageAccount, MessageAccountInfo, MessageBlock, MessageBlockFooter, MessageBlockMeta,
             MessageEntry, MessageSlot, MessageTransaction, MessageTransactionInfo, SlotStatus,
@@ -21,8 +21,8 @@ use {
     yellowstone_grpc_proto::{
         geyser::{
             BlockFooterFinalCert, BlockFooterNotarRewardCert, BlockFooterSignatureKind,
-            BlockFooterSkipRewardCert, BlockFooterVotesAggregate, SubscribeUpdateBlockFooter,
-            SubscribeUpdateBlockMeta,
+            BlockFooterSkipRewardCert, BlockFooterVotesAggregate, SubscribeRequest,
+            SubscribeUpdateBlockFooter, SubscribeUpdateBlockMeta,
         },
         solana::storage::confirmed_block,
     },
@@ -33,6 +33,10 @@ pub const TOKEN_ACCOUNT_STATE_OFFSET: usize = 108;
 
 pub fn filter_names() -> FilterNames {
     FilterNames::new(64, 1024, Duration::from_secs(1))
+}
+
+pub fn filter(request: &SubscribeRequest) -> Filter {
+    Filter::new(request, &FilterLimits::default(), &mut filter_names()).unwrap()
 }
 
 pub fn deterministic_pubkeys(tag: u8, n: usize) -> Vec<Pubkey> {

@@ -354,6 +354,12 @@ where
     pub fn current_weight(&self) -> usize {
         self.shared.capacity - self.shared.semaphore.available_permits()
     }
+
+    /// Closes the channel to every sender, then queues `item` last without waiting for room.
+    pub fn close(&self, item: T) {
+        self.shared.semaphore.close();
+        let _ = self.inner.send((0, item));
+    }
 }
 
 impl<T> LoadAwareReceiver<T> {
@@ -553,6 +559,20 @@ mod tests {
             Err(TrySendError::Closed(TestItem(1)))
         ));
         assert!(sender.send(TestItem(1)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn close_queues_behind_held_items_and_closes_every_sender() {
+        let (sender, mut receiver) = load_aware_channel(2, TestWeigher);
+        let other = sender.clone();
+        sender.send(TestItem(2)).await.unwrap();
+        sender.close(TestItem(9));
+        assert!(matches!(
+            other.try_send(TestItem(1)),
+            Err(TrySendError::Closed(_))
+        ));
+        assert_eq!(receiver.recv().await, Some(TestItem(2)));
+        assert_eq!(receiver.recv().await, Some(TestItem(9)));
     }
 
     #[tokio::test]

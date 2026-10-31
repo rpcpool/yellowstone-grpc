@@ -83,6 +83,8 @@ its queue and its replay channel before spawning it, so it starts with everythin
   `poll_recv`; the rest use `try_recv`, which tokio does not budget. So the budget runs out
   after about 128 × 1024 items, and the queue must be longer than that, such as 140,000
   one-transaction `BroadcastBatch`es.
+- **Answer:** block reconstruction answers on the relay to `geyser_loop`. Only `geyser_loop`
+  sends the replay on the request's oneshot, so read `Relayed::Answer` from the relay receiver.
 - **Check:** count the replay's messages. All of them must be there.
 
 Example: `replay_takes_in_the_whole_queue_however_long`. With a `now_or_never` drain instead

@@ -3,15 +3,15 @@ use {
         config::Config,
         contact_info::ContactInfoNotification,
         file_watcher::FileWatcher,
-        grpc::{GrpcService, SubscriberChannels},
+        grpc::GrpcService,
         metrics::{self, incr_geyser_event_dropped, PrometheusService},
         plugin::{
             filter::limits::FilterLimits,
             message::{
-                CommitmentLevel, ContactInfoMessage, Message, MessageAccount, MessageBlockFooter,
-                MessageBlockMeta, MessageContactInfo, MessageContactInfoRemoved,
-                MessageDeshredTransaction, MessageDeshredUpdateParent, MessageEntry,
-                MessageEntryUpdateParent, MessageSlot, MessageTransaction,
+                ContactInfoMessage, Message, MessageAccount, MessageBlockFooter, MessageBlockMeta,
+                MessageContactInfo, MessageContactInfoRemoved, MessageDeshredTransaction,
+                MessageDeshredUpdateParent, MessageEntry, MessageEntryUpdateParent, MessageSlot,
+                MessageTransaction,
             },
         },
         stream::tokio::BatchStreamUnboundedReceiver,
@@ -51,7 +51,6 @@ pub struct PluginInner {
     grpc_channel: mpsc::UnboundedSender<Message>, // geyser_loop
     deshred_channel: broadcast::Sender<Message>,  // deshred_client_loop
     contact_info_channel: mpsc::UnboundedSender<ContactInfoNotification>,
-    broadcast_channel: SubscriberChannels, // client_loop
     blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
     plugin_cancellation_token: CancellationToken,
     plugin_task_tracker: TaskTracker,
@@ -71,11 +70,6 @@ impl PluginInner {
         if let Ok(count) = self.deshred_channel.send(message) {
             metrics::deshred_queue_size_inc(count as i64);
         }
-    }
-
-    // Sends messages to all subscribed clients if their filter matches the message.
-    fn send_broadcast_message(&self, commitment: CommitmentLevel, messages: Arc<Vec<Message>>) {
-        self.broadcast_channel.send(commitment, messages);
     }
 
     // Sends messages to block meta storage
@@ -209,7 +203,6 @@ impl GeyserPlugin for Plugin {
             grpc_channel: grpc_channel_tx,
             deshred_channel: grpc_service_result.deshred_broadcast_tx,
             contact_info_channel: grpc_service_result.contact_info_tx,
-            broadcast_channel: grpc_service_result.broadcast,
             blocks_meta_tx: grpc_service_result.blocks_meta_tx,
             plugin_cancellation_token,
             plugin_task_tracker,
@@ -454,13 +447,7 @@ impl GeyserPlugin for Plugin {
             inner.send_message(message.clone());
 
             match status {
-                // geyser_loop broadcasts them at processed. They name no bank, so confirmed and
-                // finalized subscribers get them here, as they land, to follow the slot's life.
-                SlotStatus::FirstShredReceived | SlotStatus::Completed | SlotStatus::Dead(_) => {
-                    let messages = Arc::new(vec![message.clone()]);
-                    inner.send_broadcast_message(CommitmentLevel::Confirmed, Arc::clone(&messages));
-                    inner.send_broadcast_message(CommitmentLevel::Finalized, messages);
-                }
+                SlotStatus::FirstShredReceived | SlotStatus::Completed | SlotStatus::Dead(_) => {}
                 variant @ (SlotStatus::Processed
                 | SlotStatus::Confirmed
                 | SlotStatus::Rooted

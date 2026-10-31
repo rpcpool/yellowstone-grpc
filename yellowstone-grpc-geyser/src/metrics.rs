@@ -469,6 +469,10 @@ pub fn incr_geyser_untrack_slot_event_dropped() {
     GEYSER_UNTRACK_SLOT_EVENT_DROPPED.inc();
 }
 
+pub fn grpc_message_sent_counter(subscriber_id: &str) -> IntCounter {
+    GRPC_MESSAGE_SENT.with_label_values(&[subscriber_id])
+}
+
 pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
     GRPC_MESSAGE_SENT
         .with_label_values(&[remote_id.as_ref()])
@@ -568,6 +572,13 @@ pub fn observe_subscriber_queue_size<S: AsRef<str>>(
     GRPC_SUBSCRIBER_QUEUE_SIZE
         .with_label_values(&[subscriber_id.as_ref(), kind])
         .observe(size as f64);
+}
+
+#[cfg(test)]
+pub fn client_disconnects(subscriber_id: &str, reason: &str) -> u64 {
+    GRPC_CLIENT_DISCONNECTS
+        .with_label_values(&[subscriber_id, reason])
+        .get()
 }
 
 pub fn incr_client_disconnect<S: AsRef<str>>(subscriber_id: S, reason: &str) {

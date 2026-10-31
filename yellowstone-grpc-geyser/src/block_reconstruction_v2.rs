@@ -464,6 +464,7 @@ pub struct BlockMachineStorage {
     ready_queue: VecDeque<(SlotCommitmentStatusUpdate, Arc<FrozenBank>)>,
     replayed_capacity: usize,
     num_buffered_finalized_slot: usize,
+    gc_due: bool,
     min_slot: Option<Slot>,
     // Highest slot number observed across any message so far, and the value it had at the
     // last stale-slot sweep -- together these throttle `sweep_stale_slots` to run only every
@@ -486,6 +487,7 @@ impl BlockMachineStorage {
             ready_queue: VecDeque::with_capacity(replayed_capacity),
             replayed_capacity,
             num_buffered_finalized_slot: 0,
+            gc_due: false,
             min_slot: None,
             max_slot_seen: 0,
             last_stale_gc_at: 0,
@@ -967,9 +969,7 @@ impl BlockMachineStorage {
         for update in to_emit {
             self.ready_queue.push_back((update, Arc::clone(frozen)));
         }
-        if newly_finalized {
-            self.gc();
-        }
+        self.gc_due |= newly_finalized;
     }
 
     fn handle_block_data(&mut self, message: Message) {
@@ -1046,7 +1046,10 @@ impl BlockMachineStorage {
         self.try_seal_bank(bank_id);
     }
 
-    fn gc(&mut self) {
+    pub fn gc(&mut self) {
+        if !std::mem::take(&mut self.gc_due) {
+            return;
+        }
         while self.replayed_slot.len() > self.replayed_capacity
             && self.num_buffered_finalized_slot > MINIMUM_FINALIZED_SLOT_TO_BUFFER
         {
