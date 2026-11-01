@@ -74,6 +74,7 @@ pub fn account_info(
         data: Bytes::from(data),
         write_version: 7,
         txn_signature,
+        txn_index: None,
         pre_encoded: OnceLock::new(),
     }
 }

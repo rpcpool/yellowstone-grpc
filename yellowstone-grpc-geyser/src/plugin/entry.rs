@@ -255,6 +255,9 @@ impl GeyserPlugin for Plugin {
                     unreachable!("ReplicaAccountInfoVersions::V0_0_2 is not supported")
                 }
                 ReplicaAccountInfoVersions::V0_0_3(info) => info,
+                ReplicaAccountInfoVersions::V0_0_4(_info) => {
+                    unreachable!("ReplicaAccountInfoVersions::V0_0_4 is not supported")
+                }
             };
 
             if let Ok(owner) = Pubkey::try_from(account.owner) {
@@ -298,6 +301,9 @@ impl GeyserPlugin for Plugin {
                     unreachable!("ReplicaAccountInfoVersions::V0_0_2 is not supported")
                 }
                 ReplicaAccountInfoVersions::V0_0_3(info) => info,
+                ReplicaAccountInfoVersions::V0_0_4(_info) => {
+                    unreachable!("ReplicaAccountInfoVersions::V0_0_4 is not supported")
+                }
             };
 
             if let Ok(owner) = Pubkey::try_from(account.owner) {

@@ -1,6 +1,7 @@
 use {
     agave_votor_messages::{
         certificate::CertSignature,
+        consensus_message::BlockId,
         reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
     },
     solana_account::Account,
@@ -300,6 +301,7 @@ pub fn create_reward(reward: proto::Reward) -> CreateResult<Reward> {
                 proto::RewardType::Voting => Some(RewardType::Voting),
                 proto::RewardType::DeactivatedStake => Some(RewardType::DeactivatedStake),
                 proto::RewardType::VatDebit => Some(RewardType::VATDebit),
+                proto::RewardType::BlockRevenueSharing => Some(RewardType::BlockRevenueSharing),
             }),
         commission: if reward.commission.is_empty() {
             None
@@ -406,7 +408,7 @@ pub fn create_block_final_cert(
     let block_aggregate = cert.notar_aggregate.as_ref().unwrap_or(final_aggregate);
     Ok(BlockFinalizationCert {
         slot: cert.slot,
-        block_id: create_hash(&block_aggregate.block_id)?,
+        block_id: create_block_id(&block_aggregate.block_id)?,
         final_aggregate: create_votes_aggregate(final_aggregate)?,
         notar_aggregate: cert
             .notar_aggregate
@@ -445,7 +447,7 @@ pub fn create_notar_reward_cert(
     let aggregate = cert.aggregate.as_ref().ok_or("failed to get aggregate")?;
     NotarRewardCertificate::try_new(
         cert.slot,
-        create_hash(&aggregate.block_id)?,
+        create_block_id(&aggregate.block_id)?,
         create_bls_signature(aggregate)?,
         aggregate.signer_bitmap.clone(),
     )
@@ -456,6 +458,10 @@ fn create_hash(hash: &[u8]) -> CreateResult<Hash> {
     <[u8; HASH_BYTES]>::try_from(hash)
         .map(Hash::new_from_array)
         .map_err(|_| "failed to parse hash")
+}
+
+fn create_block_id(block_id: &[u8]) -> CreateResult<BlockId> {
+    create_hash(block_id).map(BlockId::from)
 }
 
 fn create_bls_signature(
@@ -482,6 +488,7 @@ mod tests {
         agave_geyser_plugin_interface::block_footer as plugin,
         agave_votor_messages::{
             certificate::CertSignature,
+            consensus_message::BlockId,
             reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
         },
         solana_bls_signatures::{
@@ -517,7 +524,7 @@ mod tests {
     fn plugin_final_cert(cert: &BlockFinalizationCert) -> plugin::BlockFinalizationCert<'_> {
         plugin::BlockFinalizationCert {
             slot: cert.slot,
-            block_id: cert.block_id,
+            block_id: cert.block_id.to_hash(),
             final_aggregate: plugin_aggregate(&cert.final_aggregate),
             notar_aggregate: cert.notar_aggregate.as_ref().map(plugin_aggregate),
         }
@@ -525,7 +532,7 @@ mod tests {
 
     #[test]
     fn block_final_cert_round_trip() {
-        let block_id = Hash::new_from_array([4; 32]);
+        let block_id = BlockId::from(Hash::new_from_array([4; 32]));
         for notar_aggregate in [None, Some(votes_aggregate(2, vec![1, 6, 0, 9]))] {
             let slow = notar_aggregate.is_some();
             let cert = BlockFinalizationCert {
@@ -542,10 +549,10 @@ mod tests {
                 assert!(final_aggregate.block_id.is_empty());
                 assert_eq!(
                     proto.notar_aggregate.as_ref().unwrap().block_id,
-                    block_id.to_bytes()
+                    block_id.as_bytes()
                 );
             } else {
-                assert_eq!(final_aggregate.block_id, block_id.to_bytes());
+                assert_eq!(final_aggregate.block_id, block_id.as_bytes());
             }
             assert_eq!(create_block_final_cert(&proto).unwrap(), cert);
         }
@@ -565,14 +572,14 @@ mod tests {
 
         let notar = NotarRewardCertificate::try_new(
             43,
-            Hash::new_from_array([5; 32]),
+            BlockId::from(Hash::new_from_array([5; 32])),
             signature,
             Vec::new(),
         )
         .unwrap();
         let proto = convert_to::create_notar_reward_cert(&plugin::NotarRewardCertificate {
             slot: notar.slot,
-            block_id: notar.block_id,
+            block_id: notar.block_id.to_hash(),
             signature: notar.signature,
             bitmap: notar.bitmap(),
         });
@@ -585,7 +592,7 @@ mod tests {
         let fast =
             convert_to::create_block_final_cert(&plugin_final_cert(&BlockFinalizationCert {
                 slot: 42,
-                block_id: Hash::new_from_array([4; 32]),
+                block_id: BlockId::from(Hash::new_from_array([4; 32])),
                 final_aggregate: votes_aggregate(1, Vec::new()),
                 notar_aggregate: None,
             }));
@@ -668,6 +675,10 @@ mod tests {
                 Some(RewardType::DeactivatedStake),
             ),
             (proto::RewardType::VatDebit, Some(RewardType::VATDebit)),
+            (
+                proto::RewardType::BlockRevenueSharing,
+                Some(RewardType::BlockRevenueSharing),
+            ),
         ] {
             let reward = create_reward(base_proto_reward(proto_type as i32))
                 .expect("failed to create reward");

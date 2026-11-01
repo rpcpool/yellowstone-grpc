@@ -193,6 +193,7 @@ pub struct MessageAccountInfo {
     pub data: Bytes,
     pub write_version: u64,
     pub txn_signature: Option<Signature>,
+    pub txn_index: Option<u64>,
     pub pre_encoded: OnceLock<Vec<u8>>,
 }
 
@@ -209,6 +210,7 @@ impl MessageAccountInfo {
             data,
             write_version: info.write_version,
             txn_signature: info.txn.map(|txn| *txn.signature()),
+            txn_index: None,
             pre_encoded: OnceLock::new(),
         }
     }

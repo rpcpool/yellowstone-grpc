@@ -103,24 +103,24 @@ wincode = "0.6.1"
 notify = "8.2.0"
 
 # Agave SDK (crates moved out of the monorepo)
-agave-geyser-plugin-interface = "5.0.0"
+agave-geyser-plugin-interface = "6.0.0"
 
 # Agave Monorepo
-agave-feature-set = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
-agave-votor-messages = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
-solana-account-decoder = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
-solana-entry = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
+agave-feature-set = { git = "https://github.com/anza-xyz/agave", tag = "v4.5.0-alpha.4" }
+agave-votor-messages = { git = "https://github.com/anza-xyz/agave", tag = "v4.5.0-alpha.4" }
+solana-account-decoder = { git = "https://github.com/anza-xyz/agave", tag = "v4.5.0-alpha.4" }
+solana-entry = { git = "https://github.com/anza-xyz/agave", tag = "v4.5.0-alpha.4" }
 solana-logger = "3.0.0"
-solana-storage-proto = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
-solana-transaction-context = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
-solana-transaction-status = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
+solana-storage-proto = { git = "https://github.com/anza-xyz/agave", tag = "v4.5.0-alpha.4" }
+solana-transaction-context = { git = "https://github.com/anza-xyz/agave", tag = "v4.5.0-alpha.4" }
+solana-transaction-status = { git = "https://github.com/anza-xyz/agave", tag = "v4.5.0-alpha.4" }
 
 # Solana SDK
-solana-message = "5.1.0"
+solana-message = "6.0.0"
 
-solana-account = "4.0.0"
+solana-account = "5.1.1"
 solana-bls-signatures = "4.0.0"
-solana-clock = "3.0.0"
+solana-clock = "4.0.0"
 solana-commitment-config = "3.0.0"
 solana-hash = "4.3.0"
 solana-keypair = "4.0.0"
@@ -128,7 +128,7 @@ solana-keypair = "4.0.0"
 solana-pubkey = "4.0.0"
 solana-signature = "3.0.0"
 solana-signer = "4.0.0"
-solana-transaction = "5.1.0"
+solana-transaction = "6.0.0"
 # We need to pin this to 3.2.0 because introduce a breaking changing in 3.3.0 which prevents compilation of solana-storage-proto.
 solana-transaction-error = { version = "4.1.0", features = ["serde"] }
 
@@ -138,8 +138,8 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.12.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "16.0.1" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "17.0.0-rc9+solana.4.4.0" }
-yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "14.0.1", default-features = false }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "18.0.0-rc1+solana.4.5.0.alpha.4" }
+yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "15.0.0-rc1", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }
 

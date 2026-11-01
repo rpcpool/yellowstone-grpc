@@ -262,6 +262,7 @@ impl FilteredUpdate {
             data: Bytes::from(data_slice),
             write_version: acc.write_version,
             txn_signature: acc.txn_signature.map(|s| s.as_ref().into()),
+            txn_index: acc.txn_index,
         }
     }
 
@@ -608,6 +609,9 @@ impl FilteredUpdateAccount {
         if let Some(value) = &account.txn_signature {
             prost_bytes_encode_raw(8u32, value.as_ref(), buf);
         }
+        if let Some(value) = &account.txn_index {
+            ::prost::encoding::uint64::encode(9u32, value, buf);
+        }
     }
 
     fn account_encoded_len(
@@ -659,6 +663,9 @@ impl FilteredUpdateAccount {
             + account
                 .txn_signature
                 .map_or(0, |_| SIGNATURE_FIELD_ENCODED_LEN)
+            + account.txn_index.map_or(0, |value| {
+                ::prost::encoding::uint64::encoded_len(9u32, &value)
+            })
     }
 }
 
@@ -1481,7 +1488,12 @@ pub mod tests {
                         [42; 2 * 1024 * 1024].to_vec(),
                     ] {
                         for write_version in [0, 1] {
-                            for txn_signature in [None, Some(txn_signature)] {
+                            for (txn_signature, txn_index) in [
+                                (None, None),
+                                (Some(txn_signature), None),
+                                (Some(txn_signature), Some(0)),
+                                (Some(txn_signature), Some(300)),
+                            ] {
                                 accounts.push(MessageAccountInfo {
                                     pubkey,
                                     lamports,
@@ -1491,6 +1503,7 @@ pub mod tests {
                                     data: Bytes::from(data.clone()),
                                     write_version,
                                     txn_signature,
+                                    txn_index,
                                     pre_encoded: OnceLock::new(),
                                 });
                             }
@@ -1824,7 +1837,12 @@ pub mod tests {
                         for rent_epoch in [0u64, 100] {
                             for write_version in [0u64, 42] {
                                 for data in &data_samples {
-                                    for txn_signature in [None, Some(Signature::from([0u8; 64]))] {
+                                    for (txn_signature, txn_index) in [
+                                        (None, None),
+                                        (Some(Signature::from([0u8; 64])), None),
+                                        (Some(Signature::from([0u8; 64])), Some(0)),
+                                        (Some(Signature::from([0u8; 64])), Some(300)),
+                                    ] {
                                         // Create account WITH pre-encoding
                                         let account_with = MessageAccountInfo {
                                             pubkey: *pubkey,
@@ -1835,6 +1853,7 @@ pub mod tests {
                                             data: Bytes::from(data.clone()),
                                             write_version,
                                             txn_signature,
+                                            txn_index,
                                             pre_encoded: OnceLock::new(),
                                         };
                                         AccountEncoder::pre_encode(&account_with);
@@ -1849,6 +1868,7 @@ pub mod tests {
                                             data: Bytes::from(data.clone()),
                                             write_version,
                                             txn_signature,
+                                            txn_index,
                                             pre_encoded: OnceLock::new(),
                                         };
 

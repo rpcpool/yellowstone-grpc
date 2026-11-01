@@ -264,6 +264,9 @@ pub const fn create_reward_type(reward_type: Option<RewardType>) -> proto::Rewar
         Some(RewardType::Voting) => proto::RewardType::Voting,
         Some(RewardType::DeactivatedStake) => proto::RewardType::DeactivatedStake,
         Some(RewardType::VATDebit) => proto::RewardType::VatDebit,
+        Some(RewardType::BlockRevenueSharing) => proto::RewardType::BlockRevenueSharing,
+        // RewardType is non_exhaustive; a new variant needs a proto value first.
+        Some(_) => proto::RewardType::Unspecified,
     }
 }
 

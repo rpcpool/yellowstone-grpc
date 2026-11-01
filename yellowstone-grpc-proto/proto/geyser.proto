@@ -221,6 +221,9 @@ message SubscribeUpdateAccountInfo {
   bytes data = 6;
   uint64 write_version = 7;
   optional bytes txn_signature = 8;
+  // Block index of the causing transaction, as SubscribeUpdateTransactionInfo.index.
+  // Unset when no transaction caused the write or the validator does not report it.
+  optional uint64 txn_index = 9;
 }
 
 message SubscribeUpdateSlot {

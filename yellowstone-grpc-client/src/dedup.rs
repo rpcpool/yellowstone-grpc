@@ -898,6 +898,7 @@ mod tests {
                         data: vec![].into(),
                         write_version: 1,
                         txn_signature: Some(vec![0; 64]),
+                        txn_index: None,
                     }),
                     slot,
                     is_startup: false,

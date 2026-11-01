@@ -95,6 +95,9 @@ impl AccountEncoder {
         if let Some(value) = &account.txn_signature {
             prost_bytes_encode_raw(8u32, value.as_ref(), &mut buf);
         }
+        if let Some(value) = &account.txn_index {
+            ::prost::encoding::uint64::encode(9u32, value, &mut buf);
+        }
 
         if account.pre_encoded.set(buf).is_err() {
             metrics::pre_encoded_cache_miss("account");
@@ -137,6 +140,9 @@ impl AccountEncoder {
             + account
                 .txn_signature
                 .map_or(0, |_| SIGNATURE_FIELD_ENCODED_LEN)
+            + account.txn_index.map_or(0, |value| {
+                ::prost::encoding::uint64::encoded_len(9u32, &value)
+            })
     }
 }
 
