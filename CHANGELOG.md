@@ -10,6 +10,28 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-geyser 16.2.1
+
+### Features
+
+- plugin: updates go straight into the queue of each client whose filter keys can match them, instead of waking every client for every batch. At 400 subscribers against 16.2.0, processed account p99 goes from 4.4-6.6 ms to 0.3-0.4 ms, entry p99 from 7.3-7.5 ms to 0.8 ms, confirmed account p99 from 10.1-10.9 ms to 3.5-3.6 ms, and plugin CPU from 1.93-1.96 to 0.76-0.78 cores. A client is routed when each of its filters is one of these, with 8192 keys at most: a slot, entry, block meta or block footer filter; an account filter with an `account` list and no `cuckoo_accounts_filter`, an `owner` list, or a 32-byte `memcmp` at offset 0 or 32; a transaction or transaction status filter with no `token_accounts` and an `account_required` list, or an `account_include` list without `cuckoo_account_include`. Other clients read the broadcast as before. A filter change moves a client between the two without losing or repeating an update at one commitment level. When a routed client's filter panics, only that client ends, with the disconnect reason `filter_failed`.
+- plugin: `filter_apply_interval` (default `5s`) is the shortest time between two filter changes applied for one `Subscribe` client. The first request that asks for something applies at once, and so do pings. A later change sent sooner waits, and only the newest waiting change applies when the interval ends. A later request with `from_slot` waits like any other change, and its `from_slot` is still ignored. A `from_slot` replay or a startup snapshot, and the backlog after a replay, use the first request's filter: a change sent meanwhile waits until they end, and then the newest applies, at once or when its interval ends. A waiting change is checked when it applies, so its filter error comes then, and a change that a newer one replaces is never checked. With `0s`, every change applies at once, or as soon as the replay or snapshot it was sent during ends, as before. Earlier builds reject the key.
+- plugin: a client whose filter can be routed reads the broadcast until its owner has indexed its route keys, then moves to its route without missing or repeating an update. A new client gets its first update as soon as it would on the broadcast, a posted filter change to other keys applies from the next batch, and a subscribe storm no longer delays the clients that are already routed.
+
+### Fixes
+
+- plugin: a memcmp filter with an offset near the end of the address space no longer panics.
+
+### Misc
+
+- plugin: each commitment level has one sender: the geyser loop at processed, and block reconstruction at confirmed and finalized. Block reconstruction hands its processed output to the geyser loop, and sends `FirstShredReceived`, `Completed` and `Dead` at confirmed and finalized. A commitment change can repeat or miss a slot status.
+- plugin: the ping task observes `yellowstone_grpc_geyser_subscriber_queue_size` every 10 s, because a routed client does not wake for each update.
+- plugin: block reconstruction frees the banks it evicts on a thread of its own, `solGrpcBankDrop`, instead of in its task. The thread takes the scheduling policy of the thread that loads the plugin.
+- plugin: the route index has 4,096 shards that grow one at a time, so a growth no longer stops a sender for tens of milliseconds.
+- plugin: the geyser loop and block reconstruction index route keys in slices, when they have nothing else to do or once the work has waited ten intervals: at most one slice per `route_index_interval` (default `1ms`), each at most `route_index_budget` (default `100us`) plus one step of 64 keys. Each owner takes in at most 64 route changes per pass, and a leave or a disconnected client no longer removes its keys inline. Earlier builds reject the two keys.
+
+## 2026-10-30
+
 - yellowstone-grpc-geyser 16.2.0
 - yellowstone-grpc-client 17.0.0
 - yellowstone-grpc-napi 0.4.0

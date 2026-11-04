@@ -23,6 +23,16 @@ Existing examples, in `yellowstone-grpc-geyser/src/grpc.rs`, module
 `ReplayPhase` alone is unit-tested in `yellowstone-grpc-geyser/src/geyser_subscriber.rs`, with
 a plain `broadcast::channel` and hand-built `ReplayCut`s, by collecting what `next` hands out.
 
+To test a client that joins a route after its replay, build its `SubscriberChannels` with
+`with_routing(STEP_EVERY_PASS_LIMITS)` (from the route.rs tests), so each owner pass runs one
+index step, give the two loops the matching route change receivers, and give the client a
+filter with route keys, such as `create_filter`'s. `subscribe_while_a_slot_seals` routes its
+client; the other examples keep their client on the broadcast. The client first sends
+`RouteChange::Prepare`, and joins with its receiver only after the owner answers. Wait with
+`yield_until` until the client holds no receiver before you assert routed delivery. A receiver
+count that only drops back reads its final value before the client runs too, so `settle()`
+first.
+
 ## 1. One batch per send: the `current_thread` runtime
 
 `#[tokio::test]` runs on a `current_thread` runtime, so no task runs until the test awaits.
@@ -104,6 +114,16 @@ built in the request arm, it gets neither batch, every run.
   with sleeps.
 - Read the client stream with `read_until_confirmed`, which records transactions, CreatedBank
   and Processed statuses in `Received`.
+- A test that drives `block_reconstruction_loop` alone reads the replay from the relay
+  receiver, as a `RelayedItem::Answer` behind any `RelayedItem::Batch`: only `geyser_loop`
+  puts a replay on the request's oneshot. A `ReplayedResponse::Lagged` goes on the oneshot
+  directly.
+- Block reconstruction returns `Pending` once right after a pass that relayed, so a task
+  waiting on the relay runs before its next pass. A pass that seals a bank at processed
+  relays first and returns `Pending` before its confirmed and finalized sends. The test body
+  is the runtime's `block_on` future, which runs only once no task is ready. To check what
+  block reconstruction has done when the relay arrives, read the relay from a spawned task,
+  as `block_reconstruction_lets_geyser_loop_run_right_after_it_relays` does.
 - A processed client that replayed waits for the next raw batch before going live: after the
   last statuses, send the next slot's raw data or the test times out.
 - Stop at a point the live stream must reach after every duplicate, such as the next slot's

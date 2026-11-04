@@ -18,10 +18,10 @@
 //! R less what the replay already sent, and then gives the receiver back: from there every
 //! batch is new.
 //!
-//! Two tasks send on the processed channel, so R has two edges. geyser_loop broadcasts raw
-//! batches and only then hands them to block reconstruction, so a raw batch went into the
+//! The processed channel has two kinds of batches, so R has two edges. geyser_loop broadcasts
+//! raw batches and only then hands them to block reconstruction, so a raw batch went into the
 //! replay if block reconstruction took it in: [`ReplayCut::last_taken_in`] is the last one.
-//! Block reconstruction's own batches went out before R up to [`ReplayCut::last_sent`]. Both
+//! Block reconstruction's own batches were sent before R up to [`ReplayCut::last_sent`]. Both
 //! are compared by pointer, since block reconstruction holds the very `Arc` that went out.
 //!
 //! Block reconstruction builds a replay only once its queue reads empty, on a read made after it
@@ -71,7 +71,7 @@ pub struct ReplayCut {
     /// The last raw batch it took in. Only used at processed, the one channel geyser_loop
     /// broadcasts raw batches on.
     pub last_taken_in: Option<BroadcastedMessage>,
-    /// The last batch it broadcast on the replay's commitment channel.
+    /// The last batch it sent on the replay's commitment channel.
     pub last_sent: Option<BroadcastedMessage>,
     /// The first raw batch it takes in after the replay. Processed only.
     ///
@@ -183,8 +183,8 @@ pub struct ReplayPhase {
     commitment: CommitmentLevel,
     replay: ReplayMessages,
     sent: ReplaySent,
-    /// Every batch sent before R that the receiver got is in here: R came before the replay
-    /// arrived.
+    /// Every batch sent before R that the receiver got is in here: each went out before the
+    /// replay arrived.
     queued: VecDeque<BroadcastedMessage>,
     /// The queued batch being handed out, and where its next message is.
     batch: Option<(BroadcastedMessage, usize)>,
@@ -476,7 +476,17 @@ impl ReplayPhase {
         Ok(())
     }
 
-    /// Drops from `batch` what the replay already sent, if `batch` went out before R.
+    /// Drops from `batch` what the replay already sent, if `batch` is up to its cut:
+    /// [`ReplayPhase::last_taken_in`] for a raw processed batch, [`ReplayPhase::last_sent`] for
+    /// any other.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch` - The next batch queued on the live receiver.
+    ///
+    /// # Returns
+    ///
+    /// `batch`, what is left of it, or [`None`] if the replay sent all of it.
     fn join(&mut self, batch: BroadcastedMessage) -> Option<BroadcastedMessage> {
         let raw = self.commitment == CommitmentLevel::Processed && !is_reconstruction_batch(&batch);
         let cut = if raw {
@@ -518,8 +528,16 @@ fn take_queued(
     }
 }
 
-/// Whether block reconstruction sent `batch`. geyser_loop never broadcasts a Block, and hands
-/// block metas, footers and commitment statuses to block reconstruction only.
+/// Whether block reconstruction sent `batch`. Its processed batches start with a
+/// [`Message::Block`] or a commitment status, and no raw batch holds either.
+///
+/// # Arguments
+///
+/// * `batch` - A batch from the processed channel.
+///
+/// # Returns
+///
+/// `true` if `batch` starts with a Block or a commitment status.
 fn is_reconstruction_batch(batch: &[Message]) -> bool {
     match batch.first() {
         Some(Message::Block(_)) => true,

@@ -7463,7 +7463,7 @@ dependencies = [
 
 [[package]]
 name = "yellowstone-grpc-geyser"
-version = "16.2.0"
+version = "16.2.1"
 dependencies = [
  "affinity",
  "agave-feature-set",
@@ -7484,6 +7484,7 @@ dependencies = [
  "foldhash 0.2.0",
  "futures",
  "git-version",
+ "hashbrown 0.17.1",
  "hostname",
  "http",
  "http-body-util",
