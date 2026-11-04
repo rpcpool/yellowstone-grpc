@@ -663,30 +663,25 @@ impl ConfigGrpc {
     /// Resolves every queue capacity and update weight, applying the fallbacks.
     pub fn resolved_capacities(&self) -> GrpcCapacities {
         let capacities = &self.capacities;
-        let channel_capacity = self.channel_capacity;
+        let channel_capacity = self.channel_capacity.max(1);
+        let capacity = |value: Option<usize>| value.unwrap_or(channel_capacity).max(1);
         let scale = |value: Option<u32>| value.unwrap_or(1).max(1);
         GrpcCapacities {
-            geyser_subscriber_weight: capacities
-                .geyser_subscriber_weight_capacity
-                .unwrap_or(channel_capacity),
-            deshred_subscriber: capacities
-                .deshred_channel_capacity
-                .unwrap_or(channel_capacity),
-            contact_info_subscriber: capacities
-                .contact_info_channel_capacity
-                .unwrap_or(channel_capacity),
+            geyser_subscriber_weight: capacity(capacities.geyser_subscriber_weight_capacity),
+            deshred_subscriber: capacity(capacities.deshred_channel_capacity),
+            contact_info_subscriber: capacity(capacities.contact_info_channel_capacity),
             processed_broadcast: capacities
                 .internal_processed_channel_capacity
                 .or(self.processed_broadcast_capacity)
-                .unwrap_or(channel_capacity),
+                .map_or(channel_capacity, |capacity| capacity.max(1)),
             confirmed_broadcast: capacities
                 .internal_confirmed_channel_capacity
                 .or(self.confirmed_broadcast_capacity)
-                .unwrap_or(channel_capacity),
+                .map_or(channel_capacity, |capacity| capacity.max(1)),
             finalized_broadcast: capacities
                 .internal_finalized_channel_capacity
                 .or(self.finalized_broadcast_capacity)
-                .unwrap_or(channel_capacity),
+                .map_or(channel_capacity, |capacity| capacity.max(1)),
             weight_scales: WeightScales {
                 account: scale(capacities.weight_scale_account),
                 transaction: scale(capacities.weight_scale_transaction),
@@ -945,6 +940,39 @@ mod tests {
         assert_eq!(
             config.client_unresponsive_timeout,
             Some(Duration::from_secs(30))
+        );
+    }
+
+    #[test]
+    fn zero_capacities_resolve_to_one() {
+        let config: ConfigGrpc = serde_json::from_str(
+            r#"{
+                "channel_capacity": 0,
+                "processed_broadcast_capacity": 0,
+                "confirmed_broadcast_capacity": 0,
+                "finalized_broadcast_capacity": 0,
+                "capacities": {
+                    "geyser_subscriber_weight_capacity": 0,
+                    "deshred_channel_capacity": 0,
+                    "contact_info_channel_capacity": 0,
+                    "internal_processed_channel_capacity": 0,
+                    "internal_confirmed_channel_capacity": 0,
+                    "internal_finalized_channel_capacity": 0
+                }
+            }"#,
+        )
+        .expect("valid grpc config");
+        assert_eq!(
+            config.resolved_capacities(),
+            GrpcCapacities {
+                geyser_subscriber_weight: 1,
+                deshred_subscriber: 1,
+                contact_info_subscriber: 1,
+                processed_broadcast: 1,
+                confirmed_broadcast: 1,
+                finalized_broadcast: 1,
+                weight_scales: WeightScales::default(),
+            }
         );
     }
 
