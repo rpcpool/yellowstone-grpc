@@ -476,6 +476,10 @@ It's possible to add limits for filters in the config. If the `filters` field is
 
 For a `SubscribeDeshred` CLI example, see [examples/rust](examples/rust).
 
+For a subscription that reconnects by itself (`subscribe_with_reconnect`), see
+[`client_with_reconnect`](examples/rust/src/bin/client_with_reconnect.rs) in Rust, and
+[`try-reconnect.js`](yellowstone-grpc-client-nodejs/try-reconnect.js) for the TypeScript client.
+
 > [!NOTE]
 > Some load balancers will terminate gRPC connections if no messages are sent from the client for a period of time.
 > In order to mitigate this, you need to send a message periodically. The `ping` field in the SubscribeRequest is used for this purpose.

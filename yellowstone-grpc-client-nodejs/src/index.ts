@@ -128,39 +128,67 @@ import type {
 import { Duplex } from "stream";
 import * as napi from "./napi/index";
 
-export const AUTORECONNECT_FILTER_KEY: string = napi.AUTORECONNECT_FILTER_KEY;
+/**
+ * Name of the block meta and slot filters `subscribeWithReconnect()` adds to every request.
+ * Reserved: a request using it is rejected.
+ */
+export const RECONNECT_FILTER_KEY: string = napi.RECONNECT_FILTER_KEY;
 
 /**
  * Public channel options accepted by the SDK constructor.
  * This is sourced from the native N-API constructor signature to avoid
  * duplicating option fields in this file.
  */
-export type ChannelOptions = NonNullable<Parameters<typeof napi.GrpcClient.new>[2]>;
+export type ChannelOptions = NonNullable<
+  Parameters<typeof napi.GrpcClient.new>[2]
+>;
 
-/** Retry options for subscribeWithReconnect(). */
+/** Options of `subscribeWithReconnect()`. Plain subscriptions never reconnect. */
 export interface ReconnectOptions {
+  /**
+   * The retry budget: up to `maxRetries` reconnects in a row, each after a delay that starts
+   * at `initialIntervalMs` and grows by `multiplier`. A connection that delivers a bank's
+   * Block, block footer or block meta refills it; a ping or a slot status alone does not. Once
+   * the budget is spent, the next disconnect ends the stream with its error.
+   */
   backoff?: {
     initialIntervalMs?: number;
     multiplier?: number;
     maxRetries?: number;
   };
+  /**
+   * Where a reconnect resumes. `"Replay"` (the default) replays from `slotsBehind` slots before
+   * the last confirmed slot seen, or from the first request's `fromSlot` before any confirmed
+   * slot is known: the stream resends banks you already have, so handle duplicates. A
+   * replayed bank carries only the latest write of each account, so it can have fewer account
+   * updates than the same bank delivered live, with the same final state. `"NoReplay"` resumes at the live tip: what the server sent during the outage is
+   * lost.
+   */
+  policy?: "Replay" | "NoReplay";
+  /** With `"Replay"`, how many slots before the last confirmed slot to replay from. Default 0. */
+  slotsBehind?: number;
 }
 
-/** Connection-scoped bank identity. All uint64 values are decimal strings. */
-export type BankRef = napi.JsBankRef;
-export type ReplacementReplay = napi.JsReplacementReplay;
-export type SlotWinner = napi.JsSlotWinner;
-export type DiscardReason = "IncompleteDelivery";
+/** A bank: its slot and its `bankId`, both uint64 as decimal strings. */
+export interface BankRef {
+  slot: string;
+  bankId: string;
+}
 
-/** DiscardBanks must be applied before subsequent replacement updates. */
+/** An item of a `ClientReconnectDuplexStream`. */
 export type ReconnectEvent =
-  | { type: "Update"; generation: string; update: SubscribeUpdate }
+  | { type: "Update"; update: SubscribeUpdate }
   | {
-      type: "DiscardBanks";
-      banks: BankRef[];
-      reason: DiscardReason;
-      replacement: ReplacementReplay;
-      winners: SlotWinner[];
+      /**
+       * The connection dropped and the stream is reconnecting; every later event comes from the
+       * new connection. Discard `partialBanks`: you received part of their content but not
+       * their Block, block footer or block meta. A replay from `replayFromSlot` resends the
+       * ones at or above it whole; the stream drops whatever a later connection sends of the
+       * others. `replayFromSlot` is `null` when the stream resumes at the live tip.
+       */
+      type: "Disconnected";
+      partialBanks: BankRef[];
+      replayFromSlot: string | null;
     };
 
 function isRecordObject(value: unknown): value is Record<string, unknown> {
@@ -191,9 +219,8 @@ function normalizeSubscribeDeshredRequest(
     throw new Error("Invalid subscribeDeshred request: expected object");
   }
 
-  const deshredTransactions = (
-    request as { deshredTransactions?: unknown }
-  ).deshredTransactions;
+  const deshredTransactions = (request as { deshredTransactions?: unknown })
+    .deshredTransactions;
   if (!isRecordObject(deshredTransactions)) {
     throw new Error("Invalid deshredTransactions: expected object");
   }
@@ -310,7 +337,10 @@ export class CompressedAccountFilterSet {
     request.accounts[name] = this.toAccountFilter();
   }
 
-  insertIntoBlockSubscribeRequest(request: SubscribeRequest, name: string): void {
+  insertIntoBlockSubscribeRequest(
+    request: SubscribeRequest,
+    name: string,
+  ): void {
     request.blocks ??= {};
     request.blocks[name] = this.toBlockFilter();
   }
@@ -364,7 +394,9 @@ export default class Client {
       this._insecureEndpoint,
       this._insecureXToken,
       this._channelOptions,
-      this._reconnectOptions,
+      // The native const enum holds the same strings as `ReconnectOptions["policy"]`. Unknown
+      // options (such as the removed `enabled`) pass through for the native side to reject.
+      this._reconnectOptions as napi.JsReconnectConfig | undefined,
     );
   }
 
@@ -373,7 +405,9 @@ export default class Client {
   ): Promise<GetLatestBlockhashResponse> {
     const grpcClient = this._connectedGrpcClient();
 
-    const request = GetLatestBlockhashRequestMessage.fromPartial({ commitment });
+    const request = GetLatestBlockhashRequestMessage.fromPartial({
+      commitment,
+    });
     const response = await grpcClient.getLatestBlockhash(
       Buffer.from(GetLatestBlockhashRequestMessage.encode(request).finish()),
     );
@@ -390,7 +424,9 @@ export default class Client {
     return PongResponseMessage.decode(response);
   }
 
-  async getBlockHeight(commitment?: CommitmentLevel): Promise<GetBlockHeightResponse> {
+  async getBlockHeight(
+    commitment?: CommitmentLevel,
+  ): Promise<GetBlockHeightResponse> {
     const grpcClient = this._connectedGrpcClient();
 
     const request = GetBlockHeightRequestMessage.fromPartial({ commitment });
@@ -483,7 +519,11 @@ export default class Client {
     });
   }
 
-  /** Opens a processed subscription with explicit bank recovery events. */
+  /**
+   * Opens a subscription that reconnects after a recoverable failure, per the reconnect options
+   * passed to the constructor. Put `fromSlot` in this first request if you want one: the server
+   * ignores it on later writes. Filter names must not be `RECONNECT_FILTER_KEY`.
+   */
   async subscribeWithReconnect(
     request?: SubscribeRequest,
   ): Promise<ClientReconnectDuplexStream> {
@@ -564,9 +604,11 @@ abstract class SubscriptionDuplexStream<NativeUpdate, Update> extends Duplex {
 
     this._readInFlight = true;
 
-    (this._napiDuplexStream as {
-      read: () => Promise<NativeUpdate | undefined | null>;
-    })
+    (
+      this._napiDuplexStream as {
+        read: () => Promise<NativeUpdate | undefined | null>;
+      }
+    )
       .read()
       .then((update) => {
         this._readInFlight = false;
@@ -686,6 +728,7 @@ export class ClientDuplexStream extends SubscriptionDuplexStream<
   }
 }
 
+/** Stream returned by `subscribeWithReconnect()`: it yields `ReconnectEvent`s. */
 export class ClientReconnectDuplexStream extends SubscriptionDuplexStream<
   napi.JsReconnectEvent,
   ReconnectEvent
@@ -695,13 +738,21 @@ export class ClientReconnectDuplexStream extends SubscriptionDuplexStream<
       case "Update":
         return {
           type: "Update",
-          generation: event.generation,
           update: SubscribeUpdateMessage.decode(event.update),
         };
-      case "DiscardBanks":
-        return event;
+      case "Disconnected":
+        return {
+          type: "Disconnected",
+          partialBanks: event.partialBanks.map(({ slot, bankId }) => ({
+            slot,
+            bankId,
+          })),
+          replayFromSlot: event.replayFromSlot ?? null,
+        };
       default:
-        throw new Error("Unknown native reconnect event; check SDK and native binding versions");
+        throw new Error(
+          "Unknown native reconnect event; check SDK and native binding versions",
+        );
     }
   }
 }
@@ -733,9 +784,11 @@ export class ClientDeshredDuplexStream extends Duplex {
 
     this._readInFlight = true;
 
-    (this._napiDuplexStream as {
-      read: () => Promise<Uint8Array | undefined | null>;
-    })
+    (
+      this._napiDuplexStream as {
+        read: () => Promise<Uint8Array | undefined | null>;
+      }
+    )
       .read()
       .then((update) => {
         this._readInFlight = false;
@@ -811,7 +864,9 @@ export class ClientDeshredDuplexStream extends Duplex {
     callback: (error?: Error | null) => void,
   ) {
     if (this._isClosed || this._isDestroying) {
-      callback(new Error("Cannot write to a closed deshred subscription stream"));
+      callback(
+        new Error("Cannot write to a closed deshred subscription stream"),
+      );
       return;
     }
 

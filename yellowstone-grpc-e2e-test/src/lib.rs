@@ -6,7 +6,6 @@
 
 pub mod config;
 pub mod grpc;
-pub mod reconnect_blocks;
 pub mod scenarios;
 pub mod serde;
 
