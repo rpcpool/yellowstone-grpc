@@ -407,18 +407,34 @@ impl<'storage> Iterator for ReplayIter<'storage> {
     }
 }
 
-/// Bank-id-oriented block reconstruction. Replaces the earlier slot-keyed pipeline (backed
-/// by the `yellowstone-block-machine` crate's `BlocksStateMachine`), which conflated
-/// "a `FirstShredReceived` placeholder is sitting here" with "a genuine prior bank already
-/// existed here" -- both looked identical from a slot-keyed perspective, which made every
-/// slot's very first (and typically only) `CreatedBank` look like a reset, discarding the
-/// sysvar writes that land right before it, on every slot, permanently.
+/// Bank-id-oriented block reconstruction: it buffers each bank's content, seals the bank once
+/// it is complete, hands it out at each commitment level it reaches, and keeps the sealed banks
+/// of recent slots for replay.
+///
+/// A slot-keyed buffer cannot tell a [`FirstShredReceived`](SlotStatus::FirstShredReceived)
+/// placeholder from a prior bank of the same slot. Every slot's first
+/// [`CreatedBank`](SlotStatus::CreatedBank) then looks like a reset, and the reset drops the
+/// sysvar writes that land just before it.
 ///
 /// Buffering by `bank_id` sidesteps that class of bug entirely: each bank instance -- real
 /// or a repair replay -- gets its own independent buffer, so there is nothing for one to
 /// clobber in another. A slot only ever has more than one live buffer while forks/repairs
 /// are still being resolved; the moment any commitment status update names a `bank_id` as
 /// the canonical bank for its slot, every sibling buffer for that slot is discarded.
+///
+/// # Examples
+///
+/// ```ignore
+/// let mut storage = BlockMachineStorage::new(replay_stored_slots);
+/// storage.add(message);
+/// while let Some((slot_update, frozen_block)) = storage.pop_ready_block() {
+///     send(slot_update, frozen_block);
+/// }
+/// for evicted_slot_banks in storage.drain_evicted_banks() {
+///     evicted_bank_dropper.hand_over(evicted_slot_banks);
+/// }
+/// let replayed_slots = storage.replay_from_slot(from_slot, min_commitment);
+/// ```
 pub struct BlockMachineStorage {
     // Bank instances still accumulating content, keyed by bank_id.
     banks: FoldHashMap<BankId, BankBuffer>,
@@ -464,6 +480,10 @@ pub struct BlockMachineStorage {
     ready_queue: VecDeque<(SlotCommitmentStatusUpdate, Arc<FrozenBank>)>,
     replayed_capacity: usize,
     num_buffered_finalized_slot: usize,
+    /// The sealed banks of the slots evicted from
+    /// [`replayed_slot`](BlockMachineStorage::replayed_slot), one list per slot, until
+    /// [`BlockMachineStorage::drain_evicted_banks`] takes them.
+    evicted_banks: Vec<Vec<Arc<FrozenBank>>>,
     min_slot: Option<Slot>,
     // Highest slot number observed across any message so far, and the value it had at the
     // last stale-slot sweep -- together these throttle `sweep_stale_slots` to run only every
@@ -473,6 +493,17 @@ pub struct BlockMachineStorage {
 }
 
 impl BlockMachineStorage {
+    /// Creates an empty storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `replayed_capacity` - How many slots of sealed banks to keep for replay. The storage
+    ///   evicts older slots only while more than [`MINIMUM_FINALIZED_SLOT_TO_BUFFER`] kept slots
+    ///   are finalized.
+    ///
+    /// # Returns
+    ///
+    /// A new `BlockMachineStorage` with no bank.
     pub fn new(replayed_capacity: usize) -> Self {
         Self {
             banks: FoldHashMap::with_capacity(replayed_capacity),
@@ -486,6 +517,7 @@ impl BlockMachineStorage {
             ready_queue: VecDeque::with_capacity(replayed_capacity),
             replayed_capacity,
             num_buffered_finalized_slot: 0,
+            evicted_banks: Vec::new(),
             min_slot: None,
             max_slot_seen: 0,
             last_stale_gc_at: 0,
@@ -1058,8 +1090,17 @@ impl BlockMachineStorage {
         self.refresh_min_slot();
     }
 
+    /// Forgets `slot`: moves its sealed banks to [`Self::evicted_banks`], and drops its commitment
+    /// and bank tracking.
+    ///
+    /// It does not free the banks, since freeing a whole bank takes milliseconds. The caller
+    /// takes them with [`Self::drain_evicted_banks`] and drops them off its own thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The slot to evict, the oldest one kept for replay.
     fn evict_slot(&mut self, slot: Slot) {
-        self.replayed_slot.remove(&slot);
+        self.evicted_banks.extend(self.replayed_slot.remove(&slot));
         if let Some(progression) = self.slot_commitment_progression_map.remove(&slot) {
             if progression.max_commitment == CommitmentLevel::Finalized {
                 self.num_buffered_finalized_slot =
@@ -1077,6 +1118,16 @@ impl BlockMachineStorage {
 
     pub fn pop_ready_block(&mut self) -> Option<(SlotCommitmentStatusUpdate, Arc<FrozenBank>)> {
         self.ready_queue.pop_front()
+    }
+
+    /// Takes the sealed banks of the slots evicted since the last call, so the caller can drop
+    /// them off its own thread. The storage keeps the capacity of its list of evicted slots.
+    ///
+    /// # Returns
+    ///
+    /// The banks of each evicted slot, in eviction order. Empty if no slot was evicted.
+    pub fn drain_evicted_banks(&mut self) -> std::vec::Drain<'_, Vec<Arc<FrozenBank>>> {
+        self.evicted_banks.drain(..)
     }
 
     pub fn replay_from_slot(&self, slot: Slot, min_commitment: CommitmentLevel) -> ReplayIter<'_> {

@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "16.2.0"
+version = "16.2.1"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"
@@ -32,6 +32,7 @@ clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 dashmap = { workspace = true }
 futures = { workspace = true }
+hashbrown = { workspace = true }
 hostname = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
@@ -86,7 +87,7 @@ solana-transaction-error = { workspace = true, features = ["wincode"] }
 solana-transaction-status = { workspace = true }
 
 # Solana Misc
-smallvec = { workspace = true }
+smallvec = { workspace = true, features = ["union"] }
 solana-storage-proto = { workspace = true, optional = true }
 spl-token-2022-interface = { workspace = true }
 
@@ -126,6 +127,7 @@ solana-signature = { workspace = true }
 solana-signer = { workspace = true }
 solana-storage-proto = { workspace = true, features = ["agave-unstable-api"] }
 solana-transaction = { workspace = true, features = ["wincode", "blake3"] }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

@@ -469,6 +469,21 @@ pub fn incr_geyser_untrack_slot_event_dropped() {
     GEYSER_UNTRACK_SLOT_EVENT_DROPPED.inc();
 }
 
+/// The counter of updates sent under one subscriber id, to keep and bump without a label lookup
+/// per update.
+///
+/// # Arguments
+///
+/// * `subscriber_id` - The subscriber id whose updates it counts.
+///
+/// # Returns
+///
+/// The `yellowstone_grpc_geyser_message_sent_count` counter for `subscriber_id`, the one
+/// [`incr_grpc_message_sent_counter`] bumps.
+pub fn grpc_message_sent_counter(subscriber_id: &str) -> IntCounter {
+    GRPC_MESSAGE_SENT.with_label_values(&[subscriber_id])
+}
+
 pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
     GRPC_MESSAGE_SENT
         .with_label_values(&[remote_id.as_ref()])
@@ -568,6 +583,24 @@ pub fn observe_subscriber_queue_size<S: AsRef<str>>(
     GRPC_SUBSCRIBER_QUEUE_SIZE
         .with_label_values(&[subscriber_id.as_ref(), kind])
         .observe(size as f64);
+}
+
+/// The disconnects counted so far for one subscriber id and disconnect reason.
+///
+/// # Arguments
+///
+/// * `subscriber_id` - The subscriber id the disconnects are counted under.
+/// * `disconnect_reason` - The disconnect reason, such as `client_channel_full`.
+///
+/// # Returns
+///
+/// The value of the `yellowstone_grpc_geyser_client_disconnects_total` counter for
+/// `subscriber_id` and `disconnect_reason`.
+#[cfg(test)]
+pub fn client_disconnect_count(subscriber_id: &str, disconnect_reason: &str) -> u64 {
+    GRPC_CLIENT_DISCONNECTS
+        .with_label_values(&[subscriber_id, disconnect_reason])
+        .get()
 }
 
 pub fn incr_client_disconnect<S: AsRef<str>>(subscriber_id: S, reason: &str) {
