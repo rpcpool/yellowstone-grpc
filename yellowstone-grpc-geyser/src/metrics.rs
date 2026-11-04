@@ -150,6 +150,14 @@ lazy_static::lazy_static! {
         &["subscriber_id"]
     ).unwrap();
 
+    static ref GRPC_SUBSCRIBE_REQUEST_ERRORS: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "yellowstone_grpc_geyser_subscribe_request_errors_total",
+            "Subscribe streams ended by an error reading the client's request stream, by gRPC code"
+        ),
+        &["subscriber_id", "code"]
+    ).unwrap();
+
     static ref GRPC_SERVICE_OUTBOUND_BYTES: IntGaugeVec = IntGaugeVec::new(
         Opts::new("yellowstone_grpc_geyser_service_outbound_bytes", "Current emitted bytes by tonic service response bodies per active subscriber stream"),
         &["subscriber_id", "uri_path"]
@@ -264,6 +272,7 @@ impl PrometheusService {
             register!(TOTAL_TRAFFIC_SENT);
             register!(GRPC_METHOD_CALL_COUNT);
             register!(GRPC_SUBSCRIPTION_LIMIT_EXCEEDED);
+            register!(GRPC_SUBSCRIBE_REQUEST_ERRORS);
             register!(GRPC_SERVICE_OUTBOUND_BYTES);
             register!(GEYSER_EVENT_DROPPED);
             register!(GEYSER_BLOCK_MISMATCH_TRANSACTION);
@@ -528,6 +537,12 @@ pub fn subscription_limit_exceeded_inc<S: AsRef<str>>(subscriber_id: S) {
         .inc();
 }
 
+pub fn incr_subscribe_request_error<S: AsRef<str>>(subscriber_id: S, code: tonic::Code) {
+    GRPC_SUBSCRIBE_REQUEST_ERRORS
+        .with_label_values(&[subscriber_id.as_ref(), &format!("{code:?}")])
+        .inc();
+}
+
 pub fn update_subscriptions(endpoint: &str, old: Option<&Filter>, new: Option<&Filter>) {
     for (multiplier, filter) in [(-1, old), (1, new)] {
         if let Some(filter) = filter {
@@ -648,6 +663,7 @@ pub fn reset_metrics() {
     TOTAL_TRAFFIC_SENT.reset();
     GRPC_SERVICE_OUTBOUND_BYTES.reset();
     GRPC_SUBSCRIPTION_LIMIT_EXCEEDED.reset();
+    GRPC_SUBSCRIBE_REQUEST_ERRORS.reset();
     GRPC_METHOD_CALL_COUNT.reset();
 
     // Pre-encoding
