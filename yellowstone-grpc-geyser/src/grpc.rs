@@ -38,7 +38,7 @@ use {
     anyhow::Context as _,
     bytesize::ByteSize,
     futures::Stream,
-    log::{error, info},
+    log::{error, info, warn},
     prost_types::Timestamp,
     rustls::{
         pki_types::{pem::PemObject, PrivateKeyDer},
@@ -2706,7 +2706,10 @@ impl Geyser for GrpcService {
                             incoming_cancellation_token.cancelled().await;
                             break;
                         }
-                        Err(_error) => {
+                        Err(status) => {
+                            warn!("client #{subscriber_id:?}/{id}: failed to read request: {status}");
+                            metrics::incr_subscribe_request_error(&subscriber_id, status.code());
+                            let _ = incoming_stream_tx.try_send(Err(status));
                             let _ = incoming_client_tx.send(None);
                             break;
                         }
@@ -2820,6 +2823,9 @@ impl Geyser for GrpcService {
         let incoming_client_tx = client_tx;
         let incoming_cancellation_token = client_cancellation_token.child_token();
 
+        let deshred_subscriber_id = subscriber_id
+            .clone()
+            .unwrap_or_else(|| "unknown".to_owned());
         self.task_tracker.spawn(async move {
             loop {
                 tokio::select! {
@@ -2861,7 +2867,10 @@ impl Geyser for GrpcService {
                             incoming_cancellation_token.cancelled().await;
                             break;
                         }
-                        Err(_error) => {
+                        Err(status) => {
+                            warn!("deshred client #{deshred_subscriber_id:?}/{id}: failed to read request: {status}");
+                            metrics::incr_subscribe_request_error(&deshred_subscriber_id, status.code());
+                            let _ = incoming_stream_tx.try_send(Err(status));
                             let _ = incoming_client_tx.send(None);
                             break;
                         }

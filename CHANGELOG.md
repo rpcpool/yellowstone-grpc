@@ -25,6 +25,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- plugin: an error reading a Subscribe or SubscribeDeshred request stream is logged, counted in `yellowstone_grpc_geyser_subscribe_request_errors_total{subscriber_id, code}` and sent to the client as its gRPC status. The plugin used to drop the error, end the stream with status OK and record only `client_disconnect`, so a client whose request was rejected (for example `OUT_OF_RANGE` for a message over `max_decoding_message_size`) saw a clean close and reconnected in a loop.
 - plugin: a `from_slot` replay joins the live stream with no duplicate and no gap, at every commitment. A bank that sealed between the client's subscription and the replay was sent twice. At processed, a bank in progress at connect now arrives whole, `CreatedBank` included, and a bank sealed but still waiting for its Processed status is no longer sent twice. STR-763
 
 ### Misc
