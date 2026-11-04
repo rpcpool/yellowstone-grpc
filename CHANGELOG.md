@@ -19,6 +19,8 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
+- plugin: a `Subscribe` or `SubscribeDeshred` request over `max_decoding_message_size` ends the stream with `RESOURCE_EXHAUSTED` and a message with the limit, and the request size when it is not compressed. The stream used to close with no status. STR-786
+- plugin: the rejection logs `removed (request_too_large)` and a line with the subscription id and the status message. It counts in `yellowstone_grpc_geyser_client_disconnects_total` with `reason="request_too_large"`. It used to log and count as `client_disconnect`. STR-787
 - plugin: a `from_slot` replay joins the live stream with no duplicate and no gap, at every commitment. A bank that sealed between the client's subscription and the replay was sent twice. At processed, a bank in progress at connect now arrives whole, `CreatedBank` included, and a bank sealed but still waiting for its Processed status is no longer sent twice. STR-763
 
 ### Misc
@@ -94,6 +96,11 @@ The minor version will be incremented upon a breaking change and the patch versi
 ## 2026-10-07
 
 - yellowstone-grpc-geyser 16.1.1
+- @triton-one/yellowstone-grpc@9.0.0
+
+### Breaking
+
+- ts-client: block footer certificates are typed messages (`BlockFooterFinalCert`, `BlockFooterSkipRewardCert`, `BlockFooterNotarRewardCert`) in fields 9, 10 and 11, as in yellowstone-grpc-proto 14.0.1. The wincode bytes fields 6, 7 and 8 are gone. The block footer types are exported, and a `block_footer` filter cannot use the reserved reconnect filter name. To upgrade from 8.x, read the certificates from the typed fields.
 
 ### Features
 - plugin: tracking of data load for clients, per message weights, configurable scales and weights per type of message
@@ -103,8 +110,11 @@ The minor version will be incremented upon a breaking change and the patch versi
 - yellowstone-grpc-proto 14.0.1
 - yellowstone-grpc-geyser 16.1.0
 - yellowstone-grpc-client 15.0.0
+- @triton-one/yellowstone-grpc@8.0.0
 
 ### Breaking
+
+- ts-client: reconnecting moves from `subscribe()` to the new `subscribeWithReconnect()`, which yields `Update` and `DiscardBanks` events. It requires processed commitment, no startup snapshot and no `fromSlot`. The constructor's reconnect options take only `backoff`, and `enabled`, `policy` and `slotRetention` are rejected. Requires the napi 0.3.0 binaries. To upgrade from 7.x, remove those three options and call `subscribeWithReconnect()` where you relied on reconnects.
 
 - proto/plugin: block footer certificates are typed proto messages in fields 9, 10 and 11 instead of wincode bytes.
 
