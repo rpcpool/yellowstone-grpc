@@ -10,6 +10,15 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-geyser 17.0.0
+
+### Fixes
+
+- plugin: a `Subscribe` or `SubscribeDeshred` request over `max_decoding_message_size` ends the stream with `RESOURCE_EXHAUSTED` and a message with the limit, and the request size when it is not compressed. The stream used to close with no status. STR-786
+- plugin: the rejection logs `removed (request_too_large)` and a line with the subscription id and the status message. It counts in `yellowstone_grpc_geyser_client_disconnects_total` with `reason="request_too_large"`. It used to log and count as `client_disconnect`. STR-787
+
+## 2026-10-30
+
 - yellowstone-grpc-geyser 16.2.0
 - yellowstone-grpc-client 17.0.0
 - yellowstone-grpc-napi 0.4.0
@@ -25,8 +34,6 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ### Fixes
 
-- plugin: a `Subscribe` or `SubscribeDeshred` request over `max_decoding_message_size` ends the stream with `RESOURCE_EXHAUSTED` and a message with the limit, and the request size when it is not compressed. The stream used to close with no status. STR-786
-- plugin: the rejection logs `removed (request_too_large)` and a line with the subscription id and the status message. It counts in `yellowstone_grpc_geyser_client_disconnects_total` with `reason="request_too_large"`. It used to log and count as `client_disconnect`. STR-787
 - plugin: a `from_slot` replay joins the live stream with no duplicate and no gap, at every commitment. A bank that sealed between the client's subscription and the replay was sent twice. At processed, a bank in progress at connect now arrives whole, `CreatedBank` included, and a bank sealed but still waiting for its Processed status is no longer sent twice. STR-763
 
 ### Misc
