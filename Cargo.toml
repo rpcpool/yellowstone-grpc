@@ -106,14 +106,14 @@ notify = "8.2.0"
 agave-geyser-plugin-interface = "5.0.0"
 
 # Agave Monorepo
-agave-feature-set = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
-agave-votor-messages = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
-solana-account-decoder = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
-solana-entry = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
+agave-feature-set = "4.4.0"
+agave-votor-messages = "4.4.0"
+solana-account-decoder = "4.4.0"
+solana-entry = "4.4.0"
 solana-logger = "3.0.0"
-solana-storage-proto = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
-solana-transaction-context = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
-solana-transaction-status = { git = "https://github.com/anza-xyz/agave", tag = "v4.4.0" }
+solana-storage-proto = "4.4.0"
+solana-transaction-context = "4.4.0"
+solana-transaction-status = "4.4.0"
 
 # Solana SDK
 solana-message = "5.1.0"
