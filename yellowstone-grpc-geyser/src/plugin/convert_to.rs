@@ -1,10 +1,17 @@
 use {
     crate::plugin::message::{ContactInfoMessage, MessageContactInfo},
-    agave_votor_messages::reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
+    agave_geyser_plugin_interface::{
+        block_footer::{
+            BlockFinalizationCert, NotarRewardCertificate, SkipRewardCertificate, VotesAggregate,
+        },
+        transaction_status_meta::{
+            InnerInstruction, InnerInstructions, Reward, TransactionReturnData,
+            TransactionStatusMeta, TransactionTokenBalance,
+        },
+    },
     prost_types::Timestamp,
-    solana_bls_signatures::{error::BlsError, SignatureCompressed as BLSSignatureCompressed},
+    solana_bls_signatures::SignatureCompressed as BLSSignatureCompressed,
     solana_clock::UnixTimestamp,
-    solana_entry::block_component::{BlockFinalizationCert, VotesAggregate},
     solana_hash::Hash,
     solana_message::{
         compiled_instruction::CompiledInstruction, v0::MessageAddressTableLookup, MessageHeader,
@@ -13,12 +20,8 @@ use {
     solana_pubkey::Pubkey,
     solana_signature::Signature,
     solana_transaction::versioned::VersionedTransaction,
-    solana_transaction_context::transaction::TransactionReturnData,
     solana_transaction_error::TransactionError,
-    solana_transaction_status::{
-        InnerInstruction, InnerInstructions, Reward, RewardType, TransactionStatusMeta,
-        TransactionTokenBalance,
-    },
+    solana_transaction_status::RewardType,
     std::time::SystemTime,
     yellowstone_grpc_proto::prelude as proto,
 };
@@ -135,7 +138,11 @@ pub fn create_transaction_meta(meta: &TransactionStatusMeta) -> proto::Transacti
         .map(create_inner_instructions_vec)
         .unwrap_or_default();
     let log_messages_none = log_messages.is_none();
-    let log_messages = log_messages.clone().unwrap_or_default();
+    let log_messages = log_messages
+        .unwrap_or_default()
+        .iter()
+        .map(|msg| msg.to_string())
+        .collect::<Vec<_>>();
     let pre_token_balances = pre_token_balances
         .as_deref()
         .map(create_token_balances)
@@ -151,8 +158,8 @@ pub fn create_transaction_meta(meta: &TransactionStatusMeta) -> proto::Transacti
     proto::TransactionStatusMeta {
         err,
         fee: *fee,
-        pre_balances: pre_balances.clone(),
-        post_balances: post_balances.clone(),
+        pre_balances: pre_balances.to_vec(),
+        post_balances: post_balances.to_vec(),
         inner_instructions,
         inner_instructions_none,
         log_messages,
@@ -170,7 +177,7 @@ pub fn create_transaction_meta(meta: &TransactionStatusMeta) -> proto::Transacti
 }
 
 pub fn create_transaction_error(
-    status: &Result<(), TransactionError>,
+    status: &Result<(), &TransactionError>,
 ) -> Option<proto::TransactionError> {
     match status {
         Ok(()) => None,
@@ -187,7 +194,7 @@ pub fn create_inner_instructions_vec(ixs: &[InnerInstructions]) -> Vec<proto::In
 pub fn create_inner_instructions(instructions: &InnerInstructions) -> proto::InnerInstructions {
     proto::InnerInstructions {
         index: instructions.index as u32,
-        instructions: create_inner_instruction_vec(&instructions.instructions),
+        instructions: create_inner_instruction_vec(instructions.instructions),
     }
 }
 
@@ -211,15 +218,15 @@ pub fn create_token_balances(balances: &[TransactionTokenBalance]) -> Vec<proto:
 pub fn create_token_balance(balance: &TransactionTokenBalance) -> proto::TokenBalance {
     proto::TokenBalance {
         account_index: balance.account_index as u32,
-        mint: balance.mint.clone(),
+        mint: balance.mint.to_string(),
         ui_token_amount: Some(proto::UiTokenAmount {
             ui_amount: balance.ui_token_amount.ui_amount.unwrap_or_default(),
             decimals: balance.ui_token_amount.decimals as u32,
-            amount: balance.ui_token_amount.amount.clone(),
-            ui_amount_string: balance.ui_token_amount.ui_amount_string.clone(),
+            amount: balance.ui_token_amount.amount.to_string(),
+            ui_amount_string: balance.ui_token_amount.ui_amount_string.to_string(),
         }),
-        owner: balance.owner.clone(),
-        program_id: balance.program_id.clone(),
+        owner: balance.owner.to_string(),
+        program_id: balance.program_id.to_string(),
     }
 }
 
@@ -236,7 +243,7 @@ pub fn create_rewards(rewards: &[Reward]) -> Vec<proto::Reward> {
 
 pub fn create_reward(reward: &Reward) -> proto::Reward {
     proto::Reward {
-        pubkey: reward.pubkey.clone(),
+        pubkey: reward.pubkey.to_string(),
         lamports: reward.lamports,
         post_balance: reward.post_balance,
         reward_type: create_reward_type(reward.reward_type) as i32,
@@ -267,7 +274,7 @@ pub const fn create_num_partitions(num_partitions: u64) -> proto::NumPartitions 
 pub fn create_return_data(return_data: &TransactionReturnData) -> proto::ReturnData {
     proto::ReturnData {
         program_id: return_data.program_id.to_bytes().into(),
-        data: return_data.data.clone(),
+        data: return_data.data.to_vec(),
     }
 }
 
@@ -280,60 +287,54 @@ pub const fn create_timestamp(timestamp: UnixTimestamp) -> proto::UnixTimestamp 
 }
 
 // A slow finalization carries a notarize aggregate for the block; a fast one votes on the block directly.
-pub fn create_block_final_cert(
-    cert: &BlockFinalizationCert,
-) -> Result<proto::BlockFooterFinalCert, BlsError> {
+pub fn create_block_final_cert(cert: &BlockFinalizationCert<'_>) -> proto::BlockFooterFinalCert {
     let block_id = Some(&cert.block_id);
     let (final_aggregate, notar_aggregate) = match &cert.notar_aggregate {
         Some(notar_aggregate) => (
-            create_votes_aggregate(None, &cert.final_aggregate)?,
-            Some(create_votes_aggregate(block_id, notar_aggregate)?),
+            create_votes_aggregate(None, &cert.final_aggregate),
+            Some(create_votes_aggregate(block_id, notar_aggregate)),
         ),
         None => (
-            create_votes_aggregate(block_id, &cert.final_aggregate)?,
+            create_votes_aggregate(block_id, &cert.final_aggregate),
             None,
         ),
     };
-    Ok(proto::BlockFooterFinalCert {
+    proto::BlockFooterFinalCert {
         slot: cert.slot,
         final_aggregate: Some(final_aggregate),
         notar_aggregate,
-    })
+    }
 }
 
-// VotesAggregate exposes its signature only uncompressed, so compress it back to 96 bytes.
 fn create_votes_aggregate(
     block_id: Option<&Hash>,
-    aggregate: &VotesAggregate,
-) -> Result<proto::BlockFooterVotesAggregate, BlsError> {
-    let signature = BLSSignatureCompressed::try_from(&aggregate.uncompress_signature()?)?;
-    Ok(create_aggregate(
-        block_id,
-        &signature,
-        aggregate.clone().into_bitmap(),
-    ))
+    aggregate: &VotesAggregate<'_>,
+) -> proto::BlockFooterVotesAggregate {
+    create_aggregate(block_id, &aggregate.signature, aggregate.bitmap.to_vec())
 }
 
-pub fn create_skip_reward_cert(cert: &SkipRewardCertificate) -> proto::BlockFooterSkipRewardCert {
+pub fn create_skip_reward_cert(
+    cert: &SkipRewardCertificate<'_>,
+) -> proto::BlockFooterSkipRewardCert {
     proto::BlockFooterSkipRewardCert {
         slot: cert.slot,
         aggregate: Some(create_aggregate(
             None,
             &cert.signature,
-            cert.to_bitmap().to_vec(),
+            cert.bitmap.to_vec(),
         )),
     }
 }
 
 pub fn create_notar_reward_cert(
-    cert: &NotarRewardCertificate,
+    cert: &NotarRewardCertificate<'_>,
 ) -> proto::BlockFooterNotarRewardCert {
     proto::BlockFooterNotarRewardCert {
         slot: cert.slot,
         aggregate: Some(create_aggregate(
             Some(&cert.block_id),
             &cert.signature,
-            cert.bitmap().to_vec(),
+            cert.bitmap.to_vec(),
         )),
     }
 }

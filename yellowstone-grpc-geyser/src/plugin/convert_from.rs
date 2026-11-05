@@ -479,6 +479,7 @@ mod tests {
             create_skip_reward_cert, create_tx_meta,
         },
         crate::plugin::convert_to,
+        agave_geyser_plugin_interface::block_footer as plugin,
         agave_votor_messages::{
             certificate::CertSignature,
             reward_certificate::{NotarRewardCertificate, SkipRewardCertificate},
@@ -505,6 +506,23 @@ mod tests {
         })
     }
 
+    // convert_to takes the plugin interface's borrowed mirrors of the agave types.
+    fn plugin_aggregate(aggregate: &VotesAggregate) -> plugin::VotesAggregate<'_> {
+        plugin::VotesAggregate {
+            signature: *aggregate.signature(),
+            bitmap: aggregate.bitmap(),
+        }
+    }
+
+    fn plugin_final_cert(cert: &BlockFinalizationCert) -> plugin::BlockFinalizationCert<'_> {
+        plugin::BlockFinalizationCert {
+            slot: cert.slot,
+            block_id: cert.block_id,
+            final_aggregate: plugin_aggregate(&cert.final_aggregate),
+            notar_aggregate: cert.notar_aggregate.as_ref().map(plugin_aggregate),
+        }
+    }
+
     #[test]
     fn block_final_cert_round_trip() {
         let block_id = Hash::new_from_array([4; 32]);
@@ -516,7 +534,7 @@ mod tests {
                 final_aggregate: votes_aggregate(1, vec![0, 10, 0, 0b1101, 0b11]),
                 notar_aggregate,
             };
-            let proto = convert_to::create_block_final_cert(&cert).unwrap();
+            let proto = convert_to::create_block_final_cert(&plugin_final_cert(&cert));
             let final_aggregate = proto.final_aggregate.as_ref().unwrap();
             assert_eq!(final_aggregate.signature.len(), 96);
             assert_eq!(final_aggregate.signer_bitmap, vec![0, 10, 0, 0b1101, 0b11]);
@@ -537,7 +555,11 @@ mod tests {
     fn reward_certs_round_trip() {
         let signature = BLSSignatureCompressed::try_from(&bls_signature(3)).unwrap();
         let skip = SkipRewardCertificate::try_new(42, signature, vec![1, 6, 0, 9]).unwrap();
-        let proto = convert_to::create_skip_reward_cert(&skip);
+        let proto = convert_to::create_skip_reward_cert(&plugin::SkipRewardCertificate {
+            slot: skip.slot,
+            signature: skip.signature,
+            bitmap: skip.to_bitmap(),
+        });
         assert!(proto.aggregate.as_ref().unwrap().block_id.is_empty());
         assert_eq!(create_skip_reward_cert(&proto).unwrap(), skip);
 
@@ -548,20 +570,25 @@ mod tests {
             Vec::new(),
         )
         .unwrap();
-        let proto = convert_to::create_notar_reward_cert(&notar);
+        let proto = convert_to::create_notar_reward_cert(&plugin::NotarRewardCertificate {
+            slot: notar.slot,
+            block_id: notar.block_id,
+            signature: notar.signature,
+            bitmap: notar.bitmap(),
+        });
         assert_eq!(proto.aggregate.as_ref().unwrap().block_id, vec![5; 32]);
         assert_eq!(create_notar_reward_cert(&proto).unwrap(), notar);
     }
 
     #[test]
     fn block_final_cert_rejects_malformed_fields() {
-        let fast = convert_to::create_block_final_cert(&BlockFinalizationCert {
-            slot: 42,
-            block_id: Hash::new_from_array([4; 32]),
-            final_aggregate: votes_aggregate(1, Vec::new()),
-            notar_aggregate: None,
-        })
-        .unwrap();
+        let fast =
+            convert_to::create_block_final_cert(&plugin_final_cert(&BlockFinalizationCert {
+                slot: 42,
+                block_id: Hash::new_from_array([4; 32]),
+                final_aggregate: votes_aggregate(1, Vec::new()),
+                notar_aggregate: None,
+            }));
 
         let mut cert = fast.clone();
         cert.final_aggregate.as_mut().unwrap().block_id.pop();

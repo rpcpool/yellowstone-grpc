@@ -1,16 +1,19 @@
 use {
     super::convert_to,
-    agave_geyser_plugin_interface::geyser_plugin_interface::{
-        ReplicaAccountInfoV3, ReplicaBlockFooterInfo, ReplicaBlockInfoV4, ReplicaContactInfoV0_0_1,
-        ReplicaDeshredTransactionInfo, ReplicaDeshredTransactionInfoV2,
-        ReplicaDeshredTransactionInfoVersions, ReplicaDeshredUpdateParentInfo, ReplicaEntryInfoV2,
-        ReplicaEntryUpdateParentInfo, ReplicaTransactionInfoV3, SlotStatus as GeyserSlotStatus,
+    agave_geyser_plugin_interface::{
+        block_footer::VersionedBlockFooter,
+        geyser_plugin_interface::{
+            ReplicaAccountInfoV3, ReplicaBlockFooterInfo, ReplicaBlockInfoV5,
+            ReplicaContactInfoV0_0_1, ReplicaDeshredTransactionInfo,
+            ReplicaDeshredTransactionInfoV2, ReplicaDeshredTransactionInfoVersions,
+            ReplicaDeshredUpdateParentInfo, ReplicaEntryInfoV2, ReplicaEntryUpdateParentInfo,
+            ReplicaTransactionInfoV4, SlotStatus as GeyserSlotStatus,
+        },
     },
     bytes::Bytes,
     foldhash::{HashSet as FoldHashSet, HashSetExt},
     prost_types::Timestamp,
     solana_clock::{BankId, Slot},
-    solana_entry::block_component::VersionedBlockFooter,
     solana_hash::{Hash, HASH_BYTES},
     solana_pubkey::Pubkey,
     solana_signature::Signature,
@@ -267,7 +270,7 @@ pub struct MessageTransactionInfo {
 }
 
 impl MessageTransactionInfo {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>) -> Self {
+    pub fn from_geyser(info: &ReplicaTransactionInfoV4<'_>) -> Self {
         let account_keys = info
             .transaction
             .message
@@ -347,7 +350,7 @@ pub struct MessageTransaction {
 }
 
 impl MessageTransaction {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV3<'_>, slot: Slot, bank_id: BankId) -> Self {
+    pub fn from_geyser(info: &ReplicaTransactionInfoV4<'_>, slot: Slot, bank_id: BankId) -> Self {
         Self {
             transaction: MessageTransactionInfo::from_geyser(info),
             slot,
@@ -514,15 +517,11 @@ impl MessageBlockFooter {
                 bank_id,
                 bank_hash: footer.bank_hash.to_bytes().to_vec(),
                 block_producer_time_nanos: footer.block_producer_time_nanos,
-                block_user_agent: footer.block_user_agent.clone(),
-                // A final cert with an invalid signature is dropped, so the rest of the footer still goes out.
-                block_final_cert: footer.block_final_cert.as_ref().and_then(|cert| {
-                    convert_to::create_block_final_cert(cert)
-                        .inspect_err(|error| {
-                            log::warn!("slot {}: invalid block final cert: {error}", info.slot)
-                        })
-                        .ok()
-                }),
+                block_user_agent: footer.block_user_agent.to_vec(),
+                block_final_cert: footer
+                    .block_final_cert
+                    .as_ref()
+                    .map(convert_to::create_block_final_cert),
                 skip_reward_cert: footer
                     .skip_reward_cert
                     .as_ref()
@@ -558,7 +557,7 @@ impl DerefMut for MessageBlockMeta {
 }
 
 impl MessageBlockMeta {
-    pub fn from_geyser(info: &ReplicaBlockInfoV4<'_>, bank_id: BankId) -> Self {
+    pub fn from_geyser(info: &ReplicaBlockInfoV5<'_>, bank_id: BankId) -> Self {
         Self {
             block_meta: SubscribeUpdateBlockMeta {
                 parent_slot: info.parent_slot,
@@ -566,7 +565,7 @@ impl MessageBlockMeta {
                 parent_blockhash: info.parent_blockhash.to_string(),
                 blockhash: info.blockhash.to_string(),
                 rewards: Some(convert_to::create_rewards_obj(
-                    &info.rewards.rewards,
+                    info.rewards.rewards,
                     info.rewards.num_partitions,
                 )),
                 block_time: info.block_time.map(convert_to::create_timestamp),
@@ -765,5 +764,130 @@ impl Message {
             Self::BlockMeta(msg) => msg.slot,
             Self::Block(msg) => msg.meta.slot,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::MessageBlockFooter,
+        agave_geyser_plugin_interface::{
+            block_footer::{
+                BlockFinalizationCert, BlockFooterV1, NotarRewardCertificate,
+                SkipRewardCertificate, VersionedBlockFooter, VotesAggregate,
+            },
+            geyser_plugin_interface::ReplicaBlockFooterInfo,
+        },
+        solana_bls_signatures::SignatureCompressed,
+        solana_hash::Hash,
+    };
+
+    fn footer_message(footer: &VersionedBlockFooter<'_>) -> MessageBlockFooter {
+        let info = ReplicaBlockFooterInfo {
+            slot: 10,
+            block_footer: footer,
+        };
+        MessageBlockFooter::from_geyser(&info, 1)
+    }
+
+    #[test]
+    fn footer_certificates_become_typed_proto_messages() {
+        let final_bitmap = vec![0xa5; 300];
+        let notar_bitmap = vec![0x5a; 7];
+        let skip_bitmap = vec![0x11; 200];
+        let reward_bitmap = vec![0x22; 20_000];
+        let footer = VersionedBlockFooter::V1(BlockFooterV1 {
+            bank_hash: Hash::new_from_array([1; 32]),
+            block_producer_time_nanos: 42,
+            block_user_agent: b"agave",
+            block_final_cert: Some(BlockFinalizationCert {
+                slot: 10,
+                block_id: Hash::new_from_array([2; 32]),
+                final_aggregate: VotesAggregate {
+                    signature: SignatureCompressed([3; 96]),
+                    bitmap: &final_bitmap,
+                },
+                notar_aggregate: Some(VotesAggregate {
+                    signature: SignatureCompressed([4; 96]),
+                    bitmap: &notar_bitmap,
+                }),
+            }),
+            skip_reward_cert: Some(SkipRewardCertificate {
+                slot: 11,
+                signature: SignatureCompressed([5; 96]),
+                bitmap: &skip_bitmap,
+            }),
+            notar_reward_cert: Some(NotarRewardCertificate {
+                slot: 12,
+                block_id: Hash::new_from_array([6; 32]),
+                signature: SignatureCompressed([7; 96]),
+                bitmap: &reward_bitmap,
+            }),
+        });
+        let message = footer_message(&footer);
+
+        // A slow finalization puts the block_id on the notarize aggregate.
+        let cert = message.block_final_cert.as_ref().expect("final cert");
+        assert_eq!(cert.slot, 10);
+        let final_aggregate = cert.final_aggregate.as_ref().expect("final aggregate");
+        assert_eq!(final_aggregate.signature, vec![3; 96]);
+        assert_eq!(final_aggregate.signer_bitmap, final_bitmap);
+        assert!(final_aggregate.block_id.is_empty());
+        let notar_aggregate = cert.notar_aggregate.as_ref().expect("notar aggregate");
+        assert_eq!(notar_aggregate.signature, vec![4; 96]);
+        assert_eq!(notar_aggregate.signer_bitmap, notar_bitmap);
+        assert_eq!(notar_aggregate.block_id, vec![2; 32]);
+
+        let skip = message.skip_reward_cert.as_ref().expect("skip reward cert");
+        let skip_aggregate = skip.aggregate.as_ref().expect("skip aggregate");
+        assert_eq!(skip.slot, 11);
+        assert_eq!(skip_aggregate.signature, vec![5; 96]);
+        assert_eq!(skip_aggregate.signer_bitmap, skip_bitmap);
+        assert!(skip_aggregate.block_id.is_empty());
+
+        let notar = message
+            .notar_reward_cert
+            .as_ref()
+            .expect("notar reward cert");
+        let notar_aggregate = notar.aggregate.as_ref().expect("notar aggregate");
+        assert_eq!(notar.slot, 12);
+        assert_eq!(notar_aggregate.signature, vec![7; 96]);
+        assert_eq!(notar_aggregate.signer_bitmap, reward_bitmap);
+        assert_eq!(notar_aggregate.block_id, vec![6; 32]);
+    }
+
+    #[test]
+    fn absent_footer_certificates_stay_absent() {
+        let bitmap = [0xff; 3];
+        let footer = VersionedBlockFooter::V1(BlockFooterV1 {
+            bank_hash: Hash::default(),
+            block_producer_time_nanos: 0,
+            block_user_agent: &[],
+            block_final_cert: Some(BlockFinalizationCert {
+                slot: 10,
+                block_id: Hash::new_from_array([2; 32]),
+                final_aggregate: VotesAggregate {
+                    signature: SignatureCompressed([8; 96]),
+                    bitmap: &bitmap,
+                },
+                notar_aggregate: None,
+            }),
+            skip_reward_cert: None,
+            notar_reward_cert: None,
+        });
+        let message = footer_message(&footer);
+
+        // A fast finalization puts the block_id on the final aggregate.
+        let cert = message.block_final_cert.as_ref().expect("final cert");
+        assert!(cert.notar_aggregate.is_none());
+        assert_eq!(
+            cert.final_aggregate
+                .as_ref()
+                .expect("final aggregate")
+                .block_id,
+            vec![2; 32]
+        );
+        assert_eq!(message.skip_reward_cert, None);
+        assert_eq!(message.notar_reward_cert, None);
     }
 }

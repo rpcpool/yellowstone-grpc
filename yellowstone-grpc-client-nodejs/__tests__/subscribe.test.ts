@@ -122,6 +122,7 @@ describeLive("Client.subscribe", () => {
         ping: false,
         pong: false,
         blockMeta: false,
+        blockFooter: false,
         entry: false,
       };
 
@@ -172,6 +173,7 @@ describeLive("Client.subscribe", () => {
             seen.ping ||= update.ping !== undefined;
             seen.pong ||= update.pong !== undefined;
             seen.blockMeta ||= update.blockMeta !== undefined;
+            seen.blockFooter ||= update.blockFooter !== undefined;
             seen.entry ||= update.entry !== undefined;
 
             if (missingTypes().length === 0) {

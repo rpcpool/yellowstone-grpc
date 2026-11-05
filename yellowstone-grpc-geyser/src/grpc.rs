@@ -76,7 +76,7 @@ use {
             server::{Connected, Server},
             CertificateDer,
         },
-        Request, Response, Result as TonicResult, Status, Streaming,
+        Code, Request, Response, Result as TonicResult, Status, Streaming,
     },
     tonic_health::{pb::health_server::HealthServer, server::health_reporter},
     yellowstone_grpc_proto::prelude::{
@@ -101,6 +101,9 @@ use {
         },
     },
 };
+
+/// Longest wait for room to send a client its last status before the stream ends without it.
+const LAST_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 struct BlockhashStatus {
@@ -700,11 +703,105 @@ impl SubscriptionTracker {
 
 #[derive(Debug, thiserror::Error)]
 enum ClientSnapshotReplayError {
-    #[error("gRPC connection closed")]
-    ClientGrpcConnectionClosed,
+    #[error("gRPC connection closed: {}", .0.reason)]
+    ClientGrpcConnectionClosed(Disconnect),
     #[error("client session is cancelled by plugin")]
     Cancelled,
 }
+
+/// Why a client session ends, and the last status the client gets, if any.
+///
+/// # Examples
+///
+/// ```ignore
+/// let disconnect = Disconnect::from_read_error(&error, "SubscribeRequest");
+/// session.disconnect_reason = disconnect.end(stream_tx, &task_tracker);
+/// ```
+#[derive(Debug)]
+struct Disconnect {
+    reason: &'static str,
+    status: Option<Status>,
+}
+
+impl Disconnect {
+    /// Builds a disconnect that sends the client no status.
+    ///
+    /// # Arguments
+    ///
+    /// * `reason` - The disconnect reason the session logs and counts.
+    ///
+    /// # Returns
+    ///
+    /// A [`Disconnect`] with `reason` and no status.
+    const fn quiet(reason: &'static str) -> Self {
+        Self {
+            reason,
+            status: None,
+        }
+    }
+
+    /// Builds the disconnect for a failed read of a client's request stream.
+    ///
+    /// An oversized request is a decoder error: [`Code::OutOfRange`], or
+    /// [`Code::ResourceExhausted`] while decompressing, with no source error.
+    ///
+    /// # Arguments
+    ///
+    /// * `error` - The error tonic returned while reading the next request.
+    /// * `request_name` - The request type, for example `SubscribeRequest`, named in the status.
+    ///
+    /// # Returns
+    ///
+    /// `request_too_large` with a [`Code::ResourceExhausted`] status that carries tonic's
+    /// message for an oversized request, and a quiet `client_disconnect` otherwise.
+    fn from_read_error(error: &Status, request_name: &str) -> Self {
+        let decoder_size_error = matches!(error.code(), Code::OutOfRange | Code::ResourceExhausted)
+            && std::error::Error::source(error).is_none();
+        if !decoder_size_error {
+            return Self::quiet("client_disconnect");
+        }
+        Self {
+            reason: "request_too_large",
+            status: Some(Status::resource_exhausted(format!(
+                "{request_name} is too large: {}",
+                error.message()
+            ))),
+        }
+    }
+
+    /// Ends a client session: sends the status, if any, after the queued updates.
+    ///
+    /// The client loop is the only sender of updates, so the status is the stream's last item.
+    ///
+    /// # Arguments
+    ///
+    /// * `stream_tx` - The client's update stream.
+    /// * `task_tracker` - Tracks the task that waits up to [`LAST_STATUS_TIMEOUT`] for room.
+    ///
+    /// # Returns
+    ///
+    /// The disconnect reason for the session to log and count.
+    fn end<T, W>(
+        self,
+        stream_tx: LoadAwareSender<Result<T, Status>, W>,
+        task_tracker: &TaskTracker,
+    ) -> &'static str
+    where
+        T: Send + 'static,
+        W: Weigher<Item = Result<T, Status>> + Send + Sync + 'static,
+    {
+        if let Some(status) = self.status {
+            task_tracker.spawn(async move {
+                let _ =
+                    tokio::time::timeout(LAST_STATUS_TIMEOUT, stream_tx.send(Err(status))).await;
+            });
+        }
+        self.reason
+    }
+}
+
+/// What a request reader sends its client loop: a new filter, or why it stopped reading.
+type ClientRequest<F> = Result<F, Disconnect>;
 
 struct ClientSession {
     id: usize,
@@ -1838,7 +1935,7 @@ impl GrpcService {
     async fn client_loop(
         mut session: ClientSession,
         stream_tx: SubscribeSender,
-        mut client_rx: mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
+        mut client_rx: mpsc::UnboundedReceiver<ClientRequest<(Option<u64>, Filter)>>,
         snapshot_rx: Option<crossbeam_channel::Receiver<Box<Message>>>,
         broadcast: SubscriberChannels,
         replay_stored_slots_tx: Option<mpsc::Sender<ReplayStoredSlotsRequest>>,
@@ -1870,8 +1967,8 @@ impl GrpcService {
                 session.disconnect_reason = "server_shutdown";
                 return;
             }
-            Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed) => {
-                session.disconnect_reason = "client_disconnect";
+            Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed(disconnect)) => {
+                session.disconnect_reason = disconnect.end(stream_tx, &task_tracker);
                 return;
             }
         };
@@ -1897,9 +1994,9 @@ impl GrpcService {
                     session.disconnect_reason = "server_shutdown";
                     return;
                 }
-                Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed) => {
+                Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed(disconnect)) => {
                     info!("client #{}: grpc connection closed", session.subscriber_id);
-                    session.disconnect_reason = "client_closed";
+                    session.disconnect_reason = disconnect.end(stream_tx, &task_tracker);
                     return;
                 }
             }
@@ -1966,14 +2063,17 @@ impl GrpcService {
                             }
                             Err(mpsc::error::TryRecvError::Empty) => break,
                             Err(mpsc::error::TryRecvError::Disconnected) => {
-                                message = None;
+                                // Keep a disconnect already received: it carries the reason.
+                                if !matches!(message, Some(Err(_))) {
+                                    message = None;
+                                }
                                 break;
                             }
                         }
                     }
 
-                    match message {
-                        Some(Some((from_slot, filter_new))) => {
+                    match message.unwrap_or_else(|| Err(Disconnect::quiet("client_disconnect"))) {
+                        Ok((from_slot, filter_new)) => {
                             session.set_filter(filter_new);
                             info!("client #{}: filter updated", session.subscriber_id);
                             if from_slot.is_some() {
@@ -1986,12 +2086,8 @@ impl GrpcService {
                                 messages_rx = broadcast.subscribe(commitment);
                             }
                         }
-                        Some(None) => {
-                            session.disconnect_reason = "client_disconnect";
-                            break 'outer;
-                        },
-                        None => {
-                            session.disconnect_reason = "client_disconnect";
+                        Err(disconnect) => {
+                            session.disconnect_reason = disconnect.end(stream_tx, &task_tracker);
                             break 'outer;
                         }
                     }
@@ -2055,10 +2151,11 @@ impl GrpcService {
     /// # Errors
     ///
     /// [`ClientSnapshotReplayError::Cancelled`] if the server shuts down first, and
-    /// [`ClientSnapshotReplayError::ClientGrpcConnectionClosed`] if the client leaves first.
+    /// [`ClientSnapshotReplayError::ClientGrpcConnectionClosed`] with the [`Disconnect`] if the
+    /// client's request stream ends first.
     async fn client_loop_first_request(
         session: &mut ClientSession,
-        client_rx: &mut mpsc::UnboundedReceiver<Option<(Option<u64>, Filter)>>,
+        client_rx: &mut mpsc::UnboundedReceiver<ClientRequest<(Option<u64>, Filter)>>,
         cancellation_token: &CancellationToken,
     ) -> Result<Option<u64>, ClientSnapshotReplayError> {
         tokio::select! {
@@ -2067,12 +2164,15 @@ impl GrpcService {
                 Err(ClientSnapshotReplayError::Cancelled)
             }
             maybe = client_rx.recv() => match maybe {
-                Some(Some((from_slot, filter))) => {
+                Some(Ok((from_slot, filter))) => {
                     session.set_filter(filter);
                     info!("client #{}: filter updated", session.subscriber_id);
                     Ok(from_slot)
                 }
-                Some(None) | None => Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed),
+                Some(Err(disconnect)) => Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed(disconnect)),
+                None => Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed(Disconnect::quiet(
+                    "client_disconnect",
+                ))),
             }
         }
     }
@@ -2260,7 +2360,9 @@ impl GrpcService {
             for message in session.filter.get_updates(&message, None) {
                 if stream_tx.send(Ok(message)).await.is_err() {
                     error!("client #{}: stream closed", session.subscriber_id);
-                    return Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed);
+                    return Err(ClientSnapshotReplayError::ClientGrpcConnectionClosed(
+                        Disconnect::quiet("client_closed"),
+                    ));
                 }
             }
         }
@@ -2442,7 +2544,7 @@ impl GrpcService {
     async fn deshred_client_loop(
         mut session: DeshredClientSession,
         stream_tx: DeshredSubscribeSender,
-        mut client_rx: mpsc::UnboundedReceiver<Option<DeshredFilter>>,
+        mut client_rx: mpsc::UnboundedReceiver<ClientRequest<DeshredFilter>>,
         mut messages_rx: broadcast::Receiver<DeshredBroadcastedMessage>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
@@ -2470,23 +2572,22 @@ impl GrpcService {
                             }
                             Err(mpsc::error::TryRecvError::Empty) => break,
                             Err(mpsc::error::TryRecvError::Disconnected) => {
-                                message = None;
+                                // Keep a disconnect already received: it carries the reason.
+                                if !matches!(message, Some(Err(_))) {
+                                    message = None;
+                                }
                                 break;
                             }
                         }
                     }
 
-                    match message {
-                        Some(Some(filter_new)) => {
+                    match message.unwrap_or_else(|| Err(Disconnect::quiet("client_disconnect"))) {
+                        Ok(filter_new) => {
                             session.filter = filter_new;
                             info!("deshred client #{}/{}: filter updated", session.subscriber_id, session.id);
                         }
-                        Some(None) => {
-                            session.disconnect_reason = "client_disconnect";
-                            break 'outer;
-                        },
-                        None => {
-                            session.disconnect_reason = "client_disconnect";
+                        Err(disconnect) => {
+                            session.disconnect_reason = disconnect.end(stream_tx, &task_tracker);
                             break 'outer;
                         }
                     }
@@ -2670,7 +2771,7 @@ impl Geyser for GrpcService {
                                     if let Some(msg) = filter.get_pong_msg() {
                                         if incoming_stream_tx.send(Ok(msg)).await.is_err() {
                                             error!("client #{subscriber_id:?}/{id}: stream closed");
-                                            let _ = incoming_client_tx.send(None);
+                                            let _ = incoming_client_tx.send(Err(Disconnect::quiet("client_disconnect")));
                                             break;
                                         }
                                         continue;
@@ -2684,7 +2785,7 @@ impl Geyser for GrpcService {
                                     forwarded_first = true;
                                     let complexity_score = filter.get_filter_stats();
                                     metrics::observe_filter_complexity(&subscriber_id, &complexity_score);
-                                    match incoming_client_tx.send(Some((request.from_slot, filter))) {
+                                    match incoming_client_tx.send(Ok((request.from_slot, filter))) {
                                         Ok(()) => Ok(()),
                                         Err(error) => Err(error.to_string()),
                                     }
@@ -2695,7 +2796,7 @@ impl Geyser for GrpcService {
                                     "failed to create filter: {error}"
                                 )));
                                 if incoming_stream_tx.send(err).await.is_err() {
-                                    let _ = incoming_client_tx.send(None);
+                                    let _ = incoming_client_tx.send(Err(Disconnect::quiet("client_disconnect")));
                                 }
                             }
                         }
@@ -2706,8 +2807,12 @@ impl Geyser for GrpcService {
                             incoming_cancellation_token.cancelled().await;
                             break;
                         }
-                        Err(_error) => {
-                            let _ = incoming_client_tx.send(None);
+                        Err(error) => {
+                            let disconnect = Disconnect::from_read_error(&error, "SubscribeRequest");
+                            if let Some(status) = &disconnect.status {
+                                info!("client #{subscriber_id:?}/{id}: {}", status.message());
+                            }
+                            let _ = incoming_client_tx.send(Err(disconnect));
                             break;
                         }
                     }
@@ -2816,6 +2921,7 @@ impl Geyser for GrpcService {
             self.filter_names_size_limit,
             self.filter_names_cleanup_interval,
         );
+        let incoming_subscriber_id = subscriber_id.clone();
         let incoming_stream_tx = stream_tx.clone();
         let incoming_client_tx = client_tx;
         let incoming_cancellation_token = client_cancellation_token.child_token();
@@ -2836,12 +2942,12 @@ impl Geyser for GrpcService {
                                     if let Some(msg) = filter.get_pong_msg() {
                                         if incoming_stream_tx.send(Ok(msg)).await.is_err() {
                                             error!("deshred client #{id}: stream closed");
-                                            let _ = incoming_client_tx.send(None);
+                                            let _ = incoming_client_tx.send(Err(Disconnect::quiet("client_disconnect")));
                                             break;
                                         }
                                         continue;
                                     }
-                                    match incoming_client_tx.send(Some(filter)) {
+                                    match incoming_client_tx.send(Ok(filter)) {
                                         Ok(()) => Ok(()),
                                         Err(error) => Err(error.to_string()),
                                     }
@@ -2852,7 +2958,7 @@ impl Geyser for GrpcService {
                                     "failed to create deshred filter: {error}"
                                 )));
                                 if incoming_stream_tx.send(err).await.is_err() {
-                                    let _ = incoming_client_tx.send(None);
+                                    let _ = incoming_client_tx.send(Err(Disconnect::quiet("client_disconnect")));
                                 }
                             }
                         }
@@ -2861,8 +2967,12 @@ impl Geyser for GrpcService {
                             incoming_cancellation_token.cancelled().await;
                             break;
                         }
-                        Err(_error) => {
-                            let _ = incoming_client_tx.send(None);
+                        Err(error) => {
+                            let disconnect = Disconnect::from_read_error(&error, "SubscribeDeshredRequest");
+                            if let Some(status) = &disconnect.status {
+                                info!("deshred client #{incoming_subscriber_id:?}/{id}: {}", status.message());
+                            }
+                            let _ = incoming_client_tx.send(Err(disconnect));
                             break;
                         }
                     }
@@ -3127,6 +3237,139 @@ mod tests {
             }],
             ..Default::default()
         }));
+    }
+
+    /// An oversized first, later or compressed request gets `ResourceExhausted` with the limit,
+    /// and counts as `request_too_large`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn server_returns_resource_exhausted_for_oversized_request() {
+        use {
+            crate::{file_watcher::FileWatcher, stream::tokio::BatchStreamUnboundedReceiver},
+            std::collections::HashMap,
+            yellowstone_grpc_proto::prelude::{
+                geyser_client::GeyserClient, SubscribeRequestFilterAccounts,
+            },
+        };
+
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        // Rare race: if create() fails with AddrInUse, another process took this port first; rerun.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let config = serde_json::json!({
+            "listen": [{ "address": format!("127.0.0.1:{port}") }],
+            "max_decoding_message_size": 1024,
+            "compression": { "accept": ["gzip"] },
+        });
+        let config: crate::config::ConfigGrpc = serde_json::from_str(&config.to_string()).unwrap();
+
+        let cancellation_token = CancellationToken::new();
+        let (_messages_tx, messages_rx) = mpsc::unbounded_channel();
+        let _service = GrpcService::create(
+            config,
+            false,
+            cancellation_token.clone(),
+            TaskTracker::new(),
+            Arc::new(FileWatcher::new().unwrap()),
+            BatchStreamUnboundedReceiver::new(messages_rx),
+        )
+        .await
+        .unwrap();
+
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let oversized = SubscribeRequest {
+            accounts: HashMap::from([(
+                "big".to_owned(),
+                SubscribeRequestFilterAccounts {
+                    account: vec![Pubkey::new_unique().to_string(); 100],
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        let valid = SubscribeRequest {
+            slots: HashMap::from([("slots".into(), SubscribeRequestFilterSlots::default())]),
+            ..Default::default()
+        };
+        // A gzip request fits on the wire and goes over the limit while decompressing.
+        let cases = [
+            ("too-large-first", vec![oversized.clone()], false),
+            (
+                "too-large-after-valid",
+                vec![valid, oversized.clone()],
+                false,
+            ),
+            ("too-large-compressed", vec![oversized], true),
+        ];
+
+        for (subscriber_id, requests, gzip) in cases {
+            let mut client = GeyserClient::new(channel.clone());
+            if gzip {
+                client = client.send_compressed(tonic::codec::CompressionEncoding::Gzip);
+            }
+            let requests = futures::StreamExt::chain(
+                futures::stream::iter(requests),
+                futures::stream::pending(),
+            );
+            let mut request = Request::new(requests);
+            request
+                .metadata_mut()
+                .insert("x-subscription-id", subscriber_id.parse().unwrap());
+
+            let mut response = client.subscribe(request).await.unwrap().into_inner();
+            let status = loop {
+                match response.message().await {
+                    Ok(Some(_update)) => continue,
+                    Ok(None) => panic!("{subscriber_id}: stream closed without a status"),
+                    Err(status) => break status,
+                }
+            };
+
+            assert_eq!(status.code(), Code::ResourceExhausted, "{status:?}");
+            assert!(
+                status.message().contains("1024 bytes"),
+                "{}",
+                status.message()
+            );
+            // The session drops after the client sees the status, so wait for its counter.
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while metrics::client_disconnect_count(subscriber_id, "request_too_large") == 0 {
+                    sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{subscriber_id}: request_too_large not counted"));
+        }
+        cancellation_token.cancel();
+    }
+
+    /// Only a decoder size error, plain or compressed, is too large; transport errors are quiet.
+    #[test]
+    fn only_decoder_size_errors_are_too_large() {
+        let compressed = Status::resource_exhausted("size limit, of 1024 bytes, exceeded");
+        let disconnect = Disconnect::from_read_error(&compressed, "SubscribeRequest");
+        assert_eq!(disconnect.reason, "request_too_large");
+        let status = disconnect.status.unwrap();
+        assert_eq!(status.code(), Code::ResourceExhausted);
+        assert!(
+            status.message().contains("1024 bytes"),
+            "{}",
+            status.message()
+        );
+
+        let mut eof = Status::out_of_range("unexpected end of file");
+        eof.set_source(Arc::new(io::Error::from(io::ErrorKind::UnexpectedEof)));
+        for error in [eof, Status::internal("boom")] {
+            let disconnect = Disconnect::from_read_error(&error, "SubscribeRequest");
+            assert_eq!(disconnect.reason, "client_disconnect");
+            assert!(disconnect.status.is_none());
+        }
     }
 
     /// A request with any filter, or with only a `from_slot`, asks for something.
@@ -3478,7 +3721,7 @@ mod tests {
             Some(timeout),
         ));
         client_tx
-            .send(Some((Some(0), create_filter_with_blocks(false))))
+            .send(Ok((Some(0), create_filter_with_blocks(false))))
             .unwrap();
         ((client_tx, stream_rx), handle)
     }
@@ -3553,7 +3796,7 @@ mod tests {
         };
         let send = |from_slot: &Option<u64>| {
             client_tx
-                .send(Some((*from_slot, create_filter_with_slots())))
+                .send(Ok((*from_slot, create_filter_with_slots())))
                 .unwrap();
         };
 
@@ -3625,7 +3868,7 @@ mod tests {
         assert_eq!(receivers(&broadcast), [0, 0, 0]);
 
         client_tx
-            .send(Some((
+            .send(Ok((
                 None,
                 create_filter_at(CommitmentLevelProto::Confirmed),
             )))
@@ -3713,7 +3956,7 @@ mod tests {
     }
 
     type ClientHandles = (
-        mpsc::UnboundedSender<Option<(Option<u64>, Filter)>>,
+        mpsc::UnboundedSender<ClientRequest<(Option<u64>, Filter)>>,
         LoadAwareReceiver<TonicResult<FilteredUpdate>>,
     );
 
@@ -3741,7 +3984,7 @@ mod tests {
         let (client_tx, mut stream_rx) = spawn_client_loop(broadcast.clone(), ct.clone());
 
         client_tx
-            .send(Some((
+            .send(Ok((
                 None,
                 create_filter_at(CommitmentLevelProto::Finalized),
             )))
@@ -3765,7 +4008,7 @@ mod tests {
         let (client_tx, mut stream_rx) = spawn_client_loop(broadcast.clone(), ct.clone());
 
         client_tx
-            .send(Some((
+            .send(Ok((
                 None,
                 create_filter_at(CommitmentLevelProto::Processed),
             )))
@@ -3776,7 +4019,7 @@ mod tests {
         expect_one(&mut stream_rx).await;
 
         client_tx
-            .send(Some((
+            .send(Ok((
                 None,
                 create_filter_at(CommitmentLevelProto::Finalized),
             )))
@@ -3796,12 +4039,12 @@ mod tests {
     // real Ok(None) path: sends the filter, then on half-close awaits
     // cancellation to keep the sender alive.
     async fn incoming_handler(
-        client_tx: mpsc::UnboundedSender<Option<(Option<u64>, Filter)>>,
+        client_tx: mpsc::UnboundedSender<ClientRequest<(Option<u64>, Filter)>>,
         filter: Filter,
         half_close: oneshot::Receiver<()>,
         ct: CancellationToken,
     ) {
-        client_tx.send(Some((None, filter))).unwrap();
+        client_tx.send(Ok((None, filter))).unwrap();
         let _ = half_close.await;
         // this is the fix from #670: await cancellation instead of
         // breaking, so client_tx stays alive and client_rx remains open.
@@ -4161,7 +4404,7 @@ mod tests {
                 None,
             ));
             client_tx
-                .send(Some((Some(REPLAYED_SLOT), create_filter(commitment))))
+                .send(Ok((Some(REPLAYED_SLOT), create_filter(commitment))))
                 .unwrap();
 
             // The replay ends while the partial slot is still open.
@@ -4484,7 +4727,7 @@ mod tests {
                 None,
             ));
             client_tx
-                .send(Some((Some(REPLAYED_SLOT), create_filter(commitment))))
+                .send(Ok((Some(REPLAYED_SLOT), create_filter(commitment))))
                 .unwrap();
             // The client has subscribed to the live stream and waits for its replay.
             requested_rx.await.expect("client sent a replay request");
@@ -4622,7 +4865,7 @@ mod tests {
                 None,
             ));
             client_tx
-                .send(Some((
+                .send(Ok((
                     Some(REPLAYED_SLOT),
                     create_filter(CommitmentLevelProto::Processed),
                 )))
@@ -4710,7 +4953,7 @@ mod tests {
                 None,
             ));
             client_tx
-                .send(Some((
+                .send(Ok((
                     Some(REPLAYED_SLOT),
                     create_filter(CommitmentLevelProto::Processed),
                 )))
@@ -4786,7 +5029,7 @@ mod tests {
                 &mut fixtures::filter_names(),
             )
             .unwrap();
-            client_tx.send(Some((None, filter))).unwrap();
+            client_tx.send(Ok((None, filter))).unwrap();
             settle().await;
 
             // Another slot dies first, so a Dead leaking past processed would show up.
@@ -4914,7 +5157,7 @@ mod tests {
                 None,
             ));
             client_tx
-                .send(Some((
+                .send(Ok((
                     Some(REPLAYED_SLOT),
                     create_filter(CommitmentLevelProto::Processed),
                 )))

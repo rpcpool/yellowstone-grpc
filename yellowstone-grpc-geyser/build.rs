@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
         // this used to refer `solana-sdk`
         // since it was deprecated
         // this now referes `agave-geyser-plugin-interface`
-        get_pkg_version(&lockfile, "agave-geyser-plugin-interface")
+        get_pkg_version(&lockfile, "solana-transaction-status")
     );
     println!(
         "cargo:rustc-env=YELLOWSTONE_GRPC_PROTO_VERSION={}",
