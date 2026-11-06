@@ -43,6 +43,7 @@ futures = "0.3.24"
 futures-channel = "0.3.24"
 futures-util = "0.3.24"
 git-version = "0.3.5"
+hashbrown = { version = "0.17.1", default-features = false }
 hex = "0.4.3"
 home = "0.5.11"
 hostname = "0.4.0"
@@ -136,7 +137,7 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.12.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "17.0.0" }
-yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "16.2.0" }
+yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "16.2.1" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "14.0.1", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
 yellowstone-grpc-tools = { path = "yellowstone-grpc-tools", version = "0.1.0" }

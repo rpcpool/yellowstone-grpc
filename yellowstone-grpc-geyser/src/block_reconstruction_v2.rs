@@ -8,6 +8,7 @@ use {
                 MessageEntry, MessageSlot, MessageTransaction, SlotStatus,
             },
         },
+        route::BankRouteKeyIndex,
     },
     foldhash::{HashMap as FoldHashMap, HashMapExt},
     solana_clock::{BankId, Slot},
@@ -15,7 +16,7 @@ use {
     solana_pubkey::Pubkey,
     std::{
         collections::{btree_map::Range, BTreeMap, VecDeque},
-        sync::{Arc, LazyLock},
+        sync::{Arc, LazyLock, OnceLock},
     },
 };
 
@@ -283,6 +284,7 @@ impl BankBuffer {
             block_meta,
             block_footer: self.footer,
             pre_computed_message_block,
+            route_key_index: OnceLock::new(),
         }
     }
 }
@@ -299,6 +301,8 @@ pub struct FrozenBank {
     block_meta: Arc<MessageBlockMeta>,
     block_footer: Option<Arc<MessageBlockFooter>>,
     pre_computed_message_block: Arc<MessageBlock>,
+    // Set once, by the bank thread: the route keys of `original_messages`.
+    route_key_index: OnceLock<Arc<BankRouteKeyIndex>>,
 }
 
 impl FrozenBank {
@@ -346,6 +350,31 @@ impl FrozenBank {
 
     pub fn get_block_footer(&self) -> Option<Arc<MessageBlockFooter>> {
         self.block_footer.clone()
+    }
+
+    /// The route key index of [`Self::messages`].
+    ///
+    /// # Returns
+    ///
+    /// The index, or [`None`] until [`Self::index_route_keys`] has built it.
+    pub fn route_key_index(&self) -> Option<Arc<BankRouteKeyIndex>> {
+        self.route_key_index.get().cloned()
+    }
+
+    /// Builds the route key index of [`Self::messages`], unless it is built. The bank thread
+    /// runs it, since it passes over every message.
+    ///
+    /// # Arguments
+    ///
+    /// * `scratch_postings` - The buffer [`BankRouteKeyIndex::new`] builds the index in, which
+    ///   the caller keeps for the next bank.
+    pub fn index_route_keys(&self, scratch_postings: &mut Vec<(u64, u32)>) {
+        self.route_key_index.get_or_init(|| {
+            Arc::new(BankRouteKeyIndex::new(
+                &self.original_messages,
+                scratch_postings,
+            ))
+        });
     }
 }
 
@@ -407,18 +436,37 @@ impl<'storage> Iterator for ReplayIter<'storage> {
     }
 }
 
-/// Bank-id-oriented block reconstruction. Replaces the earlier slot-keyed pipeline (backed
-/// by the `yellowstone-block-machine` crate's `BlocksStateMachine`), which conflated
-/// "a `FirstShredReceived` placeholder is sitting here" with "a genuine prior bank already
-/// existed here" -- both looked identical from a slot-keyed perspective, which made every
-/// slot's very first (and typically only) `CreatedBank` look like a reset, discarding the
-/// sysvar writes that land right before it, on every slot, permanently.
+/// Bank-id-oriented block reconstruction: it buffers each bank's content, seals the bank once
+/// it is complete, hands it out at each commitment level it reaches, and keeps the sealed banks
+/// of recent slots for replay.
+///
+/// A slot-keyed buffer cannot tell a [`FirstShredReceived`](SlotStatus::FirstShredReceived)
+/// placeholder from a prior bank of the same slot. Every slot's first
+/// [`CreatedBank`](SlotStatus::CreatedBank) then looks like a reset, and the reset drops the
+/// sysvar writes that land just before it.
 ///
 /// Buffering by `bank_id` sidesteps that class of bug entirely: each bank instance -- real
 /// or a repair replay -- gets its own independent buffer, so there is nothing for one to
 /// clobber in another. A slot only ever has more than one live buffer while forks/repairs
 /// are still being resolved; the moment any commitment status update names a `bank_id` as
 /// the canonical bank for its slot, every sibling buffer for that slot is discarded.
+///
+/// # Examples
+///
+/// ```ignore
+/// let mut storage = BlockMachineStorage::new(replay_stored_slots);
+/// storage.add(message);
+/// while let Some((slot_update, frozen_block)) = storage.pop_ready_block() {
+///     send(slot_update, frozen_block);
+/// }
+/// for evicted_slot_banks in storage.drain_evicted_banks() {
+///     bank_thread.free_evicted_banks(evicted_slot_banks);
+/// }
+/// for sealed_bank in storage.drain_sealed_banks() {
+///     bank_thread.index_route_keys(sealed_bank);
+/// }
+/// let replayed_slots = storage.replay_from_slot(from_slot, min_commitment);
+/// ```
 pub struct BlockMachineStorage {
     // Bank instances still accumulating content, keyed by bank_id.
     banks: FoldHashMap<BankId, BankBuffer>,
@@ -464,6 +512,13 @@ pub struct BlockMachineStorage {
     ready_queue: VecDeque<(SlotCommitmentStatusUpdate, Arc<FrozenBank>)>,
     replayed_capacity: usize,
     num_buffered_finalized_slot: usize,
+    /// The sealed banks of the slots evicted from
+    /// [`replayed_slot`](BlockMachineStorage::replayed_slot), one list per slot, until
+    /// [`BlockMachineStorage::drain_evicted_banks`] takes them.
+    evicted_banks: Vec<Vec<Arc<FrozenBank>>>,
+    /// The banks sealed since the last [`BlockMachineStorage::drain_sealed_banks`], so the bank
+    /// thread can index their route keys. Kept only while replay is on.
+    sealed_banks: Vec<Arc<FrozenBank>>,
     min_slot: Option<Slot>,
     // Highest slot number observed across any message so far, and the value it had at the
     // last stale-slot sweep -- together these throttle `sweep_stale_slots` to run only every
@@ -473,6 +528,17 @@ pub struct BlockMachineStorage {
 }
 
 impl BlockMachineStorage {
+    /// Creates an empty storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `replayed_capacity` - How many slots of sealed banks to keep for replay. The storage
+    ///   evicts older slots only while more than [`MINIMUM_FINALIZED_SLOT_TO_BUFFER`] kept slots
+    ///   are finalized.
+    ///
+    /// # Returns
+    ///
+    /// A new `BlockMachineStorage` with no bank.
     pub fn new(replayed_capacity: usize) -> Self {
         Self {
             banks: FoldHashMap::with_capacity(replayed_capacity),
@@ -486,6 +552,8 @@ impl BlockMachineStorage {
             ready_queue: VecDeque::with_capacity(replayed_capacity),
             replayed_capacity,
             num_buffered_finalized_slot: 0,
+            evicted_banks: Vec::new(),
+            sealed_banks: Vec::new(),
             min_slot: None,
             max_slot_seen: 0,
             last_stale_gc_at: 0,
@@ -885,7 +953,18 @@ impl BlockMachineStorage {
     /// the slot resolves. If this bank is (or becomes, via single-candidate inference) the
     /// resolved winner and the slot already has a known commitment floor -- e.g. inherited
     /// from a descendant before this bank even sealed -- its delivery is emitted now too.
+    /// While replay is on, the bank also waits in `sealed_banks` for
+    /// [`Self::drain_sealed_banks`], so its route keys get indexed.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The bank's slot.
+    /// * `bank_id` - The bank's id.
+    /// * `frozen` - The bank, just sealed.
     fn on_bank_sealed(&mut self, slot: Slot, bank_id: BankId, frozen: Arc<FrozenBank>) {
+        if self.replayed_capacity > 0 {
+            self.sealed_banks.push(Arc::clone(&frozen));
+        }
         self.min_slot = Some(self.min_slot.map_or(slot, |m| m.min(slot)));
         self.add_replay_candidate(slot, frozen);
         self.try_infer_sole_candidate_winner(slot);
@@ -1058,8 +1137,17 @@ impl BlockMachineStorage {
         self.refresh_min_slot();
     }
 
+    /// Forgets `slot`: moves its sealed banks to [`Self::evicted_banks`], and drops its commitment
+    /// and bank tracking.
+    ///
+    /// It does not free the banks, since freeing a whole bank takes milliseconds. The caller
+    /// takes them with [`Self::drain_evicted_banks`] and drops them off its own thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The slot to evict, the oldest one kept for replay.
     fn evict_slot(&mut self, slot: Slot) {
-        self.replayed_slot.remove(&slot);
+        self.evicted_banks.extend(self.replayed_slot.remove(&slot));
         if let Some(progression) = self.slot_commitment_progression_map.remove(&slot) {
             if progression.max_commitment == CommitmentLevel::Finalized {
                 self.num_buffered_finalized_slot =
@@ -1077,6 +1165,27 @@ impl BlockMachineStorage {
 
     pub fn pop_ready_block(&mut self) -> Option<(SlotCommitmentStatusUpdate, Arc<FrozenBank>)> {
         self.ready_queue.pop_front()
+    }
+
+    /// Takes the sealed banks of the slots evicted since the last call, so the caller can drop
+    /// them off its own thread. The storage keeps the capacity of its list of evicted slots.
+    ///
+    /// # Returns
+    ///
+    /// The banks of each evicted slot, in eviction order. Empty if no slot was evicted.
+    pub fn drain_evicted_banks(&mut self) -> std::vec::Drain<'_, Vec<Arc<FrozenBank>>> {
+        self.evicted_banks.drain(..)
+    }
+
+    /// Takes the banks sealed since the last call, so the caller can have their route keys
+    /// indexed off its own thread. The storage keeps the capacity of its list of sealed banks.
+    ///
+    /// # Returns
+    ///
+    /// The sealed banks, in seal order. Empty if no bank sealed, and always empty while replay
+    /// is off.
+    pub fn drain_sealed_banks(&mut self) -> std::vec::Drain<'_, Arc<FrozenBank>> {
+        self.sealed_banks.drain(..)
     }
 
     pub fn replay_from_slot(&self, slot: Slot, min_commitment: CommitmentLevel) -> ReplayIter<'_> {
@@ -2217,5 +2326,48 @@ mod tests {
             vec![(10, CommitmentLevel::Processed, 2)],
             "bank 2 got its own Processed and must be delivered"
         );
+    }
+
+    /// While replay is on, the storage keeps each bank it seals until the next drain, which
+    /// gives it once. The bank has no route key index until [`FrozenBank::index_route_keys`]
+    /// builds it, and the index finds the bank's entry. With replay off, the storage keeps no
+    /// sealed bank.
+    #[test]
+    fn a_storage_keeps_each_sealed_bank_for_indexing_only_while_replay_is_on() {
+        let mut replay_on_storage = BlockMachineStorage::new(150);
+        seal_bank(&mut replay_on_storage, 10, 1, 9);
+        let sealed_banks: Vec<_> = replay_on_storage.drain_sealed_banks().collect();
+        assert_eq!(replay_on_storage.drain_sealed_banks().count(), 0);
+        let [sealed_bank] = &sealed_banks[..] else {
+            panic!("{} sealed banks drained", sealed_banks.len());
+        };
+        let replayed_slot = replay_on_storage
+            .replay_from_slot(10, CommitmentLevel::Processed)
+            .next()
+            .expect("the sealed bank");
+        assert!(std::ptr::eq(
+            sealed_bank.as_ref(),
+            replayed_slot.frozen_block
+        ));
+
+        assert!(sealed_bank.route_key_index().is_none());
+        sealed_bank.index_route_keys(&mut Vec::new());
+        let route_key_index = sealed_bank.route_key_index().expect("an index");
+        let entries_route_key = crate::route::RouteKey::Entries;
+        let entries_route_key_hash = BankRouteKeyIndex::route_key_hash(&entries_route_key);
+        let mut candidate_positions = Vec::new();
+        route_key_index
+            .collect_candidate_positions(&[entries_route_key_hash], &mut candidate_positions);
+        let entry_position = sealed_bank
+            .messages()
+            .iter()
+            .position(|bank_message| matches!(bank_message, Message::Entry(_)))
+            .expect("the bank's entry");
+        assert_eq!(candidate_positions, [entry_position as u32]);
+
+        let mut replay_off_storage = BlockMachineStorage::new(0);
+        seal_bank(&mut replay_off_storage, 10, 1, 9);
+        assert_eq!(replay_off_storage.min_replayable_slot(), Some(10));
+        assert_eq!(replay_off_storage.drain_sealed_banks().count(), 0);
     }
 }
