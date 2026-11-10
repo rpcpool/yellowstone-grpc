@@ -32,8 +32,10 @@ use crate::{client::GrpcClient, subscribe_request_validation::validate_subscribe
 
 static INITIALIZE_CRYPTO_PROVIDER: Once = Once::new();
 
-#[napi(js_name = "AUTORECONNECT_FILTER_KEY")]
-pub const AUTORECONNECT_FILTER_KEY: &str = "__autoreconnect";
+/// Name of the filters a reconnecting subscription adds to every request. Reserved: a user
+/// filter must not use it.
+#[napi(js_name = "RECONNECT_FILTER_KEY")]
+pub const RECONNECT_FILTER_KEY: &str = "__reconn";
 
 /// Initialize crypto provider once.
 fn init_crypto_provider() {

@@ -570,6 +570,24 @@ pub fn observe_subscriber_queue_size<S: AsRef<str>>(
         .observe(size as f64);
 }
 
+/// Reads the `yellowstone_grpc_geyser_client_disconnects_total` counter for one subscriber
+/// and reason.
+///
+/// # Arguments
+///
+/// * `subscriber_id` - The `subscriber_id` label.
+/// * `reason` - The `reason` label, for example `request_too_large`.
+///
+/// # Returns
+///
+/// The counter value, `0` if that label pair was never counted.
+#[cfg(test)]
+pub fn client_disconnect_count(subscriber_id: &str, reason: &str) -> u64 {
+    GRPC_CLIENT_DISCONNECTS
+        .with_label_values(&[subscriber_id, reason])
+        .get()
+}
+
 pub fn incr_client_disconnect<S: AsRef<str>>(subscriber_id: S, reason: &str) {
     GRPC_CLIENT_DISCONNECTS
         .with_label_values(&[subscriber_id.as_ref(), reason])

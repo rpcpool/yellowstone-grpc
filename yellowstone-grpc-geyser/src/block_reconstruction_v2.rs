@@ -42,9 +42,10 @@ pub(crate) const MUST_HAVE_SYSVAR_ACCOUNTS: [Pubkey; 4] = [
 // Fixed-address accounts written by the first bank of a new epoch on its fork (not
 // necessarily the epoch's first slot), during bank construction and so before `CreatedBank`.
 // Accounts whose address varies are left out: the feature accounts activated at that epoch,
-// builtin/core-BPF migration targets, and the vote accounts charged the VAT and paid
-// commission on Alpenglow. So is the Rent sysvar, which is only rewritten when a feature that
-// changes rent activates at that epoch.
+// builtin/core-BPF migration targets, and, on Alpenglow, the vote accounts charged the VAT,
+// paid commission or swept of pending delegator rewards, and the commission collector
+// accounts. So is the Rent sysvar, which is only rewritten when a feature that changes rent
+// activates at that epoch.
 // NOTE: THIS CONSTANT IS NOT USED ANYWHERE, BESIDES TESTS, IT'S ONLY FOR DOCUMENTATION PURPOSES.
 // PERHAPS SOMEDAY THIS CONSTANT WILL BE USED IN THE MAIN LOGIC, BUT FOR NOW IT'S PURELY DOCUMENTATION TO HELP AGENT.
 #[allow(dead_code)]
@@ -56,8 +57,9 @@ pub(crate) const SYSVAR_ON_EPOCH_CROSSING: [Pubkey; 5] = [
     // Alpenglow or migration epoch: `REWARD_EPOCH_DELEGATED_STAKES_ACCOUNT`, the PDA of seed
     // `reward_epoch_delegated_stakes` under the alpenglow feature id.
     Pubkey::from_str_const("CHfmHwNcskfxg1ZnLatbHbmVvYbA6rLDz3Xok5a3Ku8i"),
-    // Alpenglow: the incinerator receives the VAT burned from staked vote accounts. Banks also
-    // write it at freeze, after `CreatedBank`, when they burn fees.
+    // Alpenglow: the incinerator receives the VAT burned from staked vote accounts, and any
+    // commission whose collector is the incinerator. Banks also write it at freeze, after
+    // `CreatedBank`, when they burn fees.
     Pubkey::from_str_const("1nc1nerator11111111111111111111111111111111"),
     // Alpenglow: `VOTE_REWARD_ACCOUNT_ADDR`, the PDA of seed `vote_reward_account` under the
     // alpenglow feature id.

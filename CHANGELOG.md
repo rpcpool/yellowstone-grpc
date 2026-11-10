@@ -10,9 +10,24 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-geyser 17.0.0
+
+### Fixes
+
+- plugin: a `Subscribe` or `SubscribeDeshred` request over `max_decoding_message_size` ends the stream with `RESOURCE_EXHAUSTED` and a message with the limit, and the request size when it is not compressed. The stream used to close with no status. STR-786
+- plugin: the rejection logs `removed (request_too_large)` and a line with the subscription id and the status message. It counts in `yellowstone_grpc_geyser_client_disconnects_total` with `reason="request_too_large"`. It used to log and count as `client_disconnect`. STR-787
+
+## 2026-10-30
+
 - yellowstone-grpc-geyser 16.2.0
+- yellowstone-grpc-client 17.0.0
+- yellowstone-grpc-napi 0.4.0
+- @triton-one/yellowstone-grpc@10.0.0
 
 ### Breaking
+
+- client: `subscribe_with_reconnect` is rewritten and returns `ReconnectStream`. It yields `ReconnectEvent::Update(update)`, and `ReconnectEvent::Disconnected { partial_banks, replay_from_slot }` once per dropped connection. `partial_banks` lists the banks the user received content of but not their Block, footer or block meta: discard them. `ReconnectConfig::policy` is a `ReconnectPolicy`: `Replay { slots_behind }` (the default, `slots_behind: 0`) replays from that many slots before the last confirmed slot seen (from the first request's own `from_slot` before any confirmed slot is known), and the user handles duplicates; `NoReplay` resumes at the live tip. The stream drops what a later connection sends of a partial bank no replay resends. Any commitment is accepted, and the sink accepts filter changes, which also apply to every reconnect. A replayed bank carries only the latest write of each account, as the server stores it, so it can have fewer account updates than the same bank delivered live. `ReconnectConfig::backoff` is a retry budget of `max_retries` reconnects in a row, each after a growing delay; a connection that delivers a bank's Block, footer or block meta refills it, while a ping or a slot status alone does not. The internal filters are named `RECONNECT_FILTER_KEY` (`"__reconn"`). Removed: `ReconnectGeyserStream`, `AutoReconnect`, `DedupStream`, `DedupState`, `DEFAULT_SLOT_RETENTION`, `ReconnectionPolicy`, `DiscardReason`, `ReplacementReplay`, `SlotWinner`, `AUTORECONNECT_FILTER_KEY` and `ReconnectConfig::with_slot_retention`. `GrpcConnector::connect` and `TonicGrpcConnector` are kept, and `TonicGrpcConnector::new` takes the stream's `ReconnectRequest` instead of a request sender: the sink stores and sends a request, and a reconnect installs the new connection and resends the latest request, under one lock, so a filter change sent during a reconnect reaches the new connection; `test_tools::ScriptedConnector` scripts connections for tests.
+- ts-client: `subscribeWithReconnect()` yields `{ type: "Update", update }` and `{ type: "Disconnected", partialBanks, replayFromSlot }` events, on top of yellowstone-grpc-client 17.0.0. The constructor's reconnect options take `policy` (`"Replay"` or `"NoReplay"`) and `slotsBehind` next to `backoff`. `AUTORECONNECT_FILTER_KEY` is renamed `RECONNECT_FILTER_KEY` (`"__reconn"`). The `DiscardBanks` event, `generation` and slot winners are gone. Requires the napi 0.4.0 binaries.
 
 - plugin: only the first `SubscribeRequest` that asks for something can replay. `from_slot` on any later request is ignored, and a subscription with a startup snapshot never replays. Empty requests (no filter, no `from_slot`) before the first real one don't count, so `subscribe()` followed by a request with `from_slot` still replays: the Rust and TS SDKs' `subscribe()` send an empty request first. The plugin subscribes the client to no live channel until its first real request. STR-763
 - plugin: at confirmed and finalized, a bank's commitment statuses arrive after its content and block meta, in the order Processed, Confirmed, Finalized. They used to arrive first, as soon as block reconstruction produced them. A bank's `CreatedBank` now arrives at confirmed and finalized with the bank's content, once, instead of as it landed. STR-763
@@ -24,6 +39,9 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Misc
 
 - e2e: `replay-ordering` runs at processed, confirmed and finalized and checks every bank across the switch from replay to live. New `replay-contiguous` checks that a replay from one slot behind the tip loses no slot. The block footer scenarios run with the `default` module, under `scenarios/default/block_footer/`; the `alpenglow` tag and module are gone. `--tags` and `--exclude-tags` take comma-separated lists.
+- e2e: the reconnect scenarios are replaced, for the new `ReconnectStream`. `reconnect-replay` and `reconnect-no-replay` cut a connection mid-bank. The `reconnect-accounts-only`, `reconnect-block-meta-only`, `reconnect-blocks-only`, `reconnect-block-footers-only` and `reconnect-created-bank-and-accounts` scenarios do the same for one kind of filter, or two at once, at every commitment with and without replay. `reconnect-sink-filters` changes filters mid-stream. `reconnect_blocks.rs` and the dedup bench are removed.
+- ts-client: `try-reconnect.js` runs `subscribeWithReconnect()` against `TEST_ENDPOINT` from `.env`, through a local proxy that cuts the connection every few seconds, and prints each `Disconnected` event, the partial banks it drops and the banks a replay resends. It is not published with the package.
+- examples: `client_with_reconnect` is rewritten for the new `ReconnectStream`. It builds each bank from its sysvar writes, drops the banks a `Disconnected` event lists, and skips the duplicates a replay resends. `--no-replay`, `--slots-behind`, `--commitment` and `--max-retries` pick the reconnect options.
 
 ## 2026-10-26
 
@@ -94,6 +112,11 @@ The minor version will be incremented upon a breaking change and the patch versi
 ## 2026-10-07
 
 - yellowstone-grpc-geyser 16.1.1
+- @triton-one/yellowstone-grpc@9.0.0
+
+### Breaking
+
+- ts-client: block footer certificates are typed messages (`BlockFooterFinalCert`, `BlockFooterSkipRewardCert`, `BlockFooterNotarRewardCert`) in fields 9, 10 and 11, as in yellowstone-grpc-proto 14.0.1. The wincode bytes fields 6, 7 and 8 are gone. The block footer types are exported, and a `block_footer` filter cannot use the reserved reconnect filter name. To upgrade from 8.x, read the certificates from the typed fields.
 
 ### Features
 - plugin: tracking of data load for clients, per message weights, configurable scales and weights per type of message
@@ -103,8 +126,11 @@ The minor version will be incremented upon a breaking change and the patch versi
 - yellowstone-grpc-proto 14.0.1
 - yellowstone-grpc-geyser 16.1.0
 - yellowstone-grpc-client 15.0.0
+- @triton-one/yellowstone-grpc@8.0.0
 
 ### Breaking
+
+- ts-client: reconnecting moves from `subscribe()` to the new `subscribeWithReconnect()`, which yields `Update` and `DiscardBanks` events. It requires processed commitment, no startup snapshot and no `fromSlot`. The constructor's reconnect options take only `backoff`, and `enabled`, `policy` and `slotRetention` are rejected. Requires the napi 0.3.0 binaries. To upgrade from 7.x, remove those three options and call `subscribeWithReconnect()` where you relied on reconnects.
 
 - proto/plugin: block footer certificates are typed proto messages in fields 9, 10 and 11 instead of wincode bytes.
 

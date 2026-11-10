@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-geyser"
-version = "18.0.0-rc1+solana.4.5.0.alpha.4"
+version = "18.0.0-rc2+solana.4.5.0.beta.0"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Geyser Plugin"

@@ -6,7 +6,7 @@ use yellowstone_grpc_proto::geyser::{
 };
 use yellowstone_grpc_proto::prelude::SubscribeRequest;
 
-use crate::AUTORECONNECT_FILTER_KEY;
+use crate::RECONNECT_FILTER_KEY;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubscribeRequestValidationError {
@@ -49,7 +49,7 @@ impl fmt::Display for SubscribeRequestValidationError {
       Self::ReservedFilterName => {
         write!(
           f,
-          "invalid subscribe request: filter name {AUTORECONNECT_FILTER_KEY} is reserved"
+          "invalid subscribe request: filter name {RECONNECT_FILTER_KEY} is reserved"
         )
       }
       Self::MissingFilter { path } => {
@@ -113,7 +113,7 @@ impl std::error::Error for SubscribeRequestValidationError {}
 pub fn validate_subscribe_request(
   request: &SubscribeRequest,
 ) -> Result<(), SubscribeRequestValidationError> {
-  if contains_reserved_autoreconnect_filter(request) {
+  if contains_reserved_reconnect_filter(request) {
     return Err(SubscribeRequestValidationError::ReservedFilterName);
   }
 
@@ -176,10 +176,10 @@ pub fn validate_subscribe_request(
 }
 
 fn contains_reserved_filter_name<T>(filters: &std::collections::HashMap<String, T>) -> bool {
-  filters.contains_key(AUTORECONNECT_FILTER_KEY)
+  filters.contains_key(RECONNECT_FILTER_KEY)
 }
 
-fn contains_reserved_autoreconnect_filter(request: &SubscribeRequest) -> bool {
+fn contains_reserved_reconnect_filter(request: &SubscribeRequest) -> bool {
   contains_reserved_filter_name(&request.accounts)
     || contains_reserved_filter_name(&request.slots)
     || contains_reserved_filter_name(&request.transactions)
@@ -592,16 +592,24 @@ mod tests {
   }
 
   #[test]
-  fn rejects_reserved_autoreconnect_filter_name() {
+  fn rejects_reserved_reconnect_filter_name() {
     let mut request = fully_populated_request();
     let full_filter = request.accounts.remove("full").unwrap();
     request
       .accounts
-      .insert(crate::AUTORECONNECT_FILTER_KEY.to_string(), full_filter);
+      .insert(crate::RECONNECT_FILTER_KEY.to_string(), full_filter);
 
     let error = validate_subscribe_request(&request).expect_err("reserved filter name must fail");
 
     assert_eq!(error, SubscribeRequestValidationError::ReservedFilterName);
+  }
+
+  #[test]
+  fn reserved_filter_name_is_the_clients() {
+    assert_eq!(
+      crate::RECONNECT_FILTER_KEY,
+      yellowstone_grpc_client::RECONNECT_FILTER_KEY
+    );
   }
 
   #[test]

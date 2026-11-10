@@ -9,14 +9,22 @@ produces blocks.
 - **What it can rely on:** every bank it sees is a replayed bank, built from shreds the node
   received. RPC is on, so Processed, Confirmed and Finalized statuses always arrive.
 - **What it does not handle:** orderings that only a leader produces. Examples are a leader
-  bank's `entries_count` of 0, the Alpenglow leader footer arriving after BlockMeta, the final
-  tick queued after freeze, and a leader `BankFreezeTimeout` bank with no footer.
+  bank's `entries_count` of 0, the Alpenglow leader footer racing BlockMeta, the final tick
+  queued after freeze, and a leader `BankFreezeTimeout` bank with no footer.
 - **In reviews:** don't report a leader-only case as a bug, and don't add code for one. If the
   plugin must ever run on a leader, that is a new requirement: revisit block reconstruction's
   completion checks first. The leader paths are described in
   `.claude/rules/geyser-ordering.md`.
 
 ## Invariants
+
+### Entry-channel callbacks never block
+
+Since agave 4.4 the entry channel is bounded and its producers block when it is full, so a
+slow `notify_entry_for_bank`, `notify_block_footer` or `notify_entry_update_parent` stalls
+the validator's replay. In `plugin/entry.rs` each of them only builds its message and sends
+it on the unbounded geyser channel. Keep it that way: no lock, bounded send or blocking work
+there.
 
 ### A subscription replays at most once, on its first request
 

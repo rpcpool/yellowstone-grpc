@@ -1,7 +1,11 @@
-use crate::bindings::{JsChannelOptions, JsCompressionAlgorithm, JsReconnectConfig};
+use crate::bindings::{
+  JsChannelOptions, JsCompressionAlgorithm, JsReconnectConfig, JsReconnectPolicy,
+};
 use napi::bindgen_prelude::{Result, Status};
 use std::time::Duration;
-use yellowstone_grpc_client::{Backoff, ClientTlsConfig, GeyserGrpcBuilder, ReconnectConfig};
+use yellowstone_grpc_client::{
+  Backoff, ClientTlsConfig, GeyserGrpcBuilder, ReconnectConfig, ReconnectPolicy,
+};
 use yellowstone_grpc_proto::tonic::codec::CompressionEncoding;
 
 fn to_napi_cause(status: Status, source: &dyn std::error::Error) -> napi::Error {
@@ -32,16 +36,24 @@ fn reconnect_config_from_js(
     return Ok(None);
   };
 
-  if reconnect_config.enabled.is_some()
-    || reconnect_config.policy.is_some()
-    || reconnect_config.slot_retention.is_some()
-  {
+  if reconnect_config.enabled.is_some() || reconnect_config.slot_retention.is_some() {
     return Err(invalid_arg(
-      "reconnect.enabled, policy, and slotRetention are unsupported; use subscribeWithReconnect() with backoff options only",
+      "reconnect.enabled and slotRetention are unsupported; use subscribeWithReconnect() with backoff, policy and slotsBehind",
     ));
   }
 
-  let mut native_config = ReconnectConfig::default();
+  let policy = match (reconnect_config.policy, reconnect_config.slots_behind) {
+    (Some(JsReconnectPolicy::NoReplay), Some(_)) => {
+      return Err(invalid_arg(
+        "reconnect.slotsBehind only applies to the Replay policy",
+      ));
+    }
+    (Some(JsReconnectPolicy::NoReplay), None) => ReconnectPolicy::NoReplay,
+    (Some(JsReconnectPolicy::Replay) | None, slots_behind) => ReconnectPolicy::Replay {
+      slots_behind: slots_behind.unwrap_or_default().into(),
+    },
+  };
+  let mut native_config = ReconnectConfig::default().with_policy(policy);
 
   if let Some(backoff) = reconnect_config.backoff {
     let initial_interval = backoff
@@ -281,25 +293,77 @@ mod tests {
     );
   }
 
+  fn config(
+    policy: Option<crate::bindings::JsReconnectPolicy>,
+    slots_behind: Option<u32>,
+  ) -> crate::bindings::JsReconnectConfig {
+    crate::bindings::JsReconnectConfig {
+      enabled: None,
+      backoff: None,
+      slot_retention: None,
+      policy,
+      slots_behind,
+    }
+  }
+
   #[test]
   fn rejects_obsolete_reconnect_options() {
-    use crate::bindings::{JsReconnectConfig, JsReconnectPolicy};
-    for (enabled, policy, slot_retention) in [
-      (Some(true), None, None),
-      (Some(false), None, None),
-      (None, Some(JsReconnectPolicy::SkipMissedData), None),
-      (None, Some(JsReconnectPolicy::RecoverMissedData), None),
-      (None, None, Some(300)),
+    for obsolete in [
+      crate::bindings::JsReconnectConfig {
+        enabled: Some(true),
+        ..config(None, None)
+      },
+      crate::bindings::JsReconnectConfig {
+        enabled: Some(false),
+        ..config(None, None)
+      },
+      crate::bindings::JsReconnectConfig {
+        slot_retention: Some(300),
+        ..config(None, None)
+      },
     ] {
-      let error = super::reconnect_config_from_js(Some(JsReconnectConfig {
-        enabled,
-        policy,
-        slot_retention,
-        backoff: None,
-      }))
-      .unwrap_err();
+      let error = super::reconnect_config_from_js(Some(obsolete)).unwrap_err();
       assert!(error.reason.contains("subscribeWithReconnect()"));
     }
+  }
+
+  #[test]
+  fn maps_the_reconnect_policy() {
+    use crate::bindings::JsReconnectPolicy;
+    use yellowstone_grpc_client::ReconnectPolicy;
+
+    let policy = |js| {
+      super::reconnect_config_from_js(Some(js))
+        .unwrap()
+        .unwrap()
+        .policy
+    };
+    assert_eq!(
+      policy(config(None, None)),
+      ReconnectPolicy::Replay { slots_behind: 0 }
+    );
+    assert_eq!(
+      policy(config(Some(JsReconnectPolicy::Replay), Some(7))),
+      ReconnectPolicy::Replay { slots_behind: 7 }
+    );
+    assert_eq!(
+      policy(config(None, Some(3))),
+      ReconnectPolicy::Replay { slots_behind: 3 }
+    );
+    assert_eq!(
+      policy(config(Some(JsReconnectPolicy::NoReplay), None)),
+      ReconnectPolicy::NoReplay
+    );
+  }
+
+  #[test]
+  fn rejects_slots_behind_without_replay() {
+    let error = super::reconnect_config_from_js(Some(config(
+      Some(crate::bindings::JsReconnectPolicy::NoReplay),
+      Some(1),
+    )))
+    .unwrap_err();
+    assert!(error.reason.contains("slotsBehind"));
   }
 
   #[tokio::test]
@@ -320,6 +384,7 @@ mod tests {
         }),
         slot_retention: None,
         policy: None,
+        slots_behind: None,
       }),
     )
     .await
@@ -351,6 +416,7 @@ mod tests {
         }),
         slot_retention: None,
         policy: None,
+        slots_behind: None,
       }),
     )
     .await
