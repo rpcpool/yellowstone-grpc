@@ -113,6 +113,8 @@ pub enum FilterError {
     CreateDataSliceOutOfOrder,
     #[error("failed to create filter: data slices overlapped")]
     CreateDataSliceOverlap,
+    #[error("failed to create filter: data slice offset plus length overflows")]
+    CreateDataSliceOverflow,
     #[error("invalid token_accounts mode value {0}; expected ALL (0) or BALANCE_CHANGED (1)")]
     InvalidTokenAccountsMode(i32),
 }
@@ -1361,7 +1363,13 @@ impl FilterAccountsState {
                     if data.len() > MAX_DATA_SIZE {
                         return Err(FilterError::CreateAccountState("data too large"));
                     }
-                    this.memcmp.push((memcmp.offset as usize, data));
+                    let offset = memcmp.offset as usize;
+                    if offset.checked_add(data.len()).is_none() {
+                        return Err(FilterError::CreateAccountState(
+                            "memcmp offset plus data length overflows",
+                        ));
+                    }
+                    this.memcmp.push((offset, data));
                 }
                 Some(AccountsFilterDataOneof::Datasize(datasize)) => {
                     if this.datasize.replace(*datasize as usize).is_some() {
@@ -1414,10 +1422,12 @@ impl FilterAccountsState {
             return false;
         }
         for (offset, bytes) in self.memcmp.iter() {
-            if data.len() < *offset + bytes.len() {
+            let Some(end) = offset.checked_add(bytes.len()) else {
                 return false;
-            }
-            let data = &data[*offset..*offset + bytes.len()];
+            };
+            let Some(data) = data.get(*offset..end) else {
+                return false;
+            };
             if data != bytes {
                 return false;
             }
@@ -2429,11 +2439,17 @@ impl FilterAccountsDataSlice {
 
         let slices = slices
             .iter()
-            .map(|s| Range {
-                start: s.offset as usize,
-                end: (s.offset + s.length) as usize,
+            .map(|s| {
+                let end = s
+                    .offset
+                    .checked_add(s.length)
+                    .ok_or(FilterError::CreateDataSliceOverflow)?;
+                Ok(Range {
+                    start: s.offset as usize,
+                    end: end as usize,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<FilterResult<Vec<_>>>()?;
 
         for (i, slice_a) in slices.iter().enumerate() {
             // check order
@@ -4954,7 +4970,8 @@ mod filter_kind_coverage {
         super::*,
         crate::plugin::filter::fixtures,
         yellowstone_grpc_proto::geyser::{
-            CuckooFilter as ProtoCuckooFilter, SubscribeRequestFilterEntry,
+            CuckooFilter as ProtoCuckooFilter, SubscribeRequestFilterAccountsFilterMemcmp,
+            SubscribeRequestFilterEntry,
         },
     };
 
@@ -5424,6 +5441,58 @@ mod filter_kind_coverage {
             FilterAccountsDataSlice::new(&[slice(0, 4)], 0),
             Err(FilterError::LimitsCheck(_))
         ));
+    }
+
+    #[test]
+    fn account_data_slice_validation_rejects_overflow() {
+        let slice = |offset: u64, length: u64| SubscribeRequestAccountsDataSlice { offset, length };
+
+        for slices in [
+            vec![slice(u64::MAX, 1)],
+            vec![slice(1, u64::MAX)],
+            vec![slice(0, 8), slice(u64::MAX, 1)],
+        ] {
+            assert!(matches!(
+                FilterAccountsDataSlice::new(&slices, usize::MAX),
+                Err(FilterError::CreateDataSliceOverflow)
+            ));
+        }
+        assert!(
+            FilterAccountsDataSlice::new(&[slice(0, 8), slice(8, u64::MAX - 8)], usize::MAX)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn memcmp_offset_overflow() {
+        let memcmp = |offset: u64| {
+            [SubscribeRequestFilterAccountsFilter {
+                filter: Some(AccountsFilterDataOneof::Memcmp(
+                    SubscribeRequestFilterAccountsFilterMemcmp {
+                        offset,
+                        data: Some(AccountsFilterMemcmpOneof::Bytes(vec![7, 7, 7])),
+                    },
+                )),
+            }]
+        };
+
+        for offset in [u64::MAX, u64::MAX - 2] {
+            assert!(matches!(
+                FilterAccountsState::new(&memcmp(offset)),
+                Err(FilterError::CreateAccountState(_))
+            ));
+        }
+
+        let data = vec![7u8; 82];
+        for offset in [usize::MAX, usize::MAX - 1, 83, 80] {
+            let state = FilterAccountsState {
+                memcmp: vec![(offset, vec![7, 7, 7])],
+                ..Default::default()
+            };
+            assert!(!state.is_match(&data, 1_000_000), "offset {offset}");
+        }
+        let state = FilterAccountsState::new(&memcmp(79)).unwrap();
+        assert!(state.is_match(&data, 1_000_000));
     }
 
     #[test]
