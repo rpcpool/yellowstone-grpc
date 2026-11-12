@@ -1502,9 +1502,9 @@ impl GrpcService {
     /// Slot messages come in two categories with different routing rules:
     ///
     /// **Lifecycle statuses** (`FirstShredReceived`, `Completed`, `CreatedBank`, `Dead`):
-    /// Broadcast immediately at Processed, with the rest of the raw data. `FirstShredReceived`,
-    /// `Completed` and `Dead` name no bank: the plugin entry point also sends them to Confirmed
-    /// and Finalized as they land. A bank's `CreatedBank` goes out at Confirmed and Finalized
+    /// Broadcast immediately at Processed, with the rest of the raw data. The plugin entry point
+    /// also sends `FirstShredReceived`, `Completed` and `Dead` to Confirmed and Finalized as they
+    /// land. A bank's `CreatedBank` goes out at Confirmed and Finalized
     /// with the bank's content, when the bank reaches that level, and never as it lands there.
     ///
     /// **Commitment statuses** (`Processed`, `Confirmed`, `Finalized`):
@@ -5463,16 +5463,16 @@ mod tests {
                 tokio::time::timeout(Duration::from_secs(1), harness.handle_reconstruction).await;
         }
 
-        /// Bank 1 for slot 10 dies, and its repaired replacement, bank 2, is processed. `Dead`
-        /// names a slot, not a bank, so bank 2's Processed must reach block reconstruction after
-        /// that `Dead`, or the `Dead` discards bank 2 too. The statuses keep that order by going
-        /// through geyser_loop, which must not broadcast them itself.
+        /// Bank 1 for slot 10 dies, and its repaired replacement, bank 2, is processed. Block
+        /// reconstruction discards every bank of a `Dead`'s slot, so bank 2's Processed must reach
+        /// it after that `Dead`, or the `Dead` discards bank 2 too. The statuses keep that order by
+        /// going through geyser_loop, which must not broadcast them itself.
         #[tokio::test]
         async fn replacement_bank_after_dead_is_delivered_once_at_processed() {
             let mut harness = spawn_loop();
             let mut messages = vec![
                 bank_status(10, SlotStatus::CreatedBank, Some(1)),
-                bank_status(10, SlotStatus::Dead, None),
+                bank_status(10, SlotStatus::Dead, Some(1)),
             ];
             messages.extend(sealed_bank(10, 2));
             messages.push(bank_status(10, SlotStatus::Processed, Some(2)));

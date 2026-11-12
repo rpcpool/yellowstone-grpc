@@ -734,7 +734,7 @@ async fn join_replay_and_live_stream(
         match update_oneof {
             UpdateOneof::Slot(slot) => {
                 let status = slot.status();
-                // Lifecycle events that name no bank go out as they land, at every commitment.
+                // FirstShredReceived, Completed and Dead go out as they land, at every commitment.
                 if matches!(
                     status,
                     SlotStatus::SlotFirstShredReceived

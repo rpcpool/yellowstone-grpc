@@ -362,7 +362,7 @@ impl GeyserPlugin for Plugin {
                     // They used to go straight to block reconstruction and could overtake everything still queued in geyser_loop:
                     //
                     // 1. A Dead for an older bank discarded the new bank whose status overtook it.
-                    //    Dead names a slot, not a bank, so it discards every bank registered for that slot.
+                    //    Block reconstruction discards every bank registered for the Dead's slot.
                     //
                     //    slot 9 ◄── slot 10
                     //               ├── b1   replay fails → Dead(10)
@@ -419,9 +419,15 @@ impl GeyserPlugin for Plugin {
                     //    result          slot 10 is never delivered at Confirmed
                     inner.send_message(message.clone());
                 }
-                variant @ (SlotStatus::FirstShredReceived
-                | SlotStatus::Dead(_)
-                | SlotStatus::Completed) => {
+                SlotStatus::Dead(_) => {
+                    // geyser_loop broadcasts it at processed, and block reconstruction discards the slot's banks.
+                    // Confirmed and finalized subscribers get it here, as it lands.
+                    inner.send_message(message.clone());
+                    let messages = Arc::new(vec![message.clone()]);
+                    inner.send_broadcast_message(CommitmentLevel::Confirmed, Arc::clone(&messages));
+                    inner.send_broadcast_message(CommitmentLevel::Finalized, messages);
+                }
+                variant @ (SlotStatus::FirstShredReceived | SlotStatus::Completed) => {
                     unreachable!(
                         "variant {:?} is expected to be emitted from `update_slot_status`",
                         variant
@@ -462,7 +468,7 @@ impl GeyserPlugin for Plugin {
             match status {
                 // geyser_loop broadcasts them at processed. They name no bank, so confirmed and
                 // finalized subscribers get them here, as they land, to follow the slot's life.
-                SlotStatus::FirstShredReceived | SlotStatus::Completed | SlotStatus::Dead(_) => {
+                SlotStatus::FirstShredReceived | SlotStatus::Completed => {
                     let messages = Arc::new(vec![message.clone()]);
                     inner.send_broadcast_message(CommitmentLevel::Confirmed, Arc::clone(&messages));
                     inner.send_broadcast_message(CommitmentLevel::Finalized, messages);
@@ -470,7 +476,8 @@ impl GeyserPlugin for Plugin {
                 variant @ (SlotStatus::Processed
                 | SlotStatus::Confirmed
                 | SlotStatus::Rooted
-                | SlotStatus::CreatedBank) => {
+                | SlotStatus::CreatedBank
+                | SlotStatus::Dead(_)) => {
                     unreachable!(
                         "variant {:?} expected to be emitted from `update_bank_status`",
                         variant
