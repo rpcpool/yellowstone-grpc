@@ -276,6 +276,15 @@ impl<'de> Deserialize<'de> for GrpcAddresses {
     }
 }
 
+/// The gRPC server's settings, the `grpc` section of the plugin config. A missing key takes its
+/// default, and an unknown key fails to load.
+///
+/// # Examples
+///
+/// ```ignore
+/// let config_grpc: ConfigGrpc = serde_json::from_str(r#"{"filter_apply_interval": "1s"}"#)?;
+/// assert_eq!(config_grpc.filter_apply_interval, Duration::from_secs(1));
+/// ```
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigGrpc {
@@ -371,6 +380,30 @@ pub struct ConfigGrpc {
         with = "humantime_serde"
     )]
     pub filter_names_cleanup_interval: Duration,
+    /// The shortest time between two filter changes applied for one client. A later change sent
+    /// sooner waits, and the newest waiting one applies. A change sent during a `from_slot`
+    /// replay or a startup snapshot also waits until it ends. The first request that asks for
+    /// something, and pings, apply at once. `0s` applies every change at once, or at the end of
+    /// the replay or snapshot it was sent during.
+    #[serde(
+        default = "ConfigGrpc::default_filter_apply_interval",
+        with = "humantime_serde"
+    )]
+    pub filter_apply_interval: Duration,
+    /// The shortest time between two slices of an owner's index work, which claims and releases
+    /// route keys for route changes. `0s` lets a slice run in every pass.
+    #[serde(
+        default = "ConfigGrpc::default_route_index_interval",
+        with = "humantime_serde"
+    )]
+    pub route_index_interval: Duration,
+    /// The longest one slice of index work runs, plus one step of 64 route keys. `0s` runs one
+    /// step per slice.
+    #[serde(
+        default = "ConfigGrpc::default_route_index_budget",
+        with = "humantime_serde"
+    )]
+    pub route_index_budget: Duration,
     /// Number of slots stored for re-broadcast (replay)
     #[serde(
         default = "ConfigGrpc::default_replay_stored_slots",
@@ -646,6 +679,33 @@ impl ConfigGrpc {
 
     const fn default_filter_names_cleanup_interval() -> Duration {
         Duration::from_secs(1)
+    }
+
+    /// The default [`ConfigGrpc::filter_apply_interval`].
+    ///
+    /// # Returns
+    ///
+    /// 5 s.
+    const fn default_filter_apply_interval() -> Duration {
+        Duration::from_secs(5)
+    }
+
+    /// The default [`ConfigGrpc::route_index_interval`].
+    ///
+    /// # Returns
+    ///
+    /// 1 ms.
+    const fn default_route_index_interval() -> Duration {
+        Duration::from_millis(1)
+    }
+
+    /// The default [`ConfigGrpc::route_index_budget`].
+    ///
+    /// # Returns
+    ///
+    /// 100 µs.
+    const fn default_route_index_budget() -> Duration {
+        Duration::from_micros(100)
     }
 
     const fn default_replay_stored_slots() -> u64 {
@@ -973,6 +1033,53 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown field"), "{error}");
+    }
+
+    /// A missing `filter_apply_interval` is 5 s, and humantime values such as `0s` parse.
+    #[test]
+    fn filter_apply_interval_defaults_to_5s_and_parses_0s() {
+        let filter_apply_interval = |config_json: &str| {
+            serde_json::from_str::<ConfigGrpc>(config_json)
+                .expect("valid grpc config")
+                .filter_apply_interval
+        };
+        assert_eq!(filter_apply_interval(r#"{}"#), Duration::from_secs(5));
+        assert_eq!(
+            filter_apply_interval(r#"{"filter_apply_interval": "0s"}"#),
+            Duration::ZERO
+        );
+        assert_eq!(
+            filter_apply_interval(r#"{"filter_apply_interval": "250ms"}"#),
+            Duration::from_millis(250)
+        );
+    }
+
+    /// Missing `route_index_interval` and `route_index_budget` keys are 1 ms and 100 µs, and
+    /// humantime values such as `0s`, `2ms` and `250us` parse.
+    #[test]
+    fn route_index_settings_default_to_1ms_and_100us_and_parse() {
+        let route_index_settings = |config_json: &str| {
+            let config_grpc =
+                serde_json::from_str::<ConfigGrpc>(config_json).expect("valid grpc config");
+            (
+                config_grpc.route_index_interval,
+                config_grpc.route_index_budget,
+            )
+        };
+        assert_eq!(
+            route_index_settings(r#"{}"#),
+            (Duration::from_millis(1), Duration::from_micros(100))
+        );
+        assert_eq!(
+            route_index_settings(r#"{"route_index_interval": "0s", "route_index_budget": "0s"}"#),
+            (Duration::ZERO, Duration::ZERO)
+        );
+        assert_eq!(
+            route_index_settings(
+                r#"{"route_index_interval": "2ms", "route_index_budget": "250us"}"#
+            ),
+            (Duration::from_millis(2), Duration::from_micros(250))
+        );
     }
 
     #[test]

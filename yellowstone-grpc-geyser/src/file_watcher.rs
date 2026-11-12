@@ -4,7 +4,7 @@ use {
     std::{
         fmt,
         path::{Path, PathBuf},
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, Weak},
     },
 };
 
@@ -109,7 +109,9 @@ impl fmt::Debug for FileWatcher {
 }
 
 struct FileChangeEvHandler {
-    inner: Arc<Mutex<Inner>>,
+    /// The watcher state, held weakly: the watcher's thread holds this handler, and the state
+    /// holds the watcher.
+    inner: Weak<Mutex<Inner>>,
 }
 
 impl FileChangeEvHandler {
@@ -124,6 +126,16 @@ impl FileChangeEvHandler {
 }
 
 impl EventHandler for FileChangeEvHandler {
+    /// Calls the callback of each registration that a relevant event matches, while a
+    /// [`FileWatcher`] holds the watcher state.
+    ///
+    /// # Arguments
+    ///
+    /// * `event_result` - The event the watcher read, or its error, which is logged.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the watcher state's mutex is poisoned.
     fn handle_event(&mut self, event_result: notify::Result<Event>) {
         match event_result {
             Ok(event) => {
@@ -131,8 +143,11 @@ impl EventHandler for FileChangeEvHandler {
                     return;
                 }
 
+                let Some(watcher_state) = self.inner.upgrade() else {
+                    return;
+                };
                 let registrations_snapshot = {
-                    let guard = self.inner.lock().expect("file watcher mutex poisoned");
+                    let guard = watcher_state.lock().expect("file watcher mutex poisoned");
                     guard.registrations.clone()
                 };
 
@@ -157,7 +172,7 @@ impl FileWatcher {
             next_registration_id: 0,
         }));
         let handler = FileChangeEvHandler {
-            inner: Arc::clone(&inner),
+            inner: Arc::downgrade(&inner),
         };
         // Unless we see a useful case in prod to follow symlinks, we will disable it to avoid potential security issues with symlink attacks.
         let watcher = notify::RecommendedWatcher::new(
@@ -239,16 +254,54 @@ impl FileWatcher {
 #[cfg(test)]
 mod tests {
     use {
-        super::{CallbackRegistration, FileChangeEvHandler, FileWatchHandle, Inner, WatchScope},
+        super::{
+            CallbackRegistration, FileChangeEvHandler, FileWatchHandle, FileWatcher, Inner,
+            WatchScope,
+        },
         notify::{
             event::{AccessKind, AccessMode, CreateKind, DataChange, ModifyKind},
             Event, EventKind,
         },
         std::{
+            fs,
             path::PathBuf,
-            sync::{Arc, Mutex},
+            sync::{mpsc, Arc, Mutex},
+            time::Duration,
         },
     };
+
+    /// Dropping the last [`FileWatcher`] drops its notify watcher, which tells the watcher's
+    /// thread to end, so a plugin unload leaves no watcher thread behind.
+    #[test]
+    fn dropping_the_file_watcher_drops_its_notify_watcher() {
+        let file_watcher = FileWatcher::new().unwrap();
+        let watcher_state = Arc::downgrade(&file_watcher.inner);
+        drop(file_watcher);
+        assert!(watcher_state.upgrade().is_none());
+    }
+
+    /// A live [`FileWatcher`] calls the callback of a watched file when the file changes.
+    #[test]
+    fn a_live_file_watcher_calls_the_callback_of_a_changed_file() {
+        let watched_dir =
+            std::env::temp_dir().join(format!("file-watcher-test-{}", std::process::id()));
+        fs::create_dir_all(&watched_dir).unwrap();
+        let watched_path = watched_dir.join("watched.txt");
+        fs::write(&watched_path, "before").unwrap();
+        let file_watcher = FileWatcher::new().unwrap();
+        let (changed_tx, changed_rx) = mpsc::channel();
+        file_watcher
+            .watch_file(watched_path.clone(), move |_| {
+                let _ = changed_tx.send(());
+            })
+            .unwrap()
+            .forget();
+        fs::write(&watched_path, "after").unwrap();
+        let callback_result = changed_rx.recv_timeout(Duration::from_secs(5));
+        drop(file_watcher);
+        let _ = fs::remove_dir_all(&watched_dir);
+        assert_eq!(callback_result, Ok(()));
+    }
 
     #[test]
     fn file_scope_matches_only_exact_path() {
