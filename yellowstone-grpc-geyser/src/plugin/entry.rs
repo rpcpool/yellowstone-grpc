@@ -3,17 +3,18 @@ use {
         config::Config,
         contact_info::ContactInfoNotification,
         file_watcher::FileWatcher,
-        grpc::{GrpcService, SubscriberChannels},
+        grpc::GrpcService,
         metrics::{self, incr_geyser_event_dropped, PrometheusService},
         plugin::{
             filter::limits::FilterLimits,
             message::{
-                CommitmentLevel, ContactInfoMessage, Message, MessageAccount, MessageBlockFooter,
-                MessageBlockMeta, MessageContactInfo, MessageContactInfoRemoved,
-                MessageDeshredTransaction, MessageDeshredUpdateParent, MessageEntry,
-                MessageEntryUpdateParent, MessageSlot, MessageTransaction,
+                ContactInfoMessage, Message, MessageAccount, MessageBlockFooter, MessageBlockMeta,
+                MessageContactInfo, MessageContactInfoRemoved, MessageDeshredTransaction,
+                MessageDeshredUpdateParent, MessageEntry, MessageEntryUpdateParent, MessageSlot,
+                MessageTransaction,
             },
         },
+        route::BankThreadHandle,
         stream::tokio::BatchStreamUnboundedReceiver,
         version::VERSION,
     },
@@ -42,6 +43,16 @@ use {
     tokio_util::{sync::CancellationToken, task::TaskTracker},
 };
 
+/// A loaded plugin's state: its runtime, and the channels its callbacks feed.
+///
+/// # Examples
+///
+/// ```ignore
+/// // `Plugin::on_load` builds it. A slot status callback then hands its message on:
+/// inner.send_message(message.clone());
+/// inner.send_deshred_message(message.clone());
+/// inner.send_blocks_meta_message(message);
+/// ```
 #[derive(Debug)]
 pub struct PluginInner {
     runtime: Runtime,
@@ -51,11 +62,12 @@ pub struct PluginInner {
     grpc_channel: mpsc::UnboundedSender<Message>, // geyser_loop
     deshred_channel: broadcast::Sender<Message>,  // deshred_client_loop
     contact_info_channel: mpsc::UnboundedSender<ContactInfoNotification>,
-    broadcast_channel: SubscriberChannels, // client_loop
     blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
     plugin_cancellation_token: CancellationToken,
     plugin_task_tracker: TaskTracker,
     file_watcher: Arc<FileWatcher>,
+    /// Stops and joins the bank thread once the runtime has shut down.
+    bank_thread_handle: BankThreadHandle,
 }
 
 impl PluginInner {
@@ -71,11 +83,6 @@ impl PluginInner {
         if let Ok(count) = self.deshred_channel.send(message) {
             metrics::deshred_queue_size_inc(count as i64);
         }
-    }
-
-    // Sends messages to all subscribed clients if their filter matches the message.
-    fn send_broadcast_message(&self, commitment: CommitmentLevel, messages: Arc<Vec<Message>>) {
-        self.broadcast_channel.send(commitment, messages);
     }
 
     // Sends messages to block meta storage
@@ -119,6 +126,28 @@ impl GeyserPlugin for Plugin {
         )
     }
 
+    /// Loads the configuration, then starts the runtime, the [`PrometheusService`] and the
+    /// [`GrpcService`], and keeps the channels the callbacks feed.
+    ///
+    /// # Arguments
+    ///
+    /// * `config_file` - The path of the plugin's configuration file.
+    /// * `is_reload` - Whether the validator is reloading the plugin. A reload takes no
+    ///   snapshot.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` once the services run.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the configuration cannot be loaded, the runtime or the file watcher cannot be
+    /// built, or the Prometheus or gRPC service fails to start. If a service fails to start, it
+    /// cancels the services already started.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a configuration that makes [`GrpcService::create`] panic.
     fn on_load(&mut self, config_file: &str, is_reload: bool) -> PluginResult<()> {
         let config = Config::load_from_file(config_file)?;
         let filter_limits = config.grpc.filter_limits.clone();
@@ -209,16 +238,21 @@ impl GeyserPlugin for Plugin {
             grpc_channel: grpc_channel_tx,
             deshred_channel: grpc_service_result.deshred_broadcast_tx,
             contact_info_channel: grpc_service_result.contact_info_tx,
-            broadcast_channel: grpc_service_result.broadcast,
             blocks_meta_tx: grpc_service_result.blocks_meta_tx,
             plugin_cancellation_token,
             plugin_task_tracker,
             file_watcher,
+            bank_thread_handle: grpc_service_result.bank_thread_handle,
         });
 
         Ok(())
     }
 
+    /// Stops what `on_load` started, before the validator closes the library.
+    ///
+    /// It cancels the services, drops the file watcher, which tells the watcher's thread to end,
+    /// and shuts the runtime down, waiting up to 30 s for its tasks to end. Then it stops and
+    /// joins the bank thread, which ends after its current chore.
     fn on_unload(&mut self) {
         if let Some(inner) = self.inner.take() {
             let number_of_tasks = inner.plugin_task_tracker.len();
@@ -237,6 +271,8 @@ impl GeyserPlugin for Plugin {
             );
             inner.runtime.shutdown_timeout(SHUTDOWN_TIMEOUT);
             log::info!("tokio runtime shut down in {:?}", now.elapsed());
+            // Off the runtime's workers, and bounded even if a task outlived the shutdown.
+            inner.bank_thread_handle.stop_and_join();
             log::info!("plugin shutdown complete");
         }
     }
@@ -441,6 +477,27 @@ impl GeyserPlugin for Plugin {
         })
     }
 
+    /// Hands a slot status that names no bank to geyser_loop, the deshred subscribers and the
+    /// block meta storage.
+    ///
+    /// geyser_loop sends it at processed, and block reconstruction at confirmed and finalized.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The slot.
+    /// * `parent` - The slot's parent, if the validator knows it.
+    /// * `status` - [`SlotStatus::FirstShredReceived`], [`SlotStatus::Completed`] or
+    ///   [`SlotStatus::Dead`].
+    ///
+    /// # Returns
+    ///
+    /// Always `Ok(())`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the plugin is not loaded, or if `status` is one that
+    /// [`GeyserPlugin::update_bank_status`] reports: [`SlotStatus::Processed`],
+    /// [`SlotStatus::Confirmed`], [`SlotStatus::Rooted`] or [`SlotStatus::CreatedBank`].
     fn update_slot_status(
         &self,
         slot: u64,
@@ -454,13 +511,7 @@ impl GeyserPlugin for Plugin {
             inner.send_message(message.clone());
 
             match status {
-                // geyser_loop broadcasts them at processed. They name no bank, so confirmed and
-                // finalized subscribers get them here, as they land, to follow the slot's life.
-                SlotStatus::FirstShredReceived | SlotStatus::Completed | SlotStatus::Dead(_) => {
-                    let messages = Arc::new(vec![message.clone()]);
-                    inner.send_broadcast_message(CommitmentLevel::Confirmed, Arc::clone(&messages));
-                    inner.send_broadcast_message(CommitmentLevel::Finalized, messages);
-                }
+                SlotStatus::FirstShredReceived | SlotStatus::Completed | SlotStatus::Dead(_) => {}
                 variant @ (SlotStatus::Processed
                 | SlotStatus::Confirmed
                 | SlotStatus::Rooted
