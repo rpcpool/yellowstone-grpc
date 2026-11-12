@@ -354,6 +354,21 @@ where
     pub fn current_weight(&self) -> usize {
         self.shared.capacity - self.shared.semaphore.available_permits()
     }
+
+    /// Closes the channel to every sender, then queues `last_item` without waiting for room.
+    ///
+    /// From then on, [`LoadAwareSender::send`] and [`LoadAwareSender::try_send`] fail on every
+    /// clone, including a send that waits for room. The receiver gets what the channel holds,
+    /// then `last_item`, which weighs nothing. The receiver still ends only once every sender
+    /// drops.
+    ///
+    /// # Arguments
+    ///
+    /// * `last_item` - The last item the receiver gets.
+    pub fn close_with(&self, last_item: T) {
+        self.shared.semaphore.close();
+        let _ = self.inner.send((0, last_item));
+    }
 }
 
 impl<T> LoadAwareReceiver<T> {
@@ -553,6 +568,20 @@ mod tests {
             Err(TrySendError::Closed(TestItem(1)))
         ));
         assert!(sender.send(TestItem(1)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn close_with_queues_behind_held_items_and_closes_every_sender() {
+        let (sender, mut receiver) = load_aware_channel(2, TestWeigher);
+        let cloned_sender = sender.clone();
+        sender.send(TestItem(2)).await.unwrap();
+        sender.close_with(TestItem(9));
+        assert!(matches!(
+            cloned_sender.try_send(TestItem(1)),
+            Err(TrySendError::Closed(_))
+        ));
+        assert_eq!(receiver.recv().await, Some(TestItem(2)));
+        assert_eq!(receiver.recv().await, Some(TestItem(9)));
     }
 
     #[tokio::test]

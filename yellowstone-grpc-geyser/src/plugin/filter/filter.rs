@@ -415,6 +415,120 @@ impl Filter {
         self.commitment
     }
 
+    /// The route keys that find every message this filter can match, so an owner's index can
+    /// route its updates.
+    ///
+    /// Each part of the filter needs keys that every message it matches carries:
+    ///
+    /// - an account filter: its `account` list without a cuckoo filter, else a 32-byte memcmp at
+    ///   one of [`INDEXED_MEMCMP_OFFSETS`](crate::route::INDEXED_MEMCMP_OFFSETS), else its `owner`
+    ///   list;
+    /// - a transaction or transaction status filter without `token_accounts`: the smallest of
+    ///   its `account_required` keys, else its `account_include` list without a cuckoo filter;
+    /// - a slot, entry, block meta or block footer filter: its kind's key, and an entry filter
+    ///   with `include_update_parent` the UpdateParent key too.
+    ///
+    /// A message these keys find is only a candidate: [`Filter::get_updates`] makes the exact
+    /// match.
+    ///
+    /// # Returns
+    ///
+    /// The keys, sorted and without repeats, or [`None`] when the filter has a blocks filter, a
+    /// part without such keys, or more than [`MAX_ROUTE_KEYS`](crate::route::MAX_ROUTE_KEYS)
+    /// distinct keys. A key that several parts list counts once. A filter that asks for nothing
+    /// gets an empty list.
+    pub fn route_keys(&self) -> Option<Vec<crate::route::RouteKey>> {
+        use crate::route::{RouteKey, INDEXED_MEMCMP_OFFSETS, MAX_ROUTE_KEYS};
+
+        /// Appends the route keys of one part of the filter to `route_keys`, unless the part
+        /// alone lists more than [`MAX_ROUTE_KEYS`] keys.
+        ///
+        /// A part lists each of its keys once, so such a part never fits. A key that several
+        /// parts list is appended once per part, and counts once after the final dedup.
+        ///
+        /// # Arguments
+        ///
+        /// * `route_keys` - The route keys so far.
+        /// * `added_route_keys` - The route keys of one part, each listed once.
+        ///
+        /// # Returns
+        ///
+        /// `Some(())` once `added_route_keys` is appended, or [`None`] if it lists more than
+        /// [`MAX_ROUTE_KEYS`] keys.
+        fn try_extend(
+            route_keys: &mut Vec<RouteKey>,
+            added_route_keys: impl ExactSizeIterator<Item = RouteKey>,
+        ) -> Option<()> {
+            (added_route_keys.len() <= MAX_ROUTE_KEYS).then(|| route_keys.extend(added_route_keys))
+        }
+
+        if !self.blocks.filters.is_empty() {
+            return None;
+        }
+        let mut route_keys = Vec::new();
+        for account_aggregate in self.accounts.aggregates() {
+            let memcmp_route_key = account_aggregate
+                .account_state
+                .iter()
+                .flat_map(|account_state| &account_state.memcmp)
+                .filter(|(memcmp_offset, _)| INDEXED_MEMCMP_OFFSETS.contains(memcmp_offset))
+                .find_map(|(memcmp_offset, memcmp_bytes)| {
+                    let memcmp_bytes = memcmp_bytes.as_slice().try_into().ok()?;
+                    Some(RouteKey::Memcmp(*memcmp_offset, memcmp_bytes))
+                });
+            match (
+                &account_aggregate.accounts,
+                &account_aggregate.accounts_cuckoo,
+                memcmp_route_key,
+                &account_aggregate.owners,
+            ) {
+                (Some(account_pubkeys), None, _, _) => try_extend(
+                    &mut route_keys,
+                    account_pubkeys.iter().copied().map(RouteKey::Account),
+                )?,
+                (_, _, Some(memcmp_route_key), _) => route_keys.push(memcmp_route_key),
+                (_, _, None, Some(owner_pubkeys)) => try_extend(
+                    &mut route_keys,
+                    owner_pubkeys.iter().copied().map(RouteKey::Owner),
+                )?,
+                _ => return None,
+            }
+        }
+        let transactions_filters = self.transactions.filters.iter();
+        for (_, txn_filter) in transactions_filters.chain(&self.transactions_status.filters) {
+            if txn_filter.token_accounts.is_some() {
+                return None;
+            }
+            if let Some(min_required_pubkey) = txn_filter.account_required.iter().min() {
+                route_keys.push(RouteKey::Transaction(*min_required_pubkey));
+            } else if !txn_filter.account_include.is_empty() && txn_filter.account_cuckoo.is_none()
+            {
+                let include_pubkeys = txn_filter.account_include.vec.iter().copied();
+                try_extend(&mut route_keys, include_pubkeys.map(RouteKey::Transaction))?;
+            } else {
+                return None;
+            }
+        }
+        if !self.slots.filters.is_empty() {
+            route_keys.push(RouteKey::Slots);
+        }
+        if !self.entries.filters.is_empty() {
+            route_keys.push(RouteKey::Entries);
+        }
+        if !self.entries.update_parent_filters.is_empty() {
+            route_keys.push(RouteKey::UpdateParent);
+        }
+        if !self.blocks_meta.filters.is_empty() {
+            route_keys.push(RouteKey::BlocksMeta);
+        }
+        if !self.block_footer.filters.iter().all(Vec::is_empty) {
+            route_keys.push(RouteKey::BlockFooter);
+        }
+        route_keys.sort_unstable();
+        route_keys.dedup();
+        (route_keys.len() <= MAX_ROUTE_KEYS).then_some(route_keys)
+    }
+
     pub fn get_updates(
         &self,
         message: &Message,
@@ -1403,6 +1517,18 @@ impl FilterAccountsState {
             && self.lamports.is_empty()
     }
 
+    /// Whether an account passes every condition of this state.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The account's data.
+    /// * `lamports` - The account's lamports.
+    ///
+    /// # Returns
+    ///
+    /// `true` if `data` has the required size and token account state, `lamports` passes every
+    /// comparison, and each memcmp's bytes are in `data` at its offset. A memcmp whose range
+    /// ends past `data`, or past the largest `usize`, does not match.
     fn is_match(&self, data: &[u8], lamports: u64) -> bool {
         if matches!(self.datasize, Some(datasize) if data.len() != datasize) {
             return false;
@@ -1413,16 +1539,12 @@ impl FilterAccountsState {
         if self.lamports.iter().any(|f| !f.is_match(lamports)) {
             return false;
         }
-        for (offset, bytes) in self.memcmp.iter() {
-            if data.len() < *offset + bytes.len() {
-                return false;
-            }
-            let data = &data[*offset..*offset + bytes.len()];
-            if data != bytes {
-                return false;
-            }
-        }
-        true
+        self.memcmp.iter().all(|(offset, bytes)| {
+            offset
+                .checked_add(bytes.len())
+                .and_then(|memcmp_end| data.get(*offset..memcmp_end))
+                .is_some_and(|data| data == bytes.as_slice())
+        })
     }
 }
 
@@ -4481,6 +4603,37 @@ mod account_filter_regression_tests {
             false,
         );
         assert!(linear_scan(&over_budget, &miss).is_empty());
+    }
+
+    #[test]
+    fn memcmp_offset_near_usize_max_matches_nothing() {
+        let subscribe_request = SubscribeRequest {
+            accounts: HashMap::from([(
+                "memcmp".to_owned(),
+                SubscribeRequestFilterAccounts {
+                    filters: vec![SubscribeRequestFilterAccountsFilter {
+                        filter: Some(AccountsFilterDataOneof::Memcmp(
+                            SubscribeRequestFilterAccountsFilterMemcmp {
+                                offset: u64::MAX - 1,
+                                data: Some(AccountsFilterMemcmpOneof::Bytes(MEMCMP_BYTES.to_vec())),
+                            },
+                        )),
+                    }],
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        let overflow_filter =
+            crate::plugin::filter::fixtures::filter_from_request(&subscribe_request);
+        let token_account = account_info(
+            Pubkey::new_from_array([1; 32]),
+            Pubkey::new_from_array([2; 32]),
+            valid_token_data(),
+            1,
+            false,
+        );
+        assert!(sorted_matches(&overflow_filter, token_account).is_empty());
     }
 }
 

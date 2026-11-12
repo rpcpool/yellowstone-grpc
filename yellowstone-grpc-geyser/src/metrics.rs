@@ -469,6 +469,21 @@ pub fn incr_geyser_untrack_slot_event_dropped() {
     GEYSER_UNTRACK_SLOT_EVENT_DROPPED.inc();
 }
 
+/// The counter of updates sent under one subscriber id, to keep and bump without a label lookup
+/// per update.
+///
+/// # Arguments
+///
+/// * `subscriber_id` - The subscriber id whose updates it counts.
+///
+/// # Returns
+///
+/// The `yellowstone_grpc_geyser_message_sent_count` counter for `subscriber_id`, the one
+/// [`incr_grpc_message_sent_counter`] bumps.
+pub fn grpc_message_sent_counter(subscriber_id: &str) -> IntCounter {
+    GRPC_MESSAGE_SENT.with_label_values(&[subscriber_id])
+}
+
 pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
     GRPC_MESSAGE_SENT
         .with_label_values(&[remote_id.as_ref()])
