@@ -10,6 +10,17 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-11-10
+
+- yellowstone-grpc-geyser 17.0.1
+
+### Misc 
+
+- plugin: updating base geyser version
+- plugin: a subscribe request fails with `InvalidArgument` when a memcmp offset plus its data length overflows, or when an accounts data slice offset plus its length overflows. The plugin used to accept such a data slice and disconnect the client when it encoded the next account update. [#941](https://github.com/rpcpool/yellowstone-grpc/pull/941)
+
+## 2026-11-05
+
 - yellowstone-grpc-geyser 17.0.0
 
 ### Fixes
