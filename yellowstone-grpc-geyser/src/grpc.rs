@@ -336,10 +336,7 @@ pub enum BlockReconstructionMessage {
 
 pub type BroadcastedMessage = Arc<Vec<Message>>;
 
-/// Weighs a Subscribe queue update. Errors weigh `1`.
-///
-/// Under [`WeightScales::default`] an account counts `1` plus one per 4 KiB of data, a block
-/// counts `1` plus its transactions and accounts, and other updates count `1`.
+/// Weighs a Subscribe queue update with `WeightScales::update_weight`. Errors weigh `1`.
 impl Weigher for WeightScales {
     type Item = TonicResult<FilteredUpdate>;
 
@@ -3205,7 +3202,10 @@ mod tests {
         crate::{
             plugin::{
                 filter::{
-                    encoder::TransactionEncoder, fixtures, limits::FilterLimits, name::FilterNames,
+                    encoder::TransactionEncoder,
+                    fixtures,
+                    limits::FilterLimits,
+                    name::{FilterName, FilterNames},
                     Filter, FilterAccountsDataSlice,
                 },
                 message::MessageTransaction,
@@ -3627,6 +3627,42 @@ mod tests {
             1 + 4 * units(10 * len)
         );
         assert_eq!(count_only.weight(&Ok(block_update)), 1 + 4 * 10);
+    }
+
+    #[test]
+    fn filter_names_add_weight() {
+        let weight_scales = WeightScales {
+            account: 4,
+            ..WeightScales::default()
+        };
+        let names_unweighted = WeightScales {
+            filter_name_data_unit: 0,
+            ..weight_scales
+        };
+        let update_with_names = |name_count: usize, update_message: FilteredUpdateOneof| {
+            let filter_names = vec![FilterName::new("a".repeat(128)); name_count];
+            Ok(FilteredUpdate::new(
+                filter_names.into(),
+                update_message,
+                Timestamp::default(),
+            ))
+        };
+        let account_with_names = |name_count: usize| {
+            let account_message = FilteredUpdateOneof::account(
+                fixtures::simple_message_account(Pubkey::default(), Pubkey::default()),
+                FilterAccountsDataSlice::default(),
+            );
+            update_with_names(name_count, account_message)
+        };
+
+        // One unit per 1024 bytes of filter names, added after the update kind's scale.
+        assert_eq!(weight_scales.weight(&account_with_names(7)), 4);
+        assert_eq!(weight_scales.weight(&account_with_names(8)), 4 + 1);
+        assert_eq!(weight_scales.weight(&account_with_names(100)), 4 + 12);
+        let status_message = FilteredUpdateOneof::transaction_status(test_transaction());
+        let status_with_names = update_with_names(16, status_message);
+        assert_eq!(weight_scales.weight(&status_with_names), 1 + 2);
+        assert_eq!(names_unweighted.weight(&account_with_names(100)), 4);
     }
 
     #[tokio::test]

@@ -10,6 +10,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-11-16
+
+- yellowstone-grpc-geyser 17.0.2
+
+### Features
+
+- plugin: filter names count in the weight of a Subscribe queue update. An update weighs one more unit per `grpc.capacities.weight_filter_name_data_unit` bytes of its filter names, on top of its scaled weight. The default is `1024`, and `0` turns it off. An update that matched many filters with long names used to weigh the same as an update with no names.
+
 ## 2026-11-10
 
 - yellowstone-grpc-geyser 17.0.1

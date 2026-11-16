@@ -3,7 +3,10 @@ use {
         billing::REPORT_INTERVAL,
         plugin::filter::{
             limits::FilterLimits,
-            message::{WeightScales, DEFAULT_ACCOUNT_DATA_UNIT, DEFAULT_TRANSACTION_DATA_UNIT},
+            message::{
+                WeightScales, DEFAULT_ACCOUNT_DATA_UNIT, DEFAULT_FILTER_NAME_DATA_UNIT,
+                DEFAULT_TRANSACTION_DATA_UNIT,
+            },
         },
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
@@ -700,6 +703,9 @@ impl ConfigGrpc {
                 transaction_data_unit: capacities
                     .weight_transaction_data_unit
                     .unwrap_or(DEFAULT_TRANSACTION_DATA_UNIT),
+                filter_name_data_unit: capacities
+                    .weight_filter_name_data_unit
+                    .unwrap_or(DEFAULT_FILTER_NAME_DATA_UNIT),
             },
         }
     }
@@ -755,6 +761,10 @@ pub struct ConfigGrpcCapacities {
     pub weight_account_data_unit: Option<usize>,
     #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
     pub weight_transaction_data_unit: Option<usize>,
+    /// Bytes of filter names that add one unscaled weight unit to a Subscribe queue update.
+    /// Defaults to `1024`; `0` turns it off.
+    #[serde(default, deserialize_with = "deserialize_int_str_maybe")]
+    pub weight_filter_name_data_unit: Option<usize>,
 }
 
 /// Queue capacities and update weights after [`ConfigGrpc::resolved_capacities`] applies the
@@ -964,6 +974,26 @@ mod tests {
         );
         assert_eq!(off.account_data_unit, 0);
         assert_eq!(off.transaction_data_unit, 0);
+    }
+
+    #[test]
+    fn filter_name_data_unit_defaults_to_1024_and_zero_turns_it_off() {
+        let filter_name_data_unit = |config_json: &str| {
+            serde_json::from_str::<ConfigGrpc>(config_json)
+                .expect("valid grpc config")
+                .resolved_capacities()
+                .weight_scales
+                .filter_name_data_unit
+        };
+        assert_eq!(filter_name_data_unit(r#"{}"#), 1024);
+        assert_eq!(
+            filter_name_data_unit(r#"{"capacities": {"weight_filter_name_data_unit": "2_048"}}"#),
+            2048
+        );
+        assert_eq!(
+            filter_name_data_unit(r#"{"capacities": {"weight_filter_name_data_unit": 0}}"#),
+            0
+        );
     }
 
     #[test]
