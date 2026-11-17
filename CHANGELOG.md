@@ -10,6 +10,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Features
+
+- plugin: `listen[].tls` accepts `max_fragment_size`, the largest TLS record the server sends, in bytes, including the 5-byte header. When it is not set, records stay at the rustls default of up to 16 KiB. A value outside 32 to 16389 fails the plugin load.
+
 ## 2026-11-10
 
 - yellowstone-grpc-geyser 17.0.1

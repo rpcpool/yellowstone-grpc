@@ -91,6 +91,17 @@ Both forms accept an optional `watch_file` flag (default `false`). When `true`, 
 }
 ```
 
+Both forms also accept an optional `max_fragment_size`: the largest TLS record the server sends, in bytes, including the 5-byte record header (32 to 16389). When it is not set, rustls sends records of up to 16 KiB. A client can decrypt an update only after the whole record that holds it arrives. With `1400`, each record is about 1,420 bytes on the wire and fits in one TCP segment on a path with a 1,500-byte MTU.
+
+```json
+{
+   "tls": {
+      "cert_dir": "/etc/yellowstone/certs",
+      "max_fragment_size": 1400
+   }
+}
+```
+
 Notes:
 
 - TLS is ignored for Unix domain sockets.
