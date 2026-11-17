@@ -55,7 +55,7 @@ use {
         pin::Pin,
         sync::{
             atomic::{AtomicU64, AtomicUsize, Ordering},
-            Arc, Mutex as StdMutex,
+            Arc, Mutex as StdMutex, PoisonError,
         },
         task::{Context, Poll},
         time::SystemTime,
@@ -646,7 +646,7 @@ impl Drop for SubscriptionOwnedPermit {
             let mut tracker = inner
                 .counters
                 .lock()
-                .expect("subscription_tracker mutex poisoned");
+                .unwrap_or_else(PoisonError::into_inner);
             if let Some(count) = tracker.get_mut(&self.key) {
                 *count = count.saturating_sub(1);
                 if *count == 0 {
@@ -671,11 +671,7 @@ impl SubscriptionTracker {
     /// Otherwise, it increments the count and returns a [`SubscriptionOwnedPermit`] that will decrement the count when dropped.
     ///
     pub fn try_insert(&self, subscriber_id: String) -> Result<SubscriptionOwnedPermit, ()> {
-        let mut tracker = self
-            .counters
-            .lock()
-            .map_err(|_| ())
-            .expect("subscription_tracker mutex poisoned");
+        let mut tracker = self.counters.lock().unwrap_or_else(PoisonError::into_inner);
         let count = tracker.entry(subscriber_id.clone()).or_insert(0);
         if *count >= self.subscription_limit.get() {
             subscription_limit_exceeded_inc(&subscriber_id);
@@ -4202,6 +4198,48 @@ mod tests {
             );
         }
         assert!(tracker.counters.lock().unwrap().get("sub-1").is_none());
+    }
+
+    #[test]
+    fn test_subscription_tracker_survives_colliding_subscriber_ids() {
+        // Same FNV-1a-64 hash, so prometheus keys both ids to one gauge child.
+        const COLLIDING_SUBSCRIBER_ID_A: &str = "sub-936f43f9a9acf07b";
+        const COLLIDING_SUBSCRIBER_ID_B: &str = "sub-37a15883b1b600c5";
+        let subscription_tracker = SubscriptionTracker::new(NonZeroUsize::new(1).unwrap(), true);
+        let first_colliding_permit = subscription_tracker
+            .try_insert(COLLIDING_SUBSCRIBER_ID_A.to_owned())
+            .unwrap();
+        let second_colliding_permit = subscription_tracker
+            .try_insert(COLLIDING_SUBSCRIBER_ID_B.to_owned())
+            .unwrap();
+
+        drop(first_colliding_permit);
+        drop(second_colliding_permit);
+
+        assert!(subscription_tracker
+            .try_insert(COLLIDING_SUBSCRIBER_ID_A.to_owned())
+            .is_ok());
+        assert!(subscription_tracker
+            .try_insert(COLLIDING_SUBSCRIBER_ID_B.to_owned())
+            .is_ok());
+    }
+
+    #[test]
+    fn test_subscription_tracker_recovers_from_poisoned_lock() {
+        let subscription_tracker = SubscriptionTracker::new(NonZeroUsize::new(1).unwrap(), true);
+        let only_slot_permit = subscription_tracker
+            .try_insert("poisoned-tracker".to_owned())
+            .unwrap();
+        let _ = std::panic::catch_unwind(|| {
+            let _counters_guard = subscription_tracker.counters.lock().unwrap();
+            panic!("poison the subscription tracker");
+        });
+        assert!(subscription_tracker.counters.is_poisoned());
+
+        drop(only_slot_permit);
+        assert!(subscription_tracker
+            .try_insert("poisoned-tracker".to_owned())
+            .is_ok());
     }
 
     mod from_slot_partial_slot {

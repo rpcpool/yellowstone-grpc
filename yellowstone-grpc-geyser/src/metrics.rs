@@ -638,9 +638,10 @@ pub fn set_grpc_concurrent_subscribe_per_subscriber_id<S: AsRef<str>>(subscriber
 }
 
 pub fn remove_grpc_concurrent_subscribe_per_subscriber_id<S: AsRef<str>>(subscriber_id: S) {
+    // Prometheus keys children by label hash, so a colliding id or a reset can remove it first.
     GRPC_CONCURRENT_SUBSCRIBE_PER_SUBSCRIBER_ID
         .remove_label_values(&[subscriber_id.as_ref()])
-        .expect("remove_label_values");
+        .ok();
 }
 
 /// Reset all metrics on plugin unload to prevent metric accumulation across plugin lifecycle
