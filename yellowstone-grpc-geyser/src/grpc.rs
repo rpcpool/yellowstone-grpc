@@ -991,6 +991,17 @@ pub enum TlsConfigLoadError {
     Notify(#[from] notify::Error),
 }
 
+/// Sets the TLS record size limit. rustls checks the value only when a connection starts,
+/// so a test connection checks it here and a bad value fails the load.
+fn set_max_fragment_size(
+    server_config: &mut ServerConfig,
+    max_fragment_size: Option<usize>,
+) -> Result<(), rustls::Error> {
+    server_config.max_fragment_size = max_fragment_size;
+    rustls::ServerConnection::new(Arc::new(server_config.clone()))?;
+    Ok(())
+}
+
 ///
 /// Loads TLS server configuration from the given `GrpcTlsConfig`. This is used for both the legacy `tls_config` field and the new `listen[].tls` field in the configuration. The `listen[].tls` field takes precedence over the legacy `tls_config` if both are set.
 ///
@@ -1002,6 +1013,7 @@ fn load_server_config_from_tls_config(
         GrpcTlsConfig::IdentityPair {
             identity,
             watch_file,
+            max_fragment_size,
         } => {
             let certified_key =
                 build_identity_certified_key(&identity.cert_path, &identity.key_path)?;
@@ -1013,6 +1025,7 @@ fn load_server_config_from_tls_config(
                 );
             // gRPC over TLS requires ALPN negotiation for HTTP/2.
             server_config.alpn_protocols = vec![b"h2".to_vec()];
+            set_max_fragment_size(&mut server_config, *max_fragment_size)?;
 
             if *watch_file {
                 let watched_identity = identity.clone();
@@ -1076,6 +1089,7 @@ fn load_server_config_from_tls_config(
         GrpcTlsConfig::CertDir {
             cert_dir,
             watch_file,
+            max_fragment_size,
         } => {
             let resolver = build_sni_resolver_from_cert_dir(cert_dir.clone())?;
             let hot_resolver = Arc::new(HotResolvesServerCertUsingSni::from(resolver));
@@ -1086,6 +1100,7 @@ fn load_server_config_from_tls_config(
                 );
             // gRPC over TLS requires ALPN negotiation for HTTP/2.
             server_config.alpn_protocols = vec![b"h2".to_vec()];
+            set_max_fragment_size(&mut server_config, *max_fragment_size)?;
 
             if *watch_file {
                 let watched_cert_dir = cert_dir.clone();
@@ -3237,6 +3252,25 @@ mod tests {
             }],
             ..Default::default()
         }));
+    }
+
+    /// A TLS record size outside 32 to 16389 bytes fails the load instead of every handshake.
+    #[test]
+    fn set_max_fragment_size_checks_the_rustls_range() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let mut server_config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(rustls::server::ResolvesServerCertUsingSni::new()));
+        for size in [None, Some(32), Some(1400), Some(16389)] {
+            set_max_fragment_size(&mut server_config, size).expect("size in range");
+            assert_eq!(server_config.max_fragment_size, size);
+        }
+        for size in [Some(0), Some(31), Some(16390)] {
+            assert!(matches!(
+                set_max_fragment_size(&mut server_config, size),
+                Err(rustls::Error::BadMaxFragmentSize)
+            ));
+        }
     }
 
     /// An oversized first, later or compressed request gets `ResourceExhausted` with the limit,

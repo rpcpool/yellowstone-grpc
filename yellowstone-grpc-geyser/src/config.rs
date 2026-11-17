@@ -426,12 +426,20 @@ pub enum GrpcTlsConfig {
         identity: TlsIdentityPair,
         #[serde(default)]
         watch_file: bool,
+        /// Largest TLS record sent, in bytes, with the 5-byte header (32 to 16389).
+        /// Unset sends records of up to 16 KiB, the TLS maximum.
+        #[serde(default)]
+        max_fragment_size: Option<usize>,
     },
     /// HAPROXY-like cert directory with `*.pem` files containing the certs and private keys.
     CertDir {
         cert_dir: PathBuf,
         #[serde(default)]
         watch_file: bool,
+        /// Largest TLS record sent, in bytes, with the 5-byte header (32 to 16389).
+        /// Unset sends records of up to 16 KiB, the TLS maximum.
+        #[serde(default)]
+        max_fragment_size: Option<usize>,
     },
 }
 
@@ -875,7 +883,7 @@ where
 mod tests {
     use {
         crate::{
-            config::{ConfigGrpc, GrpcAddress, GrpcAddresses, GrpcCapacities},
+            config::{ConfigGrpc, GrpcAddress, GrpcAddresses, GrpcCapacities, GrpcTlsConfig},
             plugin::filter::message::WeightScales,
         },
         std::{path::Path, time::Duration},
@@ -964,6 +972,36 @@ mod tests {
         );
         assert_eq!(off.account_data_unit, 0);
         assert_eq!(off.transaction_data_unit, 0);
+    }
+
+    #[test]
+    fn listen_tls_reads_max_fragment_size() {
+        let max_fragment_size = |tls: &str| {
+            let json = format!(r#"{{"listen": [{{"address": "127.0.0.1:10443", "tls": {tls}}}]}}"#);
+            let config: ConfigGrpc = serde_json::from_str(&json).expect("valid grpc config");
+            match config.listen.unwrap().remove(0).tls.unwrap() {
+                GrpcTlsConfig::IdentityPair {
+                    max_fragment_size, ..
+                } => ("identity", max_fragment_size),
+                GrpcTlsConfig::CertDir {
+                    max_fragment_size, ..
+                } => ("cert_dir", max_fragment_size),
+            }
+        };
+        assert_eq!(
+            max_fragment_size(r#"{"cert_dir": "/certs", "max_fragment_size": 1400}"#),
+            ("cert_dir", Some(1400))
+        );
+        assert_eq!(
+            max_fragment_size(r#"{"cert_dir": "/certs", "watch_file": true}"#),
+            ("cert_dir", None)
+        );
+        assert_eq!(
+            max_fragment_size(
+                r#"{"identity": {"cert_path": "/c.pem", "key_path": "/k.pem"}, "max_fragment_size": 1465}"#
+            ),
+            ("identity", Some(1465))
+        );
     }
 
     #[test]
