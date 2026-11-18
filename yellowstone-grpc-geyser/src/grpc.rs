@@ -55,7 +55,7 @@ use {
         pin::Pin,
         sync::{
             atomic::{AtomicU64, AtomicUsize, Ordering},
-            Arc, Mutex as StdMutex,
+            Arc, Mutex as StdMutex, PoisonError,
         },
         task::{Context, Poll},
         time::SystemTime,
@@ -336,10 +336,7 @@ pub enum BlockReconstructionMessage {
 
 pub type BroadcastedMessage = Arc<Vec<Message>>;
 
-/// Weighs a Subscribe queue update. Errors weigh `1`.
-///
-/// Under [`WeightScales::default`] an account counts `1` plus one per 4 KiB of data, a block
-/// counts `1` plus its transactions and accounts, and other updates count `1`.
+/// Weighs a Subscribe queue update with `WeightScales::update_weight`. Errors weigh `1`.
 impl Weigher for WeightScales {
     type Item = TonicResult<FilteredUpdate>;
 
@@ -649,7 +646,7 @@ impl Drop for SubscriptionOwnedPermit {
             let mut tracker = inner
                 .counters
                 .lock()
-                .expect("subscription_tracker mutex poisoned");
+                .unwrap_or_else(PoisonError::into_inner);
             if let Some(count) = tracker.get_mut(&self.key) {
                 *count = count.saturating_sub(1);
                 if *count == 0 {
@@ -674,11 +671,7 @@ impl SubscriptionTracker {
     /// Otherwise, it increments the count and returns a [`SubscriptionOwnedPermit`] that will decrement the count when dropped.
     ///
     pub fn try_insert(&self, subscriber_id: String) -> Result<SubscriptionOwnedPermit, ()> {
-        let mut tracker = self
-            .counters
-            .lock()
-            .map_err(|_| ())
-            .expect("subscription_tracker mutex poisoned");
+        let mut tracker = self.counters.lock().unwrap_or_else(PoisonError::into_inner);
         let count = tracker.entry(subscriber_id.clone()).or_insert(0);
         if *count >= self.subscription_limit.get() {
             subscription_limit_exceeded_inc(&subscriber_id);
@@ -3205,7 +3198,10 @@ mod tests {
         crate::{
             plugin::{
                 filter::{
-                    encoder::TransactionEncoder, fixtures, limits::FilterLimits, name::FilterNames,
+                    encoder::TransactionEncoder,
+                    fixtures,
+                    limits::FilterLimits,
+                    name::{FilterName, FilterNames},
                     Filter, FilterAccountsDataSlice,
                 },
                 message::MessageTransaction,
@@ -3627,6 +3623,42 @@ mod tests {
             1 + 4 * units(10 * len)
         );
         assert_eq!(count_only.weight(&Ok(block_update)), 1 + 4 * 10);
+    }
+
+    #[test]
+    fn filter_names_add_weight() {
+        let weight_scales = WeightScales {
+            account: 4,
+            ..WeightScales::default()
+        };
+        let names_unweighted = WeightScales {
+            filter_name_data_unit: 0,
+            ..weight_scales
+        };
+        let update_with_names = |name_count: usize, update_message: FilteredUpdateOneof| {
+            let filter_names = vec![FilterName::new("a".repeat(128)); name_count];
+            Ok(FilteredUpdate::new(
+                filter_names.into(),
+                update_message,
+                Timestamp::default(),
+            ))
+        };
+        let account_with_names = |name_count: usize| {
+            let account_message = FilteredUpdateOneof::account(
+                fixtures::simple_message_account(Pubkey::default(), Pubkey::default()),
+                FilterAccountsDataSlice::default(),
+            );
+            update_with_names(name_count, account_message)
+        };
+
+        // One unit per 1024 bytes of filter names, added after the update kind's scale.
+        assert_eq!(weight_scales.weight(&account_with_names(7)), 4);
+        assert_eq!(weight_scales.weight(&account_with_names(8)), 4 + 1);
+        assert_eq!(weight_scales.weight(&account_with_names(100)), 4 + 12);
+        let status_message = FilteredUpdateOneof::transaction_status(test_transaction());
+        let status_with_names = update_with_names(16, status_message);
+        assert_eq!(weight_scales.weight(&status_with_names), 1 + 2);
+        assert_eq!(names_unweighted.weight(&account_with_names(100)), 4);
     }
 
     #[tokio::test]
@@ -4166,6 +4198,48 @@ mod tests {
             );
         }
         assert!(tracker.counters.lock().unwrap().get("sub-1").is_none());
+    }
+
+    #[test]
+    fn test_subscription_tracker_survives_colliding_subscriber_ids() {
+        // Same FNV-1a-64 hash, so prometheus keys both ids to one gauge child.
+        const COLLIDING_SUBSCRIBER_ID_A: &str = "sub-936f43f9a9acf07b";
+        const COLLIDING_SUBSCRIBER_ID_B: &str = "sub-37a15883b1b600c5";
+        let subscription_tracker = SubscriptionTracker::new(NonZeroUsize::new(1).unwrap(), true);
+        let first_colliding_permit = subscription_tracker
+            .try_insert(COLLIDING_SUBSCRIBER_ID_A.to_owned())
+            .unwrap();
+        let second_colliding_permit = subscription_tracker
+            .try_insert(COLLIDING_SUBSCRIBER_ID_B.to_owned())
+            .unwrap();
+
+        drop(first_colliding_permit);
+        drop(second_colliding_permit);
+
+        assert!(subscription_tracker
+            .try_insert(COLLIDING_SUBSCRIBER_ID_A.to_owned())
+            .is_ok());
+        assert!(subscription_tracker
+            .try_insert(COLLIDING_SUBSCRIBER_ID_B.to_owned())
+            .is_ok());
+    }
+
+    #[test]
+    fn test_subscription_tracker_recovers_from_poisoned_lock() {
+        let subscription_tracker = SubscriptionTracker::new(NonZeroUsize::new(1).unwrap(), true);
+        let only_slot_permit = subscription_tracker
+            .try_insert("poisoned-tracker".to_owned())
+            .unwrap();
+        let _ = std::panic::catch_unwind(|| {
+            let _counters_guard = subscription_tracker.counters.lock().unwrap();
+            panic!("poison the subscription tracker");
+        });
+        assert!(subscription_tracker.counters.is_poisoned());
+
+        drop(only_slot_permit);
+        assert!(subscription_tracker
+            .try_insert("poisoned-tracker".to_owned())
+            .is_ok());
     }
 
     mod from_slot_partial_slot {

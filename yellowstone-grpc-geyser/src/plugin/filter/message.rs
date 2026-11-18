@@ -77,6 +77,9 @@ pub const DEFAULT_ACCOUNT_DATA_UNIT: usize = 4096;
 
 pub const DEFAULT_TRANSACTION_DATA_UNIT: usize = 4096;
 
+/// Bytes of filter names that add one weight unit to an update by default.
+pub const DEFAULT_FILTER_NAME_DATA_UNIT: usize = 1024;
+
 /// Weight of each update kind in a Subscribe queue. Scales below `1` count as `1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WeightScales {
@@ -91,6 +94,8 @@ pub struct WeightScales {
     /// An account counts `1` unit plus one per this many bytes of data. `0` counts it as `1`.
     pub account_data_unit: usize,
     pub transaction_data_unit: usize,
+    /// Adds one unscaled unit per this many bytes of an update's filter names. `0` adds nothing.
+    pub filter_name_data_unit: usize,
 }
 
 impl Default for WeightScales {
@@ -104,6 +109,7 @@ impl Default for WeightScales {
             block: 1,
             account_data_unit: DEFAULT_ACCOUNT_DATA_UNIT,
             transaction_data_unit: DEFAULT_TRANSACTION_DATA_UNIT,
+            filter_name_data_unit: DEFAULT_FILTER_NAME_DATA_UNIT,
         }
     }
 }
@@ -129,6 +135,17 @@ impl WeightScales {
         u32::try_from(extra).unwrap_or(u32::MAX).saturating_add(1)
     }
 
+    fn filter_name_units(&self, filter_names: &[FilterName]) -> u32 {
+        let filter_names_len = filter_names
+            .iter()
+            .map(|filter_name| filter_name.len())
+            .sum::<usize>();
+        let unit_count = filter_names_len
+            .checked_div(self.filter_name_data_unit)
+            .unwrap_or_default();
+        u32::try_from(unit_count).unwrap_or(u32::MAX)
+    }
+
     /// Weighs a [`FilteredUpdate`] with these scales.
     ///
     /// # Arguments
@@ -137,10 +154,15 @@ impl WeightScales {
     ///
     /// # Returns
     ///
-    /// The weight of `update`. Transaction status, block meta, ping and pong updates always
-    /// weigh `1`.
+    /// The weight of `update`'s message plus one unit per `filter_name_data_unit` bytes of its
+    /// filter names. Transaction status, block meta, ping and pong messages weigh `1`.
     pub(crate) fn update_weight(&self, update: &FilteredUpdate) -> u32 {
-        let scale = match &update.message {
+        self.message_weight(&update.message)
+            .saturating_add(self.filter_name_units(&update.filters))
+    }
+
+    fn message_weight(&self, update_message: &FilteredUpdateOneof) -> u32 {
+        let scale = match update_message {
             FilteredUpdateOneof::Account(update) => {
                 return self
                     .account
