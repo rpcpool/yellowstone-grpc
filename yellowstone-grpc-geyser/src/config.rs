@@ -380,6 +380,9 @@ pub struct ConfigGrpc {
         deserialize_with = "deserialize_int_str"
     )]
     pub replay_stored_slots: u64,
+    /// send Processed as soon as the validator reports it, don't wait for the block to seal
+    #[serde(default)]
+    pub processed_immediate: bool,
     #[serde(default)]
     pub server_http2_adaptive_window: Option<bool>,
     #[serde(default, with = "humantime_serde")]

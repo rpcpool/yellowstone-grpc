@@ -522,6 +522,10 @@ struct BroadcastPosition {
     /// slot. A bank sealed but not in here is still waiting for its Processed status, so a
     /// processed replay sends only its data. Pruned below the oldest replayable slot.
     sent_at_processed: HashMap<BankId, Slot>,
+    /// forward Processed before the bank is sealed
+    processed_immediate: bool,
+    /// banks whose Processed already went out early, kept until they seal
+    sent_immediate: HashMap<BankId, Arc<MessageSlot>>,
     /// Processed replays waiting for the next raw batch taken in. See
     /// [`ReplayCut::next_taken_in`].
     waiting_next_taken_in: Vec<oneshot::Sender<BroadcastedMessage>>,
@@ -1388,12 +1392,13 @@ impl GrpcService {
             let broadcast = broadcast.clone();
 
             task_tracker.spawn(async move {
-                Self::block_reconstruction_loop(
+                Self::block_reconstruction_loop_with(
                     BatchStreamUnboundedReceiver::new(block_reconstruction_rx),
                     broadcast,
                     replay_stored_slots_rx,
                     replay_first_available_slot,
                     config.replay_stored_slots,
+                    config.processed_immediate,
                 )
                 .await;
             });
@@ -1638,8 +1643,9 @@ impl GrpcService {
         }
     }
 
+    #[cfg(test)]
     async fn block_reconstruction_loop<St>(
-        mut messages_rx: St,
+        messages_rx: St,
         broadcast: SubscriberChannels,
         replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
         replay_first_available_slot: Option<Arc<AtomicU64>>,
@@ -1647,11 +1653,35 @@ impl GrpcService {
     ) where
         St: BatchStream<Item = BlockReconstructionMessage> + Unpin + Send + 'static,
     {
+        Self::block_reconstruction_loop_with(
+            messages_rx,
+            broadcast,
+            replay_stored_slots_rx,
+            replay_first_available_slot,
+            replay_stored_slots,
+            false,
+        )
+        .await
+    }
+
+    async fn block_reconstruction_loop_with<St>(
+        mut messages_rx: St,
+        broadcast: SubscriberChannels,
+        replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
+        replay_first_available_slot: Option<Arc<AtomicU64>>,
+        replay_stored_slots: u64,
+        processed_immediate: bool,
+    ) where
+        St: BatchStream<Item = BlockReconstructionMessage> + Unpin + Send + 'static,
+    {
         let (_tx, rx) = mpsc::channel(1);
         let mut replay_stored_slots_rx = replay_stored_slots_rx.unwrap_or(rx);
 
         let mut block_machine = BlockMachineStorage::new(replay_stored_slots as usize);
-        let mut position = BroadcastPosition::default();
+        let mut position = BroadcastPosition {
+            processed_immediate,
+            ..Default::default()
+        };
 
         const BUFFERED_MESSAGES_CAPACITY: usize = 1024;
         let mut buffered_messages = Vec::with_capacity(BUFFERED_MESSAGES_CAPACITY);
@@ -1774,6 +1804,10 @@ impl GrpcService {
                         for (_, bank_id, messages) in unsealed {
                             bank_id_span.get_or_insert(BankSpan::new(bank_id)).include(bank_id);
                             replayed_messages.push(ReplayResponseMessageType::Batch(Arc::new(messages.to_vec()), 0..messages.len()));
+                            // an open bank that already got its early Processed must replay it too
+                            if let Some(status) = position.sent_immediate.get(&bank_id) {
+                                replayed_messages.push(ReplayResponseMessageType::Single(Message::Slot(Arc::clone(status))));
+                            }
                         }
                     }
 
@@ -1839,6 +1873,25 @@ impl GrpcService {
                     // block reconstruction makes of it, it broadcasts itself, under `last_sent`.
                     if let Message::Slot(slot_message) = &message {
                         metrics::update_slot_plugin_status(slot_message.status, slot_message.slot);
+                        // send Processed right away, the seal path below skips it later
+                        if let (true, SlotStatus::Processed, Some(bank_id)) = (
+                            position.processed_immediate,
+                            slot_message.status,
+                            slot_message.bank_id,
+                        ) {
+                            if !position.sent_at_processed.contains_key(&bank_id)
+                                && !position.sent_immediate.contains_key(&bank_id)
+                            {
+                                position
+                                    .sent_immediate
+                                    .insert(bank_id, Arc::clone(slot_message));
+                                position.send(
+                                    broadcast,
+                                    CommitmentLevel::Processed,
+                                    Arc::new(vec![message.clone()]),
+                                );
+                            }
+                        }
                     }
 
                     block_machine.add(message);
@@ -1914,13 +1967,24 @@ impl GrpcService {
                         .collect(),
                 )
             };
-            position.send(broadcast, commitment_level, statuses_so_far);
+            // skip Processed here if it already went out early
+            if commitment_level != CommitmentLevel::Processed
+                || position
+                    .sent_immediate
+                    .remove(&slot_update.bank_id)
+                    .is_none()
+            {
+                position.send(broadcast, commitment_level, statuses_so_far);
+            }
         }
 
         if let Some(min_slot) = block_machine.min_replayable_slot() {
             position
                 .sent_at_processed
                 .retain(|_, slot| *slot >= min_slot);
+            position
+                .sent_immediate
+                .retain(|_, status| status.slot >= min_slot);
         }
     }
 
@@ -4343,6 +4407,128 @@ mod tests {
                 &mut fixtures::filter_names(),
             )
             .unwrap()
+        }
+
+        fn take_in_names(processed_immediate: bool) -> [Vec<&'static str>; 2] {
+            let broadcast = SubscriberChannels::new(64, 64, 64);
+            let mut rx = broadcast.subscribe(CommitmentLevel::Processed);
+            let mut block_machine = BlockMachineStorage::new(100);
+            let mut position = BroadcastPosition {
+                processed_immediate,
+                ..Default::default()
+            };
+            let mut drain = || {
+                let mut names = Vec::new();
+                while let Ok(batch) = rx.try_recv() {
+                    for message in batch.iter() {
+                        names.push(match message {
+                            Message::Block(_) => "block",
+                            Message::BlockMeta(_) => "block_meta",
+                            Message::Slot(slot) if slot.status == SlotStatus::Processed => {
+                                "processed"
+                            }
+                            Message::Slot(slot) if slot.status == SlotStatus::Confirmed => {
+                                "confirmed"
+                            }
+                            _ => "other",
+                        });
+                    }
+                }
+                names
+            };
+            let mut closing = close_slot(PARTIAL_SLOT, 0);
+            let confirmed = closing.pop().unwrap();
+            let processed = closing.pop().unwrap();
+            let block_meta = closing.pop().unwrap();
+            let mut raw = open_slot(PARTIAL_SLOT);
+            raw.extend(closing);
+            GrpcService::take_in(
+                &mut block_machine,
+                &broadcast,
+                &mut position,
+                [
+                    BlockReconstructionMessage::BroadcastBatch(Arc::new(raw)),
+                    BlockReconstructionMessage::SealGated(processed.clone()),
+                ]
+                .into_iter(),
+            );
+            let before_seal = drain();
+            GrpcService::take_in(
+                &mut block_machine,
+                &broadcast,
+                &mut position,
+                [
+                    BlockReconstructionMessage::SealGated(block_meta),
+                    BlockReconstructionMessage::SealGated(processed),
+                    BlockReconstructionMessage::SealGated(confirmed),
+                ]
+                .into_iter(),
+            );
+            assert!(position.sent_immediate.is_empty());
+            [before_seal, drain()]
+        }
+
+        #[test]
+        fn processed_immediate_goes_out_before_the_block_and_once() {
+            assert_eq!(
+                take_in_names(false),
+                [
+                    vec![],
+                    vec!["block", "block_meta", "processed", "confirmed"]
+                ]
+            );
+            assert_eq!(
+                take_in_names(true),
+                [vec!["processed"], vec!["block", "block_meta", "confirmed"]]
+            );
+        }
+
+        #[tokio::test]
+        async fn replay_of_an_open_bank_carries_its_immediate_processed() {
+            let broadcast = SubscriberChannels::new(64, 64, 64);
+            let (queue_tx, queue_rx) = mpsc::unbounded_channel();
+            let (replay_tx, replay_rx) = mpsc::channel(1);
+            queue_tx
+                .send(BlockReconstructionMessage::BroadcastBatch(Arc::new(
+                    open_slot(PARTIAL_SLOT),
+                )))
+                .unwrap();
+            queue_tx
+                .send(BlockReconstructionMessage::SealGated(slot_message(
+                    PARTIAL_SLOT,
+                    SlotStatus::Processed,
+                )))
+                .unwrap();
+            let (response_tx, response_rx) = oneshot::channel();
+            replay_tx
+                .send((CommitmentLevel::Processed, PARTIAL_SLOT, response_tx))
+                .await
+                .unwrap();
+            tokio::spawn(GrpcService::block_reconstruction_loop_with(
+                BatchStreamUnboundedReceiver::new(queue_rx),
+                broadcast,
+                Some(replay_rx),
+                None,
+                150,
+                true,
+            ));
+            let Ok(ReplayedResponse::Messages(replay)) =
+                tokio::time::timeout(Duration::from_secs(5), response_rx)
+                    .await
+                    .expect("no replay within 5s")
+            else {
+                panic!("replay failed");
+            };
+            let statuses: Vec<_> = replay
+                .messages
+                .iter()
+                .flatten()
+                .filter_map(|message| match message {
+                    Message::Slot(slot) => Some(slot.status),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(statuses, [SlotStatus::CreatedBank, SlotStatus::Processed]);
         }
 
         async fn wait_broadcast(
