@@ -100,7 +100,7 @@ jobs:
               cargo --version
               cd yellowstone-grpc-client-nodejs
               npm ci
-              npm run build:napi
+              npm run build
               ls -lh napi/*.node
               node -e "
                 const assert = require(\"node:assert/strict\");
@@ -148,18 +148,23 @@ jobs:
                 );
               "
               npm pack "./$PACKAGE_DIR" --pack-destination "$PACKAGE_DIR"
+              npm pack --pack-destination artifacts
+
               PACKAGE_PATH="$PWD/$PACKAGE_DIR"
+              SDK_PATH="$PWD/artifacts"
               SMOKE_DIR="$(mktemp -d)"
               cd "$SMOKE_DIR"
 
               npm init -y
               npm install --ignore-scripts --no-audit --no-fund \
-                "$PACKAGE_PATH"/*.tgz
+              "$PACKAGE_PATH"/*.tgz "$SDK_PATH"/*.tgz
 
               node -e "
                 const assert = require(\"node:assert/strict\");
                 const name = \"@triton-one/yellowstone-grpc-napi-linux-arm64-\" + process.env.LIBC_TYPE;
-                const binding = require(name);
+                const binding = require(\"@triton-one/yellowstone-grpc/napi\");
+                const sdk = require(\"@triton-one/yellowstone-grpc\");
+                assert.equal(typeof sdk.default, \"function\");
                 const filter = new binding.CompressedAccountFilterSet(16);
                 assert.equal(filter.isEmpty(), true);
                 console.log(\"Installed native package works:\", name);
