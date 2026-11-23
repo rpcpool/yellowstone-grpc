@@ -89,7 +89,7 @@ jobs:
                 apt-get update
                 apt-get install -y --no-install-recommends \
                   build-essential curl ca-certificates \
-                  protobuf-compiler pkg-config libssl-dev
+                  protobuf-compiler libprotobuf-dev pkg-config libssl-dev
               fi
               curl --proto "=https" --tlsv1.2 -sSf \
                 https://sh.rustup.rs -o /tmp/rustup-init.sh
