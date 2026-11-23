@@ -21,7 +21,12 @@ on:
         default: false
 jobs:
   build:
-    needs: build-arm64
+    needs: [build-arm64, publish-arm64]
+    if: >-
+      ${{ !cancelled() &&
+          needs.build-arm64.result == 'success' &&
+          (needs.publish-arm64.result == 'success' ||
+           (!inputs.publish && needs.publish-arm64.result == 'skipped')) }}
     runs-on: ubuntu-22.04
 
     steps:
@@ -34,6 +39,11 @@ jobs:
         with:
           node-version: "24.x"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Resolve published native packages
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+        working-directory: yellowstone-grpc-client-nodejs
 
       - run: npm ci
         working-directory: yellowstone-grpc-client-nodejs
@@ -157,7 +167,7 @@ jobs:
 
               npm init -y
               npm install --ignore-scripts --no-audit --no-fund \
-              "$PACKAGE_PATH"/*.tgz "$SDK_PATH"/*.tgz
+                "$PACKAGE_PATH"/*.tgz "$SDK_PATH"/*.tgz
 
               node -e "
                 const assert = require(\"node:assert/strict\");
@@ -169,10 +179,59 @@ jobs:
                 assert.equal(filter.isEmpty(), true);
                 console.log(\"Installed native package works:\", name);
               "
-              '
+            '
+
       - name: Upload native package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: napi-linux-arm64-${{ matrix.libc }}
           path: yellowstone-grpc-client-nodejs/artifacts/linux-arm64-${{ matrix.libc }}/*.tgz
           if-no-files-found: error
+
+  publish-arm64:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+    needs: build-arm64
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        libc: [gnu, musl]
+    steps:
+      - name: Download tested native package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: napi-linux-arm64-${{ matrix.libc }}
+          path: native-package
+
+      - name: Inspect downloaded package
+        run: |
+          ls -lh native-package/
+          tar -tzf native-package/*.tgz
+
+      - name: Configure npm
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.x"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Read package identity
+        run: |
+          tar -xOf native-package/*.tgz package/package.json > native-package/metadata.json
+          PACKAGE_SPEC=$(node -p 'const p = require("./native-package/metadata.json"); p.name + "@" + p.version')
+          echo "PACKAGE_SPEC=$PACKAGE_SPEC" >> "$GITHUB_ENV"
+
+      - name: Publish native package if missing
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if npm view "$PACKAGE_SPEC" version --json > registry-result.json; then
+            echo "$PACKAGE_SPEC already exists; skipping publication"
+          else
+            node -e '
+              const result = require("./registry-result.json");
+              if (result.error?.code !== "E404") {
+                throw new Error("Registry lookup failed; stopping publication");
+              }
+            '
+            npm publish native-package/*.tgz --access public
+          fi
