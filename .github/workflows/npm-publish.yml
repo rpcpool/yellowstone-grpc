@@ -3,19 +3,28 @@ name: Publish Package to npmjs
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
-on: 
-
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/npm-publish.yml"
+      - "yellowstone-grpc-client-nodejs/**"
+      - "yellowstone-grpc-client/**"
+      - "yellowstone-grpc-proto/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
   workflow_dispatch:
-
+    inputs:
+      publish:
+        description: Publish packages to npm
+        type: boolean
+        default: false
 jobs:
-
   build:
-
+    needs: build-arm64
     runs-on: ubuntu-22.04
 
     steps:
-
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
@@ -23,8 +32,8 @@ jobs:
       # Setup .npmrc file to publish to npm
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '20.x'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: "24.x"
+          registry-url: "https://registry.npmjs.org"
 
       - run: npm ci
         working-directory: yellowstone-grpc-client-nodejs
@@ -33,6 +42,131 @@ jobs:
         working-directory: yellowstone-grpc-client-nodejs
 
       - run: npm publish
+        if: ${{ inputs.publish }}
         working-directory: yellowstone-grpc-client-nodejs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  build-arm64:
+    runs-on: ubuntu-24.04-arm
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - libc: gnu
+            image: node:24-bookworm
+          - libc: musl
+            image: node:24-alpine
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Check container environment
+        env:
+          BUILD_IMAGE: ${{ matrix.image }}
+          LIBC_TYPE: ${{ matrix.libc }}
+        run: |
+          docker run --rm \
+            -e LIBC_TYPE \
+            -v "$GITHUB_WORKSPACE:/work" \
+            -w /work \
+            "$BUILD_IMAGE" \
+            sh -ec '
+              uname -m
+              cat /etc/os-release
+              node --version
+              test -f Cargo.toml
+
+              if [ -f /etc/alpine-release ]; then
+                apk add --no-cache \
+                  build-base curl ca-certificates \
+                  protobuf-dev protoc pkgconf \
+                  openssl-dev openssl-libs-static linux-headers
+              else
+                apt-get update
+                apt-get install -y --no-install-recommends \
+                  build-essential curl ca-certificates \
+                  protobuf-compiler pkg-config libssl-dev
+              fi
+              curl --proto "=https" --tlsv1.2 -sSf \
+                https://sh.rustup.rs -o /tmp/rustup-init.sh
+              sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain none
+
+              . "$HOME/.cargo/env"
+              rustc --version
+              cargo --version
+              cd yellowstone-grpc-client-nodejs
+              npm ci
+              npm run build:napi
+              ls -lh napi/*.node
+              node -e "
+                const assert = require(\"node:assert/strict\");
+                assert.equal(process.arch, \"arm64\");
+                const binding = require(\"./napi/index.js\");
+                const filter = new binding.CompressedAccountFilterSet(16);
+                assert.equal(filter.isEmpty(), true);
+                console.log(\"ARM64 native addon loaded and executed successfully\");
+              "
+              PACKAGE_DIR="artifacts/linux-arm64-$LIBC_TYPE"
+              BINARY_NAME="yellowstone-grpc-napi.linux-arm64-$LIBC_TYPE.node"
+
+              mkdir -p "$PACKAGE_DIR"
+              cp "napi/$BINARY_NAME" "$PACKAGE_DIR/"
+              cp LICENSE_APACHE2 "$PACKAGE_DIR/LICENSE"
+
+              export PACKAGE_DIR BINARY_NAME
+              node -e "
+                const fs = require(\"node:fs\");
+                const sdk = require(\"./package.json\");
+                const native = require(\"./napi/package.json\");
+                const libc = process.env.LIBC_TYPE;
+                const name = \"@triton-one/yellowstone-grpc-napi-linux-arm64-\" + libc;
+
+                if (sdk.optionalDependencies[name] !== native.version) {
+                  throw new Error(\"Native version must match SDK dependency\");
+                }
+
+                const metadata = {
+                  name,
+                  version: native.version,
+                  license: \"Apache-2.0\",
+                  main: process.env.BINARY_NAME,
+                  files: [process.env.BINARY_NAME, \"LICENSE\"],
+                  os: [\"linux\"],
+                  cpu: [\"arm64\"],
+                  libc: [libc === \"gnu\" ? \"glibc\" : \"musl\"],
+                  engines: sdk.engines,
+                  publishConfig: { access: \"public\" }
+                };
+
+                fs.writeFileSync(
+                  process.env.PACKAGE_DIR + \"/package.json\",
+                  JSON.stringify(metadata, null, 2)
+                );
+              "
+              npm pack "./$PACKAGE_DIR" --pack-destination "$PACKAGE_DIR"
+              PACKAGE_PATH="$PWD/$PACKAGE_DIR"
+              SMOKE_DIR="$(mktemp -d)"
+              cd "$SMOKE_DIR"
+
+              npm init -y
+              npm install --ignore-scripts --no-audit --no-fund \
+                "$PACKAGE_PATH"/*.tgz
+
+              node -e "
+                const assert = require(\"node:assert/strict\");
+                const name = \"@triton-one/yellowstone-grpc-napi-linux-arm64-\" + process.env.LIBC_TYPE;
+                const binding = require(name);
+                const filter = new binding.CompressedAccountFilterSet(16);
+                assert.equal(filter.isEmpty(), true);
+                console.log(\"Installed native package works:\", name);
+              "
+              '
+      - name: Upload native package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: napi-linux-arm64-${{ matrix.libc }}
+          path: yellowstone-grpc-client-nodejs/artifacts/linux-arm64-${{ matrix.libc }}/*.tgz
+          if-no-files-found: error

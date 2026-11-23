@@ -45,7 +45,9 @@
     "@triton-one/yellowstone-grpc-napi-darwin-arm64": "0.4.0",
     "@triton-one/yellowstone-grpc-napi-darwin-x64": "0.4.0",
     "@triton-one/yellowstone-grpc-napi-linux-x64-gnu": "0.4.0",
-    "@triton-one/yellowstone-grpc-napi-linux-x64-musl": "0.4.0"
+    "@triton-one/yellowstone-grpc-napi-linux-x64-musl": "0.4.0",
+    "@triton-one/yellowstone-grpc-napi-linux-arm64-gnu": "0.4.0",
+    "@triton-one/yellowstone-grpc-napi-linux-arm64-musl": "0.4.0"
   },
   "devDependencies": {
     "@babel/core": "^8.0.1",
