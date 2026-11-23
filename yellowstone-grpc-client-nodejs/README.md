@@ -267,3 +267,26 @@ When building for local testing at the root of the project where the `Makefile` 
 
 4. Run `client.ts` with an example subscription request below:
 `tsx examples/typescript/src/client.ts --endpoint <ENDPOINT> --x-token <X-TOKEN> --commitment processed subscribe --transactions TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`
+
+### Linux ARM64 packages
+
+The npm workflow builds and tests native packages for Linux ARM64 with
+glibc (Debian) and musl (Alpine). Pull requests produce downloadable npm
+tarballs without publishing them.
+
+For releases, manually run the workflow with `publish` enabled.
+It publishes missing ARM64 native package versions before publishing
+the SDK. This requires npm credentials authorized for the `@triton-one`
+scope.
+
+The native version in `napi/package.json` must match the SDK's optional
+dependencies. Changed native binaries require a new version, existing
+published versions are reused.
+
+After the first ARM64 publication, regenerate and commit the lockfile:
+
+```
+npm install --package-lock-only --ignore-scripts
+```
+This replaces the unpublished optional-package placeholders with
+resolved registry metadata.
