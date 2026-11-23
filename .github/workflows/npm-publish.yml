@@ -84,6 +84,7 @@ jobs:
                   build-base curl ca-certificates \
                   protobuf-dev protoc pkgconf \
                   openssl-dev openssl-libs-static linux-headers
+                export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=gcc
               else
                 apt-get update
                 apt-get install -y --no-install-recommends \
