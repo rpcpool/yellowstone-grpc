@@ -1061,7 +1061,9 @@ impl BlockMachineStorage {
     }
 
     fn evict_slot(&mut self, slot: Slot) {
-        self.replayed_slot.remove(&slot);
+        if let Some(evicted) = self.replayed_slot.remove(&slot) {
+            defer_drop(evicted);
+        }
         if let Some(progression) = self.slot_commitment_progression_map.remove(&slot) {
             if progression.max_commitment == CommitmentLevel::Finalized {
                 self.num_buffered_finalized_slot =
@@ -1132,6 +1134,25 @@ impl BlockMachineStorage {
             bank_id: frozen.bank_id,
         }]
     }
+}
+
+// free evicted banks on a side thread, dropping a whole block inline delays the next statuses
+fn defer_drop(evicted: Vec<Arc<FrozenBank>>) {
+    static TX: std::sync::OnceLock<std::sync::mpsc::Sender<Vec<Arc<FrozenBank>>>> =
+        std::sync::OnceLock::new();
+    let tx = TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<Arc<FrozenBank>>>();
+        std::thread::Builder::new()
+            .name("solGeyserDrop".to_owned())
+            .spawn(move || {
+                for evicted in rx {
+                    drop(evicted);
+                }
+            })
+            .expect("spawn drop thread");
+        tx
+    });
+    let _ = tx.send(evicted);
 }
 
 #[cfg(test)]
