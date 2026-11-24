@@ -34,6 +34,7 @@ use {
             UnitWeigher, Weigher,
         },
         version::GrpcVersionInfo,
+        zero_copy::ZeroCopySubscribe,
     },
     anyhow::Context as _,
     bytesize::ByteSize,
@@ -99,6 +100,7 @@ use {
             metered::{MeteredBandwidthLayer, MeteredManager, DEFAULT_TRAFFIC_REPORTING_THRESHOLD},
             ratelimit::transport::{RateLimitedIncoming, SharedRateLimitTable},
         },
+        write_coalesce::WriteCoalesceIo,
     },
 };
 
@@ -1107,6 +1109,9 @@ fn load_server_config_from_tls_config(
     }
 }
 
+/// The gRPC `Geyser` server, with `Subscribe` streams sent through [`ZeroCopySubscribe`].
+type SubscribeService = ZeroCopySubscribe<GeyserServer<GrpcService>, GrpcService>;
+
 pub struct GrpcServiceResult {
     pub snapshot_tx: Option<crossbeam_channel::Sender<Box<Message>>>,
     pub deshred_broadcast_tx: broadcast::Sender<DeshredBroadcastedMessage>,
@@ -1337,10 +1342,13 @@ impl GrpcService {
         let http2_keepalive_timeout = config.server_http2_keepalive_timeout;
         let initial_connection_window_size = config.server_initial_connection_window_size;
         let initial_stream_window_size = config.server_initial_stream_window_size;
+        let write_coalesce_size = config
+            .server_write_coalesce_size
+            .and_then(|size| NonZeroUsize::new(size.as_u64() as usize));
 
         // Build the shared GeyserServer (Clone-able because GrpcService: Clone)
         let max_decoding_message_size = config.max_decoding_message_size;
-        let mut service = GeyserServer::new(Self {
+        let geyser = Arc::new(Self {
             config_snapshot_client_channel_capacity: config.snapshot_client_channel_capacity,
             geyser_subscriber_weight_capacity: capacities.geyser_subscriber_weight,
             deshred_subscriber_channel_capacity: capacities.deshred_subscriber,
@@ -1365,14 +1373,22 @@ impl GrpcService {
             filter_name_size_limit: config.filter_name_size_limit,
             filter_names_size_limit: config.filter_names_size_limit,
             filter_names_cleanup_interval: config.filter_names_cleanup_interval,
-        })
-        .max_decoding_message_size(max_decoding_message_size);
+        });
+        let mut server = GeyserServer::from_arc(Arc::clone(&geyser))
+            .max_decoding_message_size(max_decoding_message_size);
         for encoding in config.compression.accept {
-            service = service.accept_compressed(encoding);
+            server = server.accept_compressed(encoding);
         }
-        for encoding in config.compression.send {
-            service = service.send_compressed(encoding);
+        for encoding in &config.compression.send {
+            server = server.send_compressed(*encoding);
         }
+        let service = ZeroCopySubscribe::new(
+            server,
+            geyser,
+            config.server_zero_copy_subscribe,
+            Some(max_decoding_message_size),
+            &config.compression.send,
+        );
 
         let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
 
@@ -1464,6 +1480,7 @@ impl GrpcService {
                                 http2_keepalive_timeout,
                                 initial_connection_window_size,
                                 initial_stream_window_size,
+                                write_coalesce_size,
                                 built_service,
                                 shutdown.clone(),
                             )
@@ -2367,7 +2384,7 @@ impl GrpcService {
     fn build_service<H>(
         health_service: HealthServer<H>,
         x_token: Option<AsciiMetadataValue>,
-        service: GeyserServer<GrpcService>,
+        service: SubscribeService,
         traffic_reporting_threshold: ByteSize,
         auth: Option<AuthConfig>,
     ) -> anyhow::Result<tonic::service::Routes>
@@ -2502,6 +2519,7 @@ impl GrpcService {
         http2_keepalive_timeout: Option<Duration>,
         initial_connection_window_size: Option<u32>,
         initial_stream_window_size: Option<u32>,
+        write_coalesce_size: Option<NonZeroUsize>,
         service: tonic::service::Routes,
         shutdown: CancellationToken,
     ) -> anyhow::Result<()>
@@ -2526,6 +2544,10 @@ impl GrpcService {
         if let Some(sz) = initial_stream_window_size {
             builder = builder.initial_stream_window_size(sz);
         }
+
+        let incoming = futures::StreamExt::map(incoming, move |io| {
+            io.map(|io| WriteCoalesceIo::new(io, write_coalesce_size))
+        });
 
         builder
             .serve_with_incoming_shutdown(service, incoming, shutdown.cancelled())
@@ -3235,6 +3257,100 @@ mod tests {
         }));
     }
 
+    /// A client gets a large account update intact, and in one piece, over the zero-copy
+    /// `Subscribe` path of a running server.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn zero_copy_subscribe_delivers_a_large_account_intact() {
+        use {
+            crate::{
+                file_watcher::FileWatcher, plugin::filter::fixtures,
+                stream::tokio::BatchStreamUnboundedReceiver,
+            },
+            std::collections::HashMap,
+            yellowstone_grpc_proto::prelude::{
+                geyser_client::GeyserClient, subscribe_update::UpdateOneof,
+                SubscribeRequestFilterAccounts,
+            },
+        };
+
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        // Rare race: if create() fails with AddrInUse, another process took this port first; rerun.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let config = serde_json::json!({
+            "listen": [{ "address": format!("127.0.0.1:{port}") }],
+            "server_zero_copy_subscribe": true,
+        });
+        let config: crate::config::ConfigGrpc = serde_json::from_str(&config.to_string()).unwrap();
+        let (messages_tx, messages_rx) = mpsc::unbounded_channel();
+        let _service = GrpcService::create(
+            config,
+            false,
+            CancellationToken::new(),
+            TaskTracker::new(),
+            Arc::new(FileWatcher::new().unwrap()),
+            BatchStreamUnboundedReceiver::new(messages_rx),
+        )
+        .await
+        .unwrap();
+
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let (pubkey, owner) = (Pubkey::new_unique(), Pubkey::new_unique());
+        let request = SubscribeRequest {
+            accounts: HashMap::from([(
+                "large".to_owned(),
+                SubscribeRequestFilterAccounts {
+                    account: vec![pubkey.to_string()],
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        let requests =
+            futures::StreamExt::chain(futures::stream::iter([request]), futures::stream::pending());
+        let mut updates = GeyserClient::new(channel)
+            .subscribe(Request::new(requests))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let data: Vec<u8> = (0..200_000u32).map(|byte| byte as u8).collect();
+        // The filter applies asynchronously, so the account is sent again until it arrives,
+        // and pings in between are skipped.
+        let update = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let account = fixtures::account_info(pubkey, owner, data.clone(), 1, None);
+                messages_tx
+                    .send(Message::Account(fixtures::message_account(account)))
+                    .unwrap();
+                if let Ok(update) =
+                    tokio::time::timeout(Duration::from_millis(200), updates.message()).await
+                {
+                    let update = update.unwrap().unwrap();
+                    if matches!(update.update_oneof, Some(UpdateOneof::Account(_))) {
+                        break update;
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap();
+
+        let Some(UpdateOneof::Account(account)) = update.update_oneof else {
+            panic!("expected an account update, got {:?}", update.update_oneof);
+        };
+        let account = account.account.unwrap();
+        assert_eq!(account.pubkey, pubkey.to_bytes());
+        assert_eq!(account.data, data);
+    }
+
     /// An oversized first, later or compressed request gets `ResourceExhausted` with the limit,
     /// and counts as `request_too_large`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3602,7 +3718,7 @@ mod tests {
         let len = transaction
             .transaction
             .get_pre_encoded()
-            .map_or(0, Vec::len);
+            .map_or(0, bytes::Bytes::len);
         assert!(units(len) > 1, "the test transaction spans several units");
         assert_eq!(scales.weight(&transaction_update()), 4 * units(len));
         assert_eq!(count_only.weight(&transaction_update()), 4);

@@ -8,9 +8,14 @@ use {
             message::{MessageAccountInfo, MessageTransactionInfo},
         },
     },
+    bytes::Bytes,
     solana_pubkey::Pubkey,
     solana_signature::Signature,
 };
+
+/// Account data at least this long is encoded straight from the account and never cached,
+/// so it is never copied into a second buffer.
+pub const LARGE_ACCOUNT_DATA_BYTES: usize = 16 * 1024;
 
 pub struct TransactionEncoder;
 
@@ -19,7 +24,7 @@ impl TransactionEncoder {
         let len = Self::encoded_len(tx);
         let mut buf = Vec::with_capacity(len);
         Self::encode_raw(tx, &mut buf);
-        if tx.pre_encoded.set(buf).is_err() {
+        if tx.pre_encoded.set(Bytes::from(buf)).is_err() {
             metrics::pre_encoded_cache_miss("txn");
         }
     }
@@ -71,7 +76,16 @@ impl TransactionEncoder {
 pub struct AccountEncoder;
 
 impl AccountEncoder {
+    /// Fills the account's encoding cache. Data of [`LARGE_ACCOUNT_DATA_BYTES`] or more is left
+    /// uncached.
+    ///
+    /// # Arguments
+    ///
+    /// * `account` - The account to encode.
     pub fn pre_encode(account: &MessageAccountInfo) {
+        if account.data.len() >= LARGE_ACCOUNT_DATA_BYTES {
+            return;
+        }
         let len = Self::encoded_len(account);
         let mut buf = Vec::with_capacity(len);
 
@@ -96,7 +110,7 @@ impl AccountEncoder {
             prost_bytes_encode_raw(8u32, value.as_ref(), &mut buf);
         }
 
-        if account.pre_encoded.set(buf).is_err() {
+        if account.pre_encoded.set(Bytes::from(buf)).is_err() {
             metrics::pre_encoded_cache_miss("account");
         }
     }
@@ -179,6 +193,21 @@ mod tests {
                 "{label}: encoded_len must equal the encoded byte count"
             );
         }
+    }
+
+    #[test]
+    fn pre_encode_leaves_large_account_data_uncached() {
+        let keys = fixtures::deterministic_pubkeys(41, 2);
+        let small = vec![7u8; LARGE_ACCOUNT_DATA_BYTES - 1];
+        let large = vec![7u8; LARGE_ACCOUNT_DATA_BYTES];
+        let small = fixtures::account_info(keys[0], keys[1], small, 1, None);
+        let large = fixtures::account_info(keys[0], keys[1], large, 1, None);
+
+        AccountEncoder::pre_encode(&small);
+        AccountEncoder::pre_encode(&large);
+
+        assert!(small.get_pre_encoded().is_some());
+        assert!(large.get_pre_encoded().is_none());
     }
 
     #[test]

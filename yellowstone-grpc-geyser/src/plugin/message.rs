@@ -193,7 +193,7 @@ pub struct MessageAccountInfo {
     pub data: Bytes,
     pub write_version: u64,
     pub txn_signature: Option<Signature>,
-    pub pre_encoded: OnceLock<Vec<u8>>,
+    pub pre_encoded: OnceLock<Bytes>,
 }
 
 impl MessageAccountInfo {
@@ -213,7 +213,7 @@ impl MessageAccountInfo {
         }
     }
 
-    pub fn get_pre_encoded(&self) -> Option<&Vec<u8>> {
+    pub fn get_pre_encoded(&self) -> Option<&Bytes> {
         self.pre_encoded.get()
     }
 }
@@ -259,7 +259,7 @@ pub struct MessageTransactionInfo {
     pub meta: confirmed_block::TransactionStatusMeta,
     pub index: usize,
     pub account_keys: FoldHashSet<Pubkey>,
-    pub pre_encoded: OnceLock<Vec<u8>>,
+    pub pre_encoded: OnceLock<Bytes>,
     /// Per-tx cache of token-balance owners under `TokenAccountsMode::All`.
     /// Lazily built on first read; shared across all filters evaluating
     /// against this tx so the pre/post scan runs at most once per tx.
@@ -336,7 +336,7 @@ impl MessageTransactionInfo {
     }
 
     #[inline]
-    pub fn get_pre_encoded(&self) -> Option<&Vec<u8>> {
+    pub fn get_pre_encoded(&self) -> Option<&Bytes> {
         self.pre_encoded.get()
     }
 }

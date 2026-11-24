@@ -390,6 +390,14 @@ pub struct ConfigGrpc {
     pub server_initial_connection_window_size: Option<u32>,
     #[serde(default)]
     pub server_initial_stream_window_size: Option<u32>,
+    /// The largest socket write that merges queued HTTP/2 frames. Unset or 0 sends each
+    /// frame in its own write.
+    #[serde(default)]
+    pub server_write_coalesce_size: Option<ByteSize>,
+    /// Sends uncompressed `Subscribe` streams without copying cached account and transaction
+    /// encodings into each client's buffer.
+    #[serde(default)]
+    pub server_zero_copy_subscribe: bool,
 
     ///
     /// After how many bytes a TCP connection should update its traffic metrics for prometheus.

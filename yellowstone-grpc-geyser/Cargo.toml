@@ -34,6 +34,7 @@ dashmap = { workspace = true }
 futures = { workspace = true }
 hostname = { workspace = true }
 http = { workspace = true }
+http-body = { workspace = true }
 http-body-util = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }

@@ -2236,8 +2236,10 @@ impl FilterBlocks {
                     .iter()
                     .filter_map(|tx| {
                         if inner.matches_any_in_set(&tx.transaction.account_keys) {
-                            transactions_data_len +=
-                                tx.transaction.get_pre_encoded().map_or(0, Vec::len);
+                            transactions_data_len += tx
+                                .transaction
+                                .get_pre_encoded()
+                                .map_or(0, bytes::Bytes::len);
                             Some(Arc::clone(tx))
                         } else {
                             None

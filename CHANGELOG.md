@@ -10,6 +10,12 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Features
+
+- plugin: `grpc.server_zero_copy_subscribe` sends uncompressed `Subscribe` streams without copying large account and transaction encodings into each client's buffer. Every client of an update points at one shared copy. The default is `false`.
+- plugin: account data of 16 KiB or more is encoded straight from the account and is no longer copied into the pre-encoded cache. This applies with or without `grpc.server_zero_copy_subscribe`.
+- plugin: `grpc.server_write_coalesce_size` merges queued HTTP/2 frames into one socket write of up to this size. Each write call pays a fixed kernel cost, so fewer, larger writes cut that cost per message. Unset or `0` keeps one write per frame, the default.
+
 ## 2026-11-16
 
 - yellowstone-grpc-geyser 17.0.2

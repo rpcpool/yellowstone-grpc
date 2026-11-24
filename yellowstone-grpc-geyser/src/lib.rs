@@ -14,6 +14,7 @@ pub mod ratelimit;
 pub mod stream;
 pub mod util;
 pub mod version;
+mod zero_copy;
 pub use agave_geyser_plugin_interface as plugin_interface;
 mod block_reconstruction_v2;
 

@@ -3,7 +3,7 @@ use {
         metrics,
         plugin::{
             filter::{
-                encoder::{AccountEncoder, TransactionEncoder},
+                encoder::{AccountEncoder, TransactionEncoder, LARGE_ACCOUNT_DATA_BYTES},
                 name::FilterName,
                 FilterAccountsDataSlice,
             },
@@ -249,6 +249,44 @@ impl prost::Message for FilteredUpdate {
 }
 
 impl FilteredUpdate {
+    /// Fills this update's empty account and transaction caches, as encoding does, then collects
+    /// the encodings a sender can share instead of copying.
+    ///
+    /// # Arguments
+    ///
+    /// * `min_bytes` - The smallest encoding worth sharing.
+    /// * `shared` - The list the shared encodings are appended to.
+    pub(crate) fn prepare_shared_encodings(&self, min_bytes: usize, shared: &mut Vec<Bytes>) {
+        let mut push = |encoded: Option<&Bytes>| {
+            if let Some(encoded) = encoded.filter(|encoded| encoded.len() >= min_bytes) {
+                shared.push(encoded.clone());
+            }
+        };
+        match &self.message {
+            FilteredUpdateOneof::Account(update) => {
+                push(shareable_account_bytes(
+                    &update.account.account,
+                    &update.data_slice,
+                ));
+            }
+            FilteredUpdateOneof::Transaction(update) => {
+                push(cached_transaction_encoding(&update.transaction.transaction));
+            }
+            FilteredUpdateOneof::Block(block) => {
+                for transaction in &block.transactions {
+                    push(cached_transaction_encoding(&transaction.transaction));
+                }
+                for account in &block.accounts {
+                    push(shareable_account_bytes(
+                        &account.account,
+                        &block.accounts_data_slice,
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub const fn new(
         filters: FilteredUpdateFilters,
         message: FilteredUpdateOneof,
@@ -576,6 +614,67 @@ impl prost::Message for FilteredUpdateAccount {
     fn clear(&mut self) {
         unimplemented!()
     }
+}
+
+/// Returns an account's cached encoding, filling the cache first if it is empty.
+///
+/// # Arguments
+///
+/// * `account` - The account to encode.
+///
+/// # Returns
+///
+/// The cached encoding, or [`None`] if the cache could not be filled.
+fn cached_account_encoding(account: &MessageAccountInfo) -> Option<&Bytes> {
+    if account.get_pre_encoded().is_none() {
+        AccountEncoder::pre_encode(account);
+    }
+    account.get_pre_encoded()
+}
+
+/// Returns the bytes of an account that encoding writes in one piece: its data when large, its
+/// cached encoding otherwise (filled first if empty and the data is not sliced).
+///
+/// # Arguments
+///
+/// * `account` - The account to encode.
+/// * `data_slice` - The data slices the subscriber asked for.
+///
+/// # Returns
+///
+/// The bytes a sender can share instead of copying, or [`None`].
+fn shareable_account_bytes<'a>(
+    account: &'a MessageAccountInfo,
+    data_slice: &FilterAccountsDataSlice,
+) -> Option<&'a Bytes> {
+    if let Some(cached) = account.get_pre_encoded() {
+        if data_slice.as_ref().is_empty() {
+            return Some(cached);
+        }
+    }
+    if account.data.len() >= LARGE_ACCOUNT_DATA_BYTES {
+        return Some(&account.data);
+    }
+    if data_slice.as_ref().is_empty() {
+        return cached_account_encoding(account);
+    }
+    None
+}
+
+/// Returns a transaction's cached encoding, filling the cache first if it is empty.
+///
+/// # Arguments
+///
+/// * `transaction` - The transaction to encode.
+///
+/// # Returns
+///
+/// The cached encoding, or [`None`] if the cache could not be filled.
+fn cached_transaction_encoding(transaction: &MessageTransactionInfo) -> Option<&Bytes> {
+    if transaction.get_pre_encoded().is_none() {
+        TransactionEncoder::pre_encode(transaction);
+    }
+    transaction.get_pre_encoded()
 }
 
 fn account_return_encoded(pre_encoded: &[u8], tag: u32, buf: &mut impl BufMut) {
