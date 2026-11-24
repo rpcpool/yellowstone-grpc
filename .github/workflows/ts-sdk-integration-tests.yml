@@ -54,6 +54,19 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y build-essential protobuf-compiler libsasl2-dev
 
+      # Skipped on a PR that bumps napi, because that napi version is not on npm until release.
+      - name: Refresh napi lockfile entries
+        working-directory: yellowstone-grpc-client-nodejs
+        run: |
+          specs=$(node -p 'Object.entries(require("./package.json").optionalDependencies).map(([n, v]) => n + "@" + v).join("\n")')
+          for spec in $specs; do
+            if ! npm view "$spec" version >/dev/null 2>&1; then
+              echo "$spec is not on npm yet; keeping the committed lockfile"
+              exit 0
+            fi
+          done
+          npm install --package-lock-only --ignore-scripts
+
       - name: Install Node dependencies
         working-directory: yellowstone-grpc-client-nodejs
         run: npm ci
