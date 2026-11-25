@@ -1403,7 +1403,6 @@ mod tests {
     deshred_transactions.insert(
       "client".to_string(),
       SubscribeRequestFilterDeshredTransactions {
-        vote: Some(false),
         account_include: vec!["acc1".to_string()],
         account_exclude: vec!["acc2".to_string()],
         account_required: vec!["acc3".to_string()],
@@ -1438,13 +1437,6 @@ mod tests {
       .expect("receiver await should not time out")
       .expect("receiver should get one request");
 
-    assert_eq!(
-      received
-        .deshred_transactions
-        .get("client")
-        .and_then(|filter| filter.vote),
-      Some(false)
-    );
     assert_eq!(
       received
         .deshred_transactions

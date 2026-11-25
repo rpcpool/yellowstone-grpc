@@ -10,6 +10,16 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+- yellowstone-grpc-proto 16.0.0-rc1
+- yellowstone-grpc-geyser 19.0.0-rc1+solana.5.0.0.alpha.1
+- yellowstone-grpc-client 18.0.0-rc1
+
+### Breaking
+
+- plugin: builds against agave 5.0.0-alpha.1 and `agave-geyser-plugin-interface` 8.0.0.
+- proto/plugin: vote filtering and the vote flag are removed, because Alpenglow votes are not transactions. The `vote` option is gone from `SubscribeRequestFilterTransactions` and `SubscribeRequestFilterDeshredTransactions`. The `is_vote` field is gone from `SubscribeUpdateTransactionInfo`, `SubscribeUpdateTransactionStatus` and `SubscribeUpdateDeshredTransactionInfo`. Their field numbers are reserved.
+- plugin: the server ignores a `vote` option that an older client sends. A filter that sets only `vote` is now an empty filter, and the server rejects it when empty filters are not allowed.
+
 ## 2026-11-10
 
 - yellowstone-grpc-geyser 17.0.1

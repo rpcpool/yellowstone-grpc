@@ -71,7 +71,6 @@ type CliArgs = {
   blocksMeta: boolean;
   ping?: number;
   deshredParsed: boolean;
-  deshredVote?: boolean;
   deshredAccountInclude: string[];
   deshredAccountExclude: string[];
   deshredAccountRequired: string[];
@@ -374,7 +373,6 @@ function buildSubscribeRequest(args: CliArgs): BuiltSubscribeRequest {
   if (args.transactions) {
     request.transactions.client = {
       ...(transactionCompressedFilter?.toTransactionFilter() ?? {}),
-      vote: args.transactionsVote,
       failed: args.transactionsFailed,
       signature: args.transactionsSignature,
       accountInclude: transactionCompressedFilter
@@ -389,7 +387,6 @@ function buildSubscribeRequest(args: CliArgs): BuiltSubscribeRequest {
   if (args.transactionsStatus) {
     request.transactionsStatus.client = {
       ...(transactionStatusCompressedFilter?.toTransactionFilter() ?? {}),
-      vote: args.transactionsStatusVote,
       failed: args.transactionsStatusFailed,
       signature: args.transactionsStatusSignature,
       accountInclude: transactionStatusCompressedFilter
@@ -583,7 +580,6 @@ async function subscribeDeshredCommand(client: Client, args: CliArgs) {
   const request: SubscribeDeshredRequest = {
     deshredTransactions: {
       client: {
-        vote: args.deshredVote,
         accountInclude: args.deshredAccountInclude,
         accountExclude: args.deshredAccountExclude,
         accountRequired: args.deshredAccountRequired,
@@ -747,10 +743,6 @@ async function parseCommandLineArgs(): Promise<CliArgs> {
           describe: "subscribe on transactions updates",
           type: "boolean",
         },
-        "transactions-vote": {
-          description: "filter vote transactions",
-          type: "boolean",
-        },
         "transactions-failed": {
           description: "filter failed transactions",
           type: "boolean",
@@ -803,10 +795,6 @@ async function parseCommandLineArgs(): Promise<CliArgs> {
         "transactions-status": {
           default: false,
           describe: "subscribe on transactionsStatus updates",
-          type: "boolean",
-        },
-        "transactions-status-vote": {
-          description: "filter vote transactions",
           type: "boolean",
         },
         "transactions-status-failed": {
@@ -909,10 +897,6 @@ async function parseCommandLineArgs(): Promise<CliArgs> {
           "deshred-parsed": {
             default: false,
             describe: "parse deshred transactions using txDeshredEncode",
-            type: "boolean",
-          },
-          "deshred-vote": {
-            description: "filter vote transactions",
             type: "boolean",
           },
           "deshred-account-include": {

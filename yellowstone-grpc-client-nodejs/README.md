@@ -156,13 +156,12 @@ accounts.insertIntoTransactionStatusSubscribeRequest(
 ```
 
 The compressed include filter and `accountInclude` use OR logic. Other fields,
-such as `vote`, `failed`, `accountExclude`, and `accountRequired`, are applied as
+such as `failed`, `accountExclude`, and `accountRequired`, are applied as
 separate conditions. Add them after creating the compressed filter:
 
 ```ts
 request.transactions.trackedTransactions = {
   ...accounts.toTransactionFilter(),
-  vote: false,
   failed: false,
   accountExclude: blockedPubkeys,
 };

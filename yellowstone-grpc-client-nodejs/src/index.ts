@@ -195,23 +195,6 @@ function isRecordObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseStrictOptionalBool(
-  value: unknown,
-  fieldName: string,
-): boolean | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-
-  if (typeof value === "boolean") {
-    return value;
-  }
-
-  throw new Error(
-    `Invalid ${fieldName}: expected true/false boolean, got ${JSON.stringify(value)}`,
-  );
-}
-
 function normalizeSubscribeDeshredRequest(
   request: SubscribeDeshredRequest,
 ): SubscribeDeshredRequest {
@@ -236,13 +219,8 @@ function normalizeSubscribeDeshredRequest(
       throw new Error(`Invalid deshredTransactions.${name}: expected object`);
     }
 
-    normalizedEntries[name] = {
-      ...(filter as unknown as SubscribeDeshredRequest["deshredTransactions"][string]),
-      vote: parseStrictOptionalBool(
-        (filter as { vote?: unknown }).vote,
-        `deshredTransactions.${name}.vote`,
-      ),
-    };
+    normalizedEntries[name] =
+      filter as unknown as SubscribeDeshredRequest["deshredTransactions"][string];
   }
 
   return {

@@ -18,7 +18,6 @@ export type DeshredTransactionEncodingToReturnType<
   T extends keyof MapTransactionEncodingToReturnType = keyof MapTransactionEncodingToReturnType,
 > = {
   signature: string;
-  isVote: boolean;
   transaction: MapTransactionEncodingToReturnType[T];
   loadedWritableAddresses: string[];
   loadedReadonlyAddresses: string[];

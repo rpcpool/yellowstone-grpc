@@ -33,10 +33,6 @@ impl TransactionEncoder {
         encode_varint(tx.signature.as_ref().len() as u64, buf);
         buf.put_slice(tx.signature.as_ref());
 
-        if tx.is_vote {
-            prost::encoding::bool::encode(2u32, &tx.is_vote, buf);
-        }
-
         message::encode(3u32, &tx.transaction, buf);
         message::encode(4u32, &tx.meta, buf);
 
@@ -53,11 +49,6 @@ impl TransactionEncoder {
         let index = tx.index as u64;
 
         SIGNATURE_FIELD_ENCODED_LEN
-            + if tx.is_vote {
-                prost::encoding::bool::encoded_len(2u32, &tx.is_vote)
-            } else {
-                0
-            }
             + message::encoded_len(3u32, &tx.transaction)
             + message::encoded_len(4u32, &tx.meta)
             + if index != 0u64 {
@@ -157,23 +148,20 @@ mod tests {
     fn transaction_encoded_len_matches_the_bytes_actually_written() {
         let keys = fixtures::deterministic_pubkeys(40, 6);
 
-        for (label, is_vote, meta) in [
+        for (label, meta) in [
             (
                 "empty meta",
-                false,
                 confirmed_block::TransactionStatusMeta::default(),
             ),
             (
-                "vote with fee",
-                true,
+                "with fee",
                 confirmed_block::TransactionStatusMeta {
                     fee: 5000,
                     ..Default::default()
                 },
             ),
         ] {
-            let message =
-                fixtures::message_transaction(Signature::default(), keys.clone(), is_vote, meta);
+            let message = fixtures::message_transaction(Signature::default(), keys.clone(), meta);
             let tx = &message.transaction;
 
             let mut buf = Vec::new();

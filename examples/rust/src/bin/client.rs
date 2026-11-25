@@ -312,10 +312,6 @@ struct ActionSubscribe {
     #[clap(long)]
     transactions: bool,
 
-    /// Filter vote transactions
-    #[clap(long)]
-    transactions_vote: Option<bool>,
-
     /// Filter failed transactions
     #[clap(long)]
     transactions_failed: Option<bool>,
@@ -339,10 +335,6 @@ struct ActionSubscribe {
     /// Subscribe on transactions_status updates
     #[clap(long)]
     transactions_status: bool,
-
-    /// Filter vote transactions for transactions_status
-    #[clap(long)]
-    transactions_status_vote: Option<bool>,
 
     /// Filter failed transactions for transactions_status
     #[clap(long)]
@@ -423,10 +415,6 @@ struct ActionSubscribe {
 /// Subscribe on deshred transactions (pre-execution)
 #[derive(Debug, Clone, clap::Args)]
 struct ActionSubscribeDeshred {
-    /// Filter vote transactions
-    #[clap(long)]
-    vote: Option<bool>,
-
     /// Filter by account keys (include) - matches static + ALT-loaded addresses
     #[clap(long)]
     account_include: Vec<String>,
@@ -558,7 +546,6 @@ impl Action {
                     transactions.insert(
                         "client".to_string(),
                         SubscribeRequestFilterTransactions {
-                            vote: args.transactions_vote,
                             failed: args.transactions_failed,
                             signature: args.transactions_signature.clone(),
                             account_include: args.transactions_account_include.clone(),
@@ -575,7 +562,6 @@ impl Action {
                     transactions_status.insert(
                         "client".to_string(),
                         SubscribeRequestFilterTransactions {
-                            vote: args.transactions_status_vote,
                             failed: args.transactions_status_failed,
                             signature: args.transactions_status_signature.clone(),
                             account_include: args.transactions_status_account_include.clone(),
@@ -672,7 +658,6 @@ impl Action {
                 deshred_transactions.insert(
                     "client".to_string(),
                     SubscribeRequestFilterDeshredTransactions {
-                        vote: args.vote,
                         account_include: args.account_include.clone(),
                         account_exclude: args.account_exclude.clone(),
                         account_required: args.account_required.clone(),
@@ -954,7 +939,6 @@ async fn geyser_subscribe(
                             json!({
                                 "slot": msg.slot,
                                 "signature": Signature::try_from(msg.signature.as_slice()).context("invalid signature")?.to_string(),
-                                "isVote": msg.is_vote,
                                 "index": msg.index,
                                 "err": convert_from::create_tx_error(msg.err.as_ref())
                                     .map_err(|error| anyhow::anyhow!(error))
@@ -1168,7 +1152,6 @@ async fn geyser_subscribe_deshred(
                             json!({
                                 "slot": msg.slot,
                                 "signature": Signature::try_from(tx.signature.as_slice()).context("invalid signature")?.to_string(),
-                                "isVote": tx.is_vote,
                                 "loadedWritableAddresses": loaded_writable,
                                 "loadedReadonlyAddresses": loaded_readonly,
                             }),
@@ -1265,7 +1248,6 @@ fn create_pretty_account(account: SubscribeUpdateAccountInfo) -> anyhow::Result<
 fn create_pretty_transaction(tx: SubscribeUpdateTransactionInfo) -> anyhow::Result<Value> {
     Ok(json!({
         "signature": Signature::try_from(tx.signature.as_slice()).context("invalid signature")?.to_string(),
-        "isVote": tx.is_vote,
         "tx": convert_from::create_tx_with_meta(tx)
             .map_err(|error| anyhow::anyhow!(error))
             .context("invalid tx with meta")?

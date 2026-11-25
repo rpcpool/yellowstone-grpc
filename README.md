@@ -357,7 +357,6 @@ If all fields are empty, then all accounts are broadcast. Otherwise, fields work
 
 #### Transactions
 
-- `vote` — enable/disable broadcast `vote` transactions
 - `failed` — enable/disable broadcast `failed` transactions
 - `signature` — match only specified transaction
 - `account_include` — filter transactions that use any account from the list
@@ -372,7 +371,7 @@ If all fields are empty, then all transactions are broadcast. Otherwise, fields 
 
 This gives you an earlier signal than the regular `transactions` stream, but it comes with less context:
 
-   - available fields — `slot`, `signature`, `is_vote`, raw `transaction`, `loaded_writable_addresses`, `loaded_readonly_addresses`
+   - available fields — `slot`, `signature`, raw `transaction`, `loaded_writable_addresses`, `loaded_readonly_addresses`
    - unavailable fields — execution status, error details, logs, inner instructions, balances, compute usage, `TransactionStatusMeta`
 
 `loaded_writable_addresses` and `loaded_readonly_addresses` contain addresses resolved from address lookup tables, so deshred filters can match both static account keys and dynamically loaded addresses.
@@ -386,7 +385,6 @@ Availability:
 
 The deshred transaction filter supports:
 
-   - `vote` — enable/disable broadcast `vote` transactions
    - `account_include` — match transactions that mention any listed account, including ALT-loaded addresses
    - `account_exclude` — exclude transactions that mention any listed account, including ALT-loaded addresses
    - `account_required` — require all listed accounts to be present, including ALT-loaded addresses

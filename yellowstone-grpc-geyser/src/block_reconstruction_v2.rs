@@ -1448,7 +1448,6 @@ mod tests {
         let transaction = fixtures::message_transaction(
             Signature::default(),
             vec![Pubkey::default()],
-            false,
             Default::default(),
         );
         storage.add(Message::Transaction(Arc::new(MessageTransaction {

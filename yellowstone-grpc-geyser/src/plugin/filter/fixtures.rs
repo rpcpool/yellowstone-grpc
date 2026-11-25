@@ -209,7 +209,6 @@ pub fn message_block(
 pub fn message_transaction(
     signature: Signature,
     account_keys: Vec<Pubkey>,
-    is_vote: bool,
     meta: confirmed_block::TransactionStatusMeta,
 ) -> Arc<MessageTransaction> {
     let message = VersionedMessage::Legacy(LegacyMessage {
@@ -229,7 +228,6 @@ pub fn message_transaction(
     Arc::new(MessageTransaction {
         transaction: MessageTransactionInfo {
             signature,
-            is_vote,
             transaction: convert_to::create_transaction(&versioned),
             meta,
             index: 1,

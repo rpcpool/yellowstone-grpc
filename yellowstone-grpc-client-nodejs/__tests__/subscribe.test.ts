@@ -56,7 +56,6 @@ describeLive("Client.subscribe", () => {
         },
         transactions: {
           transactionsClient: {
-            vote: false,
             failed: false,
             accountInclude: [ACTIVE_ACCOUNT_PUBKEY],
             accountExclude: [],
@@ -70,7 +69,6 @@ describeLive("Client.subscribe", () => {
         },
         transactionsStatus: {
           transactionsStatusClient: {
-            vote: false,
             failed: false,
             accountInclude: [ACTIVE_ACCOUNT_PUBKEY],
             accountExclude: [],

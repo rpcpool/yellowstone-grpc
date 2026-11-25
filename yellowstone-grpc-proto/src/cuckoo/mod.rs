@@ -43,7 +43,6 @@
 //! req.transactions.insert(
 //!     "txs".to_string(),
 //!     SubscribeRequestFilterTransactions {
-//!         vote: Some(false),
 //!         failed: Some(false),
 //!         ..Default::default()
 //!     },

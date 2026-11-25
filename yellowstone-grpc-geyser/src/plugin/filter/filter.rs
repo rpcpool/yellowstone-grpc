@@ -1576,7 +1576,6 @@ impl TokenAccountsMode {
 
 #[derive(Debug, Clone)]
 struct FilterTransactionsInner {
-    vote: Option<bool>,
     failed: Option<bool>,
     signature: Option<Signature>,
     account_include: HybridSet<Pubkey>,
@@ -1605,8 +1604,7 @@ impl FilterTransactions {
         let mut filters = HashMap::with_capacity(configs.len());
         for (name, filter) in configs {
             FilterLimits::check_any(
-                filter.vote.is_none()
-                    && filter.failed.is_none()
+                filter.failed.is_none()
                     && filter.account_include.is_empty()
                     && filter.cuckoo_account_include.is_none()
                     && filter.account_exclude.is_empty()
@@ -1637,7 +1635,6 @@ impl FilterTransactions {
             filters.insert(
                 names.get(name)?,
                 FilterTransactionsInner {
-                    vote: filter.vote,
                     failed: filter.failed,
                     signature: filter
                         .signature
@@ -1679,12 +1676,6 @@ impl FilterTransactions {
             .filters
             .iter()
             .filter_map(|(name, inner)| {
-                if let Some(is_vote) = inner.vote {
-                    if is_vote != message.transaction.is_vote {
-                        return None;
-                    }
-                }
-
                 if let Some(is_failed) = inner.failed {
                     if is_failed != message.transaction.meta.err.is_some() {
                         return None;
@@ -1872,7 +1863,6 @@ fn token_balance_amount(balance: &confirmed_block::TokenBalance) -> &str {
 
 #[derive(Debug, Clone)]
 struct FilterDeshredTransactionsInner {
-    vote: Option<bool>,
     account_include: FoldHashSet<Pubkey>,
     account_exclude: FoldHashSet<Pubkey>,
     account_required: FoldHashSet<Pubkey>,
@@ -1895,8 +1885,7 @@ impl FilterDeshredTransactions {
         let mut filters = HashMap::new();
         for (name, filter) in configs {
             FilterLimits::check_any(
-                filter.vote.is_none()
-                    && filter.account_include.is_empty()
+                filter.account_include.is_empty()
                     && filter.account_exclude.is_empty()
                     && filter.account_required.is_empty(),
                 limits.any,
@@ -1917,7 +1906,6 @@ impl FilterDeshredTransactions {
             filters.insert(
                 names.get(name)?,
                 FilterDeshredTransactionsInner {
-                    vote: filter.vote,
                     account_include: Filter::decode_pubkeys_into_set(
                         &filter.account_include,
                         &limits.account_include_reject,
@@ -1942,12 +1930,6 @@ impl FilterDeshredTransactions {
             .filters
             .iter()
             .filter_map(|(name, inner)| {
-                if let Some(is_vote) = inner.vote {
-                    if is_vote != message.transaction.is_vote {
-                        return None;
-                    }
-                }
-
                 let tx = &message.transaction;
 
                 if !inner.account_include.is_empty()
@@ -2672,7 +2654,6 @@ mod tests {
         Arc::new(MessageTransaction {
             transaction: MessageTransactionInfo {
                 signature: *sig,
-                is_vote: true,
                 transaction: convert_to::create_transaction(&versioned_transaction),
                 meta,
                 index: 1,
@@ -2779,7 +2760,6 @@ mod tests {
         transactions.insert(
             "serum".to_string(),
             SubscribeRequestFilterTransactions {
-                vote: None,
                 failed: None,
                 signature: None,
                 account_include: vec![],
@@ -2817,8 +2797,7 @@ mod tests {
         transactions.insert(
             "serum".to_string(),
             SubscribeRequestFilterTransactions {
-                vote: Some(true),
-                failed: None,
+                failed: Some(true),
                 signature: None,
                 account_include: vec![],
                 account_exclude: vec![],
@@ -2861,7 +2840,6 @@ mod tests {
         transactions.insert(
             "serum".to_string(),
             SubscribeRequestFilterTransactions {
-                vote: None,
                 failed: None,
                 signature: None,
                 account_include,
@@ -2929,7 +2907,6 @@ mod tests {
         transactions.insert(
             "serum".to_string(),
             SubscribeRequestFilterTransactions {
-                vote: None,
                 failed: None,
                 signature: None,
                 account_include,
@@ -2997,7 +2974,6 @@ mod tests {
         transactions.insert(
             "serum".to_string(),
             SubscribeRequestFilterTransactions {
-                vote: None,
                 failed: None,
                 signature: None,
                 account_include: vec![],
@@ -3051,7 +3027,6 @@ mod tests {
         transactions.insert(
             "serum".to_string(),
             SubscribeRequestFilterTransactions {
-                vote: None,
                 failed: None,
                 signature: None,
                 account_include,
@@ -3114,7 +3089,6 @@ mod tests {
         static_account_keys: Vec<Pubkey>,
         loaded_writable: Vec<Pubkey>,
         loaded_readonly: Vec<Pubkey>,
-        is_vote: bool,
     ) -> Arc<MessageDeshredTransaction> {
         let message = SolMessage {
             header: MessageHeader {
@@ -3134,7 +3108,6 @@ mod tests {
                     .signatures
                     .first()
                     .expect("No signature found"),
-                is_vote,
                 transaction: convert_to::create_transaction(&versioned_transaction),
                 static_account_keys: static_account_keys.into_iter().collect(),
                 loaded_writable_addresses: loaded_writable,
@@ -3204,7 +3177,6 @@ mod tests {
                     deshred_request.deshred_transactions.insert(
                         "transactions".into(),
                         SubscribeRequestFilterDeshredTransactions {
-                            vote: Some(true),
                             account_include: vec![Pubkey::new_unique().to_string()],
                             include_update_parent,
                             ..Default::default()
@@ -3302,14 +3274,12 @@ mod tests {
                 (
                     "plain".to_owned(),
                     SubscribeRequestFilterDeshredTransactions {
-                        vote: Some(false),
                         ..Default::default()
                     },
                 ),
                 (
                     "parents".to_owned(),
                     SubscribeRequestFilterDeshredTransactions {
-                        vote: Some(false),
                         include_update_parent: Some(true),
                         ..Default::default()
                     },
@@ -3351,7 +3321,6 @@ mod tests {
         deshred_transactions.insert(
             "f1".to_string(),
             SubscribeRequestFilterDeshredTransactions {
-                vote: None,
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![],
@@ -3371,51 +3340,6 @@ mod tests {
     }
 
     #[test]
-    fn test_deshred_filter_vote() {
-        let keypair = Keypair::new();
-        let key_a = keypair.pubkey();
-
-        // Filter: vote=true
-        let mut deshred_transactions = HashMap::new();
-        deshred_transactions.insert(
-            "votes".to_string(),
-            SubscribeRequestFilterDeshredTransactions {
-                vote: Some(true),
-                account_include: vec![],
-                account_exclude: vec![],
-                account_required: vec![],
-                include_update_parent: None,
-            },
-        );
-
-        let config = SubscribeDeshredRequest {
-            deshred_transactions,
-            ping: None,
-            slots: HashMap::new(),
-        };
-        let limit = FilterLimits::default();
-        let filter = DeshredFilter::new(&config, &limit, &mut create_filter_names()).unwrap();
-
-        // Vote transaction should match
-        let msg_vote =
-            create_message_deshred_transaction(&keypair, vec![key_a], vec![], vec![], true);
-        let message = Message::DeshredTransaction(msg_vote);
-        let updates = filter.get_updates(&message, None);
-        assert_eq!(updates.len(), 1);
-        assert!(matches!(
-            updates[0].message,
-            FilteredUpdateDeshredOneof::DeshredTransaction(_)
-        ));
-
-        // Non-vote transaction should not match
-        let msg_nonvote =
-            create_message_deshred_transaction(&keypair, vec![key_a], vec![], vec![], false);
-        let message = Message::DeshredTransaction(msg_nonvote);
-        let updates = filter.get_updates(&message, None);
-        assert!(updates.is_empty());
-    }
-
-    #[test]
     fn test_deshred_filter_account_include_static() {
         let keypair = Keypair::new();
         let key_a = keypair.pubkey();
@@ -3426,7 +3350,6 @@ mod tests {
         deshred_transactions.insert(
             "f1".to_string(),
             SubscribeRequestFilterDeshredTransactions {
-                vote: None,
                 account_include: vec![key_b.to_string()],
                 account_exclude: vec![],
                 account_required: vec![],
@@ -3443,15 +3366,13 @@ mod tests {
         let filter = DeshredFilter::new(&config, &limit, &mut create_filter_names()).unwrap();
 
         // Transaction with key_b in static keys should match
-        let msg =
-            create_message_deshred_transaction(&keypair, vec![key_a, key_b], vec![], vec![], false);
+        let msg = create_message_deshred_transaction(&keypair, vec![key_a, key_b], vec![], vec![]);
         let message = Message::DeshredTransaction(msg);
         let updates = filter.get_updates(&message, None);
         assert_eq!(updates.len(), 1);
 
         // Transaction without key_b should not match
-        let msg =
-            create_message_deshred_transaction(&keypair, vec![key_a, key_c], vec![], vec![], false);
+        let msg = create_message_deshred_transaction(&keypair, vec![key_a, key_c], vec![], vec![]);
         let message = Message::DeshredTransaction(msg);
         let updates = filter.get_updates(&message, None);
         assert!(updates.is_empty());
@@ -3468,7 +3389,6 @@ mod tests {
         deshred_transactions.insert(
             "f1".to_string(),
             SubscribeRequestFilterDeshredTransactions {
-                vote: None,
                 account_include: vec![key_alt_w.to_string()],
                 account_exclude: vec![],
                 account_required: vec![],
@@ -3485,13 +3405,8 @@ mod tests {
         let filter = DeshredFilter::new(&config, &limit, &mut create_filter_names()).unwrap();
 
         // key_alt_w in loaded writable should match
-        let msg = create_message_deshred_transaction(
-            &keypair,
-            vec![key_a],
-            vec![key_alt_w],
-            vec![],
-            false,
-        );
+        let msg =
+            create_message_deshred_transaction(&keypair, vec![key_a], vec![key_alt_w], vec![]);
         let message = Message::DeshredTransaction(msg);
         let updates = filter.get_updates(&message, None);
         assert_eq!(updates.len(), 1);
@@ -3501,7 +3416,6 @@ mod tests {
         deshred_transactions2.insert(
             "f2".to_string(),
             SubscribeRequestFilterDeshredTransactions {
-                vote: None,
                 account_include: vec![key_alt_r.to_string()],
                 account_exclude: vec![],
                 account_required: vec![],
@@ -3515,13 +3429,8 @@ mod tests {
         };
         let filter2 = DeshredFilter::new(&config2, &limit, &mut create_filter_names()).unwrap();
 
-        let msg = create_message_deshred_transaction(
-            &keypair,
-            vec![key_a],
-            vec![],
-            vec![key_alt_r],
-            false,
-        );
+        let msg =
+            create_message_deshred_transaction(&keypair, vec![key_a], vec![], vec![key_alt_r]);
         let message = Message::DeshredTransaction(msg);
         let updates = filter2.get_updates(&message, None);
         assert_eq!(updates.len(), 1);
@@ -3537,7 +3446,6 @@ mod tests {
         deshred_transactions.insert(
             "f1".to_string(),
             SubscribeRequestFilterDeshredTransactions {
-                vote: None,
                 account_include: vec![],
                 account_exclude: vec![key_b.to_string()],
                 account_required: vec![],
@@ -3554,14 +3462,13 @@ mod tests {
         let filter = DeshredFilter::new(&config, &limit, &mut create_filter_names()).unwrap();
 
         // Transaction with excluded key should not match
-        let msg =
-            create_message_deshred_transaction(&keypair, vec![key_a, key_b], vec![], vec![], false);
+        let msg = create_message_deshred_transaction(&keypair, vec![key_a, key_b], vec![], vec![]);
         let message = Message::DeshredTransaction(msg);
         let updates = filter.get_updates(&message, None);
         assert!(updates.is_empty());
 
         // Transaction without excluded key should match
-        let msg = create_message_deshred_transaction(&keypair, vec![key_a], vec![], vec![], false);
+        let msg = create_message_deshred_transaction(&keypair, vec![key_a], vec![], vec![]);
         let message = Message::DeshredTransaction(msg);
         let updates = filter.get_updates(&message, None);
         assert_eq!(updates.len(), 1);
@@ -3578,7 +3485,6 @@ mod tests {
         deshred_transactions.insert(
             "f1".to_string(),
             SubscribeRequestFilterDeshredTransactions {
-                vote: None,
                 account_include: vec![],
                 account_exclude: vec![],
                 account_required: vec![key_b.to_string(), key_c.to_string()],
@@ -3595,20 +3501,14 @@ mod tests {
         let filter = DeshredFilter::new(&config, &limit, &mut create_filter_names()).unwrap();
 
         // Transaction with both required keys should match
-        let msg = create_message_deshred_transaction(
-            &keypair,
-            vec![key_a, key_b],
-            vec![key_c],
-            vec![],
-            false,
-        );
+        let msg =
+            create_message_deshred_transaction(&keypair, vec![key_a, key_b], vec![key_c], vec![]);
         let message = Message::DeshredTransaction(msg);
         let updates = filter.get_updates(&message, None);
         assert_eq!(updates.len(), 1);
 
         // Transaction missing one required key should not match
-        let msg =
-            create_message_deshred_transaction(&keypair, vec![key_a, key_b], vec![], vec![], false);
+        let msg = create_message_deshred_transaction(&keypair, vec![key_a, key_b], vec![], vec![]);
         let message = Message::DeshredTransaction(msg);
         let updates = filter.get_updates(&message, None);
         assert!(updates.is_empty());
@@ -3661,7 +3561,6 @@ mod tests {
         transactions.insert(
             "serum".to_string(),
             SubscribeRequestFilterTransactions {
-                vote: None,
                 failed: None,
                 signature: None,
                 account_include,
@@ -5279,7 +5178,6 @@ mod filter_kind_coverage {
         let transactions = vec![fixtures::message_transaction(
             Signature::default(),
             keys.clone(),
-            false,
             Default::default(),
         )];
         let accounts = vec![fixtures::simple_message_account(keys[0], keys[1])];
@@ -5337,13 +5235,11 @@ mod filter_kind_coverage {
             fixtures::message_transaction(
                 Signature::default(),
                 vec![wanted, keys[2]],
-                false,
                 Default::default(),
             ),
             fixtures::message_transaction(
                 Signature::default(),
                 vec![keys[2], keys[3]],
-                false,
                 Default::default(),
             ),
         ];
@@ -5395,22 +5291,15 @@ mod filter_kind_coverage {
         ));
 
         let transactions = vec![
-            fixtures::message_transaction(
-                Signature::default(),
-                vec![explicit],
-                false,
-                Default::default(),
-            ),
+            fixtures::message_transaction(Signature::default(), vec![explicit], Default::default()),
             fixtures::message_transaction(
                 Signature::default(),
                 vec![via_cuckoo],
-                false,
                 Default::default(),
             ),
             fixtures::message_transaction(
                 Signature::default(),
                 vec![unrelated],
-                false,
                 Default::default(),
             ),
         ];
@@ -5926,7 +5815,6 @@ mod cuckoo_tests {
             Arc::new(MessageTransaction {
                 transaction: MessageTransactionInfo {
                     signature: sig,
-                    is_vote: false,
                     transaction: convert_to::create_transaction(&versioned),
                     meta,
                     index: 0,
@@ -5973,7 +5861,6 @@ mod cuckoo_tests {
             mode: Option<super::TokenAccountExpansionControlFlag>,
         ) -> SubscribeRequestFilterTransactions {
             SubscribeRequestFilterTransactions {
-                vote: None,
                 failed: None,
                 signature: None,
                 account_include: account_include.into_iter().map(|k| k.to_string()).collect(),
@@ -6562,7 +6449,6 @@ mod cuckoo_tests {
             tx_filters.insert(
                 "f".to_owned(),
                 SubscribeRequestFilterTransactions {
-                    vote: None,
                     failed: None,
                     signature: None,
                     account_include: vec![Pubkey::new_unique().to_string()],

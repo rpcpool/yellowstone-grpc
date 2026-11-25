@@ -308,7 +308,6 @@ mod tests {
     assert!(decoded.account_include.is_empty());
     assert!(decoded.account_exclude.is_empty());
     assert!(decoded.account_required.is_empty());
-    assert_eq!(decoded.vote, None);
     assert_eq!(decoded.failed, None);
     assert_eq!(decoded.signature, None);
     assert_eq!(decoded.token_accounts, None);

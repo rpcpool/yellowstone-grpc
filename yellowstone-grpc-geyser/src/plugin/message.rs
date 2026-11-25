@@ -5,9 +5,10 @@ use {
         geyser_plugin_interface::{
             ReplicaAccountInfoV3, ReplicaBlockFooterInfo, ReplicaBlockInfoV5,
             ReplicaContactInfoV0_0_1, ReplicaDeshredTransactionInfo,
-            ReplicaDeshredTransactionInfoV2, ReplicaDeshredTransactionInfoVersions,
-            ReplicaDeshredUpdateParentInfo, ReplicaEntryInfoV2, ReplicaEntryUpdateParentInfo,
-            ReplicaTransactionInfoV4, SlotStatus as GeyserSlotStatus,
+            ReplicaDeshredTransactionInfoV2, ReplicaDeshredTransactionInfoV3,
+            ReplicaDeshredTransactionInfoVersions, ReplicaDeshredUpdateParentInfo,
+            ReplicaEntryInfoV2, ReplicaEntryUpdateParentInfo, ReplicaTransactionInfoV5,
+            SlotStatus as GeyserSlotStatus,
         },
     },
     bytes::Bytes,
@@ -256,7 +257,6 @@ impl MessageAccount {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MessageTransactionInfo {
     pub signature: Signature,
-    pub is_vote: bool,
     pub transaction: confirmed_block::Transaction,
     pub meta: confirmed_block::TransactionStatusMeta,
     pub index: usize,
@@ -272,7 +272,7 @@ pub struct MessageTransactionInfo {
 }
 
 impl MessageTransactionInfo {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV4<'_>) -> Self {
+    pub fn from_geyser(info: &ReplicaTransactionInfoV5<'_>) -> Self {
         let account_keys = info
             .transaction
             .message
@@ -295,7 +295,6 @@ impl MessageTransactionInfo {
 
         Self {
             signature: *info.signature,
-            is_vote: info.is_vote,
             transaction: convert_to::create_transaction(info.transaction),
             meta: convert_to::create_transaction_meta(info.transaction_status_meta),
             index: info.index,
@@ -352,7 +351,7 @@ pub struct MessageTransaction {
 }
 
 impl MessageTransaction {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV4<'_>, slot: Slot, bank_id: BankId) -> Self {
+    pub fn from_geyser(info: &ReplicaTransactionInfoV5<'_>, slot: Slot, bank_id: BankId) -> Self {
         Self {
             transaction: MessageTransactionInfo::from_geyser(info),
             slot,
@@ -365,7 +364,6 @@ impl MessageTransaction {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MessageDeshredTransactionInfo {
     pub signature: Signature,
-    pub is_vote: bool,
     pub transaction: confirmed_block::Transaction,
     pub static_account_keys: FoldHashSet<Pubkey>,
     pub loaded_writable_addresses: Vec<Pubkey>,
@@ -391,13 +389,36 @@ impl MessageDeshredTransactionInfo {
 
         Self {
             signature: *info.signature,
-            is_vote: info.is_vote,
             transaction: convert_to::create_transaction(info.transaction),
             static_account_keys,
             loaded_writable_addresses,
             loaded_readonly_addresses,
             completed_data_set_starting_shred_index: 0,
             completed_data_set_ending_shred_index_exclusive: 0,
+        }
+    }
+
+    pub fn from_geyser_v3(info: &ReplicaDeshredTransactionInfoV3<'_>) -> Self {
+        let (loaded_writable_addresses, loaded_readonly_addresses) = info
+            .loaded_addresses
+            .map(|la| (la.writable.clone(), la.readonly.clone()))
+            .unwrap_or_default();
+
+        Self {
+            signature: *info.signature,
+            transaction: convert_to::create_transaction(info.transaction),
+            static_account_keys: info
+                .transaction
+                .message
+                .static_account_keys()
+                .iter()
+                .copied()
+                .collect(),
+            loaded_writable_addresses,
+            loaded_readonly_addresses,
+            completed_data_set_starting_shred_index: info.completed_data_set_starting_shred_index,
+            completed_data_set_ending_shred_index_exclusive: info
+                .completed_data_set_ending_shred_index_exclusive,
         }
     }
 
@@ -417,7 +438,6 @@ impl MessageDeshredTransactionInfo {
 
         Self {
             signature: *info.signature,
-            is_vote: info.is_vote,
             transaction: convert_to::create_transaction(info.transaction),
             static_account_keys,
             loaded_writable_addresses,
@@ -455,6 +475,9 @@ impl MessageDeshredTransaction {
             }
             ReplicaDeshredTransactionInfoVersions::V0_0_2(v2) => {
                 MessageDeshredTransactionInfo::from_geyser_v2(v2)
+            }
+            ReplicaDeshredTransactionInfoVersions::V0_0_3(v3) => {
+                MessageDeshredTransactionInfo::from_geyser_v3(v3)
             }
         };
         Self {

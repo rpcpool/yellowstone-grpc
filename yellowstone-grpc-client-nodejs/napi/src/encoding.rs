@@ -168,7 +168,6 @@ pub fn decode_tx_error(err: Vec<u8>) -> napi::Result<String> {
 #[serde(rename_all = "camelCase")]
 struct EncodedDeshredTransaction {
   signature: String,
-  is_vote: bool,
   transaction: EncodedTransaction,
   loaded_writable_addresses: Vec<String>,
   loaded_readonly_addresses: Vec<String>,
@@ -219,7 +218,6 @@ pub fn encode_deshred_tx(data: &[u8], encoding: WasmUiTransactionEncoding) -> na
 
   let encoded = EncodedDeshredTransaction {
     signature: bs58::encode(tx.signature).into_string(),
-    is_vote: tx.is_vote,
     transaction: transaction.encode_with_meta(encoding.into(), &meta),
     loaded_writable_addresses: tx
       .loaded_writable_addresses
@@ -268,7 +266,6 @@ mod tests {
   fn encode_deshred_tx_rejects_missing_transaction_payload() {
     let data = SubscribeUpdateDeshredTransactionInfo {
       signature: vec![1, 2, 3],
-      is_vote: false,
       transaction: None,
       loaded_writable_addresses: Vec::new(),
       loaded_readonly_addresses: Vec::new(),

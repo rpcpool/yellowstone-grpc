@@ -110,7 +110,7 @@ message SubscribeRequestFilterSlots {
 }
 
 message SubscribeRequestFilterTransactions {
-  optional bool vote = 1;
+  reserved 1;
   optional bool failed = 2;
   optional string signature = 5;
   repeated string account_include = 3;
@@ -157,7 +157,7 @@ message SubscribeRequestFilterBlockFooter {
 // Address lookup tables are resolved, so both static account keys and
 // dynamically loaded addresses (from ALTs) are available for filtering.
 message SubscribeRequestFilterDeshredTransactions {
-  optional bool vote = 1;
+  reserved 1;
   repeated string account_include = 2;
   repeated string account_exclude = 3;
   repeated string account_required = 4;
@@ -243,8 +243,8 @@ message SubscribeUpdateTransaction {
 }
 
 message SubscribeUpdateTransactionInfo {
+  reserved 2;
   bytes signature = 1;
-  bool is_vote = 2;
   solana.storage.ConfirmedBlock.Transaction transaction = 3;
   solana.storage.ConfirmedBlock.TransactionStatusMeta meta = 4;
   uint64 index = 5;
@@ -252,8 +252,8 @@ message SubscribeUpdateTransactionInfo {
 
 message SubscribeUpdateTransactionStatus {
   uint64 slot = 1;
+  reserved 3;
   bytes signature = 2;
-  bool is_vote = 3;
   uint64 index = 4;
   solana.storage.ConfirmedBlock.TransactionError err = 5;
   uint64 bank_id = 6;
@@ -377,8 +377,8 @@ message SubscribeUpdateDeshredTransaction {
 }
 
 message SubscribeUpdateDeshredTransactionInfo {
+  reserved 2;
   bytes signature = 1;
-  bool is_vote = 2;
   solana.storage.ConfirmedBlock.Transaction transaction = 3;
   repeated bytes loaded_writable_addresses = 4;
   repeated bytes loaded_readonly_addresses = 5;

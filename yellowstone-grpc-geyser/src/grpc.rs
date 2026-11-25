@@ -3418,7 +3418,6 @@ mod tests {
         fixtures::message_transaction(
             Signature::default(),
             vec![Pubkey::default()],
-            false,
             Default::default(),
         )
     }
@@ -4199,7 +4198,6 @@ mod tests {
             let mut transaction = fixtures::message_transaction(
                 Signature::from([id; 64]),
                 vec![Pubkey::default()],
-                false,
                 Default::default(),
             );
             let message = Arc::get_mut(&mut transaction).unwrap();
@@ -4464,7 +4462,6 @@ mod tests {
                 let mut message = fixtures::message_transaction(
                     Signature::from(signature),
                     vec![Pubkey::default()],
-                    false,
                     Default::default(),
                 );
                 let transaction = Arc::get_mut(&mut message).unwrap();
@@ -5284,7 +5281,6 @@ mod tests {
             Message::DeshredTransaction(Arc::new(MessageDeshredTransaction {
                 transaction: MessageDeshredTransactionInfo {
                     signature,
-                    is_vote: false,
                     transaction: convert_to::create_transaction(&versioned),
                     static_account_keys: FoldHashSet::new(),
                     loaded_writable_addresses: vec![],

@@ -427,7 +427,6 @@ mod tests {
     transactions.insert(
       "transactions_client".to_string(),
       SubscribeRequestFilterTransactions {
-        vote: Some(true),
         failed: Some(false),
         signature: Some("tx_sig_1".to_string()),
         account_include: vec!["acc_i".to_string()],
@@ -442,7 +441,6 @@ mod tests {
     transactions_status.insert(
       "tx_status_client".to_string(),
       SubscribeRequestFilterTransactions {
-        vote: Some(false),
         failed: Some(true),
         signature: Some("tx_sig_2".to_string()),
         account_include: vec!["status_i".to_string()],

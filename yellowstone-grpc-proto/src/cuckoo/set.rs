@@ -327,7 +327,7 @@ impl CompressedAccountFilterSet {
     }
 
     /// Returns a [`SubscribeRequestFilterTransactions`] that carries only this
-    /// cuckoo filter, no explicit account include list, no vote/failed/signature
+    /// cuckoo filter, no explicit account include list, no failed/signature
     /// predicates, no token account expansion.
     ///
     /// Use this when you want full transaction details for a large address set
@@ -348,7 +348,6 @@ impl CompressedAccountFilterSet {
     /// ```
     pub fn to_transaction_filter(&self) -> SubscribeRequestFilterTransactions {
         SubscribeRequestFilterTransactions {
-            vote: None,
             failed: None,
             signature: None,
             account_include: vec![],
@@ -615,7 +614,6 @@ mod tests {
         assert!(f.account_include.is_empty());
         assert!(f.account_exclude.is_empty());
         assert!(f.account_required.is_empty());
-        assert_eq!(f.vote, None);
         assert_eq!(f.failed, None);
         assert_eq!(f.signature, None);
         assert_eq!(f.token_accounts, None);

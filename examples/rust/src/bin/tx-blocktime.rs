@@ -31,10 +31,6 @@ struct Args {
     #[clap(long)]
     commitment: Option<ArgsCommitment>,
 
-    /// Filter vote transactions
-    #[clap(long)]
-    vote: Option<bool>,
-
     /// Filter failed transactions
     #[clap(long)]
     failed: Option<bool>,
@@ -98,7 +94,6 @@ async fn main() -> anyhow::Result<()> {
             accounts: HashMap::new(),
             transactions: HashMap::new(),
             transactions_status: hashmap! { "".to_owned() => SubscribeRequestFilterTransactions {
-                vote: args.vote,
                 failed: args.failed,
                 signature: args.signature,
                 account_include: args.account_include,

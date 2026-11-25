@@ -272,7 +272,6 @@ impl FilteredUpdate {
         let tx = &message.transaction;
         SubscribeUpdateTransactionInfo {
             signature: tx.signature.as_ref().into(),
-            is_vote: tx.is_vote,
             transaction: Some(tx.transaction.clone()),
             meta: Some(tx.meta.clone()),
             index: tx.index as u64,
@@ -321,7 +320,6 @@ impl FilteredUpdate {
                 UpdateOneof::TransactionStatus(SubscribeUpdateTransactionStatus {
                     slot: tx.slot,
                     signature: tx.transaction.signature.as_ref().into(),
-                    is_vote: tx.transaction.is_vote,
                     index: tx.transaction.index as u64,
                     err: tx.transaction.meta.err.clone(),
                     bank_id: tx.bank_id,
@@ -821,9 +819,6 @@ impl FilteredUpdateTransaction {
         let index = tx.index as u64;
 
         prost_bytes_encode_raw(1u32, tx.signature.as_ref(), buf);
-        if tx.is_vote {
-            ::prost::encoding::bool::encode(2u32, &tx.is_vote, buf);
-        }
         message::encode(3u32, &tx.transaction, buf);
         message::encode(4u32, &tx.meta, buf);
         if index != 0u64 {
@@ -840,11 +835,6 @@ impl FilteredUpdateTransaction {
         let index = tx.index as u64;
 
         prost_bytes_encoded_len(1u32, tx.signature.as_ref())
-            + if tx.is_vote {
-                ::prost::encoding::bool::encoded_len(2u32, &tx.is_vote)
-            } else {
-                0
-            }
             + message::encoded_len(3u32, &tx.transaction)
             + message::encoded_len(4u32, &tx.meta)
             + if index != 0u64 {
@@ -867,9 +857,6 @@ impl prost::Message for FilteredUpdateTransactionStatus {
         }
         let tx = &self.transaction.transaction;
         prost_bytes_encode_raw(2u32, tx.signature.as_ref(), buf);
-        if tx.is_vote {
-            ::prost::encoding::bool::encode(3u32, &tx.is_vote, buf);
-        }
         let index = tx.index as u64;
         if index != 0u64 {
             ::prost::encoding::uint64::encode(4u32, &index, buf);
@@ -891,11 +878,6 @@ impl prost::Message for FilteredUpdateTransactionStatus {
         } else {
             0
         }) + prost_bytes_encoded_len(2u32, tx.signature.as_ref())
-            + if tx.is_vote {
-                ::prost::encoding::bool::encoded_len(3u32, &tx.is_vote)
-            } else {
-                0
-            }
             + if index != 0u64 {
                 ::prost::encoding::uint64::encoded_len(4u32, &index)
             } else {
@@ -970,9 +952,6 @@ impl FilteredUpdateDeshredTransaction {
         encode_varint(Self::tx_encoded_len(tx) as u64, buf);
 
         prost_bytes_encode_raw(1u32, tx.signature.as_ref(), buf);
-        if tx.is_vote {
-            ::prost::encoding::bool::encode(2u32, &tx.is_vote, buf);
-        }
         message::encode(3u32, &tx.transaction, buf);
         for pk in &tx.loaded_writable_addresses {
             prost_bytes_encode_raw(4u32, pk.as_ref(), buf);
@@ -998,11 +977,6 @@ impl FilteredUpdateDeshredTransaction {
 
     fn tx_encoded_len(tx: &MessageDeshredTransactionInfo) -> usize {
         prost_bytes_encoded_len(1u32, tx.signature.as_ref())
-            + if tx.is_vote {
-                ::prost::encoding::bool::encoded_len(2u32, &tx.is_vote)
-            } else {
-                0
-            }
             + message::encoded_len(3u32, &tx.transaction)
             + prost_repeated_encoded_len_map!(4u32, tx.loaded_writable_addresses, |pk| pk
                 .as_ref()
@@ -1616,7 +1590,6 @@ pub mod tests {
                         MessageTransaction {
                             transaction: MessageTransactionInfo {
                                 signature: tx.transaction.signatures[0],
-                                is_vote: true,
                                 transaction: convert_to::create_transaction(&tx.transaction),
                                 meta: create_transaction_meta(&tx.meta),
                                 index,
@@ -1974,7 +1947,6 @@ pub mod tests {
             let tx_with_cache = Arc::new(MessageTransaction {
                 transaction: MessageTransactionInfo {
                     signature: tx.signature,
-                    is_vote: tx.is_vote,
                     transaction: tx.transaction.clone(),
                     meta: tx.meta.clone(),
                     index: tx.index,
@@ -1992,7 +1964,6 @@ pub mod tests {
             let tx_without_cache = Arc::new(MessageTransaction {
                 transaction: MessageTransactionInfo {
                     signature: tx.signature,
-                    is_vote: tx.is_vote,
                     transaction: tx.transaction.clone(),
                     meta: tx.meta.clone(),
                     index: tx.index,
