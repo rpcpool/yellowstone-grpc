@@ -102,12 +102,17 @@ impl HttpSubscriptionRepository {
         // Make sure we build the cache key following the forwarded_headers order, so that the same headers in different order don't produce different cache keys.
         for header_to_forward in &self.forwarded_headers {
             if let Some(value) = headers.get(header_to_forward) {
+                // A header value can hold any byte HTTP allows, not only text, and it comes
+                // straight from the client. Treat one we can't read as text as a failed
+                // authentication instead of panicking in the connection task.
+                let Ok(value_str) = value.to_str() else {
+                    log::warn!(
+                        "Forwarded header {header_to_forward} is not valid ASCII, rejecting the request"
+                    );
+                    return Box::pin(future::ready(Ok(None)));
+                };
                 caching_key_parts.push(header_to_forward);
-                caching_key_parts.push(
-                    value
-                        .to_str()
-                        .expect("forwarder header value should be valid UTF-8"),
-                );
+                caching_key_parts.push(value_str);
                 header_map.insert(
                     HeaderName::from_str(header_to_forward)
                         .expect("forwarder header name should be valid"),
@@ -491,6 +496,31 @@ mod tests {
             request_count,
             requests,
         )
+    }
+
+    #[tokio::test]
+    async fn non_ascii_forwarded_header_is_rejected_without_calling_the_resolver() {
+        let (url, request_count, _requests) = spawn_mock_subscription_server().await;
+        let repo =
+            HttpSubscriptionRepository::new(url, vec!["x-token".to_string()]).expect("repo init");
+
+        let request = http::Request::builder()
+            .uri("http://example.com/some/path")
+            .header(
+                "x-token",
+                HeaderValue::from_bytes(b"tok\xffen").expect("header value"),
+            )
+            .body(())
+            .expect("request build");
+        let (parts, _) = request.into_parts();
+
+        let info = repo
+            .authenticate(&parts)
+            .await
+            .expect("a bad header is not an error");
+
+        assert!(info.is_none(), "request should be unauthenticated");
+        assert_eq!(request_count.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

@@ -10,6 +10,10 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+### Fixes
+
+- plugin: HTTP-backed auth no longer panics when a forwarded header, `x-token` by default, holds bytes that are not valid ASCII. The request is now treated as unauthenticated and the resolver is not called. The panic was raised inside the connection task, before authentication finished.
+
 ## 2026-11-16
 
 - yellowstone-grpc-geyser 17.0.2
