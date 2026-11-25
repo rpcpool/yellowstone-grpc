@@ -17,6 +17,7 @@ pub mod version;
 pub use agave_geyser_plugin_interface as plugin_interface;
 mod block_reconstruction_v2;
 pub mod route;
+pub mod shard;
 
 pub fn get_thread_name() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

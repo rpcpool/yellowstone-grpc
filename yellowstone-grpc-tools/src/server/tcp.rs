@@ -11,6 +11,10 @@ use {
     tokio_stream::wrappers::TcpListenerStream,
 };
 
+/// The pending-connection queue of a listener bound with [`TcpIncoming::bind_reuse_port`].
+#[cfg(unix)]
+const LISTEN_BACKLOG: u32 = 1024;
+
 /// Configuration applied to accepted TCP sockets.
 #[derive(Default, Debug)]
 pub struct TcpConfiguration {
@@ -59,6 +63,42 @@ impl TcpIncoming {
         config: TcpConfiguration,
     ) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
+        Ok(Self {
+            listener: TcpListenerStream::new(listener),
+            nodelay: config.nodelay,
+            keepalive: config.keepalive,
+        })
+    }
+
+    /// Binds a listener that shares its port with other listeners bound the same way, so the
+    /// kernel spreads new connections across them.
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` - The address to listen on.
+    /// * `config` - Options applied to each accepted socket.
+    ///
+    /// # Returns
+    ///
+    /// The listener, registered with the current tokio runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of creating, binding or listening on the socket.
+    #[cfg(unix)]
+    pub fn bind_reuse_port(
+        addr: std::net::SocketAddr,
+        config: TcpConfiguration,
+    ) -> io::Result<Self> {
+        let socket = if addr.is_ipv4() {
+            tokio::net::TcpSocket::new_v4()?
+        } else {
+            tokio::net::TcpSocket::new_v6()?
+        };
+        socket.set_reuseaddr(true)?;
+        socket.set_reuseport(true)?;
+        socket.bind(addr)?;
+        let listener = socket.listen(LISTEN_BACKLOG)?;
         Ok(Self {
             listener: TcpListenerStream::new(listener),
             nodelay: config.nodelay,
@@ -215,5 +255,38 @@ mod tests {
             .expect("client task should complete")
             .expect("client should connect");
         assert!(accepted.nodelay().expect("reading nodelay should succeed"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn two_reuse_port_listeners_share_one_port_and_accept() {
+        let first = TcpIncoming::bind_reuse_port(
+            "127.0.0.1:0".parse().expect("address"),
+            TcpConfiguration::default(),
+        )
+        .expect("first listener should bind");
+        let addr = first.local_addr().expect("listener should expose address");
+        let second = TcpIncoming::bind_reuse_port(addr, TcpConfiguration::default())
+            .expect("second listener should bind the same port");
+
+        let clients: Vec<_> = (0..16)
+            .map(|_| tokio::spawn(async move { TcpStream::connect(addr).await }))
+            .collect();
+        let mut accepted = 0;
+        let mut incoming = futures::stream::select(first, second);
+        while accepted < clients.len() {
+            incoming
+                .next()
+                .await
+                .expect("stream should yield connection")
+                .expect("accept should succeed");
+            accepted += 1;
+        }
+        for client in clients {
+            client
+                .await
+                .expect("client task should complete")
+                .expect("client should connect");
+        }
     }
 }

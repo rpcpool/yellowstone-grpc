@@ -33,6 +33,7 @@ use {
             ClientRouting, LeaveOnDrop, OwnerRoutes, ProcessedOwner, RelayedItem, RouteChange,
             RouteIndexLimits, RouteKey, ROUTE_KEYS_PER_INDEX_STEP,
         },
+        shard::{spawn_shards, Http2Settings, ShardListener, ShardThreads},
         stream::{tokio::BatchStreamUnboundedReceiver, BatchStream, BatchStreamExt, Buffer},
         util::stream::{
             load_aware_channel, LoadAwareReceiver, LoadAwareSender, SendError, TrySendError,
@@ -53,6 +54,7 @@ use {
     std::{
         collections::HashMap,
         io,
+        net::SocketAddr,
         num::NonZeroUsize,
         ops::Range,
         os::unix::fs::PermissionsExt,
@@ -1408,6 +1410,8 @@ pub struct GrpcServiceResult {
     pub blocks_meta_tx: Option<mpsc::UnboundedSender<Message>>,
     /// Stops and joins the bank thread once the plugin's runtime has shut down.
     pub bank_thread_handle: BankThreadHandle,
+    /// The gRPC shard threads, to join once the service is cancelled.
+    pub shard_threads: ShardThreads,
 }
 
 impl GrpcService {
@@ -1456,6 +1460,9 @@ impl GrpcService {
     {
         // Bind all configured addresses (TCP or Unix domain socket)
         let mut listeners = Vec::new();
+        // With shards, each shard binds the TCP addresses itself.
+        let mut sharded: Vec<(SocketAddr, Option<TlsAcceptor>, Option<AuthConfig>)> = Vec::new();
+        let shard_cores = config.server_shard_cores.clone();
 
         // This is the LEGACY way of configuring the listen address, which is still supported for backward compatibility but will be removed in the future. The new way is to use the `listen` field which supports multiple addresses and TLS configuration per address.
         if let Some(addresses) = config.address.clone() {
@@ -1505,6 +1512,10 @@ impl GrpcService {
             for address in addresses {
                 match address {
                     GrpcAddress::Tcp(addr) => {
+                        if shard_cores.is_some() {
+                            sharded.push((addr, None, None));
+                            continue;
+                        }
                         let incoming = TritonTcpIncoming::bind_with_config(
                             addr,
                             TcpConfiguration::default()
@@ -1553,6 +1564,20 @@ impl GrpcService {
                 let tls_config = listen_config.tls;
                 match address {
                     GrpcAddress::Tcp(addr) => {
+                        let auth = listen_config.auth.clone();
+                        let tls_acceptor = match tls_config {
+                            Some(tls) => {
+                                let server_config =
+                                    load_server_config_from_tls_config(&tls, &file_watcher)
+                                        .context("failed to load TLS server config")?;
+                                Some(TlsAcceptor::from(Arc::new(server_config)))
+                            }
+                            None => None,
+                        };
+                        if shard_cores.is_some() {
+                            sharded.push((addr, tls_acceptor, auth));
+                            continue;
+                        }
                         let incoming = TritonTcpIncoming::bind_with_config(
                             addr,
                             TcpConfiguration::default()
@@ -1564,15 +1589,11 @@ impl GrpcService {
                             "binding gRPC server to TCP socket: {}",
                             incoming.local_addr()?
                         );
-                        let auth = listen_config.auth.clone();
-                        let listener = if let Some(tls) = tls_config {
-                            let server_config =
-                                load_server_config_from_tls_config(&tls, &file_watcher)
-                                    .context("failed to load TLS server config")?;
-                            let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
-                            Listener::Tls(TlsIncoming::new(incoming, tls_acceptor), auth)
-                        } else {
-                            Listener::Tcp(incoming, auth)
+                        let listener = match tls_acceptor {
+                            Some(tls_acceptor) => {
+                                Listener::Tls(TlsIncoming::new(incoming, tls_acceptor), auth)
+                            }
+                            None => Listener::Tcp(incoming, auth),
                         };
                         listeners.push(listener);
                     }
@@ -1665,11 +1686,13 @@ impl GrpcService {
             .unwrap_or(DEFAULT_TRAFFIC_REPORTING_THRESHOLD);
 
         // Save HTTP/2 settings (all Copy) for use inside spawned tasks
-        let http2_adaptive_window = config.server_http2_adaptive_window;
-        let http2_keepalive_interval = config.server_http2_keepalive_interval;
-        let http2_keepalive_timeout = config.server_http2_keepalive_timeout;
-        let initial_connection_window_size = config.server_initial_connection_window_size;
-        let initial_stream_window_size = config.server_initial_stream_window_size;
+        let http2 = Http2Settings {
+            adaptive_window: config.server_http2_adaptive_window,
+            keepalive_interval: config.server_http2_keepalive_interval,
+            keepalive_timeout: config.server_http2_keepalive_timeout,
+            initial_connection_window_size: config.server_initial_connection_window_size,
+            initial_stream_window_size: config.server_initial_stream_window_size,
+        };
 
         // Build the shared GeyserServer (Clone-able because GrpcService: Clone)
         let max_decoding_message_size = config.max_decoding_message_size;
@@ -1806,11 +1829,7 @@ impl GrpcService {
                         Ok(built_service) => {
                             GrpcService::serve_listener(
                                 rate_limited_incoming,
-                                http2_adaptive_window,
-                                http2_keepalive_interval,
-                                http2_keepalive_timeout,
-                                initial_connection_window_size,
-                                initial_stream_window_size,
+                                http2,
                                 built_service,
                                 shutdown.clone(),
                             )
@@ -1825,12 +1844,43 @@ impl GrpcService {
             });
         }
 
+        let shard_threads = match shard_cores {
+            Some(cores) if !sharded.is_empty() => {
+                let mut shard_listeners = Vec::with_capacity(sharded.len());
+                for (addr, tls, auth) in sharded {
+                    let routes = GrpcService::build_service(
+                        health_service.clone(),
+                        x_token.clone(),
+                        service.clone(),
+                        traffic_reporting_threshold,
+                        auth,
+                    )?;
+                    log::info!(
+                        "binding gRPC server to TCP socket {addr} on {} shards",
+                        cores.len()
+                    );
+                    shard_listeners.push(ShardListener { addr, tls, routes });
+                }
+                spawn_shards(
+                    &cores,
+                    shard_listeners,
+                    http2,
+                    ip_conncur,
+                    rate_limit_table,
+                    shutdown_grpc.clone(),
+                )
+                .await?
+            }
+            _ => ShardThreads::default(),
+        };
+
         Ok(GrpcServiceResult {
             snapshot_tx,
             deshred_broadcast_tx,
             contact_info_tx,
             blocks_meta_tx,
             bank_thread_handle,
+            shard_threads,
         })
     }
 
@@ -3197,14 +3247,9 @@ impl GrpcService {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn serve_listener<I, IO>(
+    pub(crate) async fn serve_listener<I, IO>(
         incoming: I,
-        http2_adaptive_window: Option<bool>,
-        http2_keepalive_interval: Option<Duration>,
-        http2_keepalive_timeout: Option<Duration>,
-        initial_connection_window_size: Option<u32>,
-        initial_stream_window_size: Option<u32>,
+        http2: Http2Settings,
         service: tonic::service::Routes,
         shutdown: CancellationToken,
     ) -> anyhow::Result<()>
@@ -3214,19 +3259,19 @@ impl GrpcService {
     {
         let mut builder = Server::builder();
 
-        if let Some(enabled) = http2_adaptive_window {
+        if let Some(enabled) = http2.adaptive_window {
             builder = builder.http2_adaptive_window(Some(enabled));
         }
-        if let Some(interval) = http2_keepalive_interval {
+        if let Some(interval) = http2.keepalive_interval {
             builder = builder.http2_keepalive_interval(Some(interval));
         }
-        if let Some(timeout) = http2_keepalive_timeout {
+        if let Some(timeout) = http2.keepalive_timeout {
             builder = builder.http2_keepalive_timeout(Some(timeout));
         }
-        if let Some(sz) = initial_connection_window_size {
+        if let Some(sz) = http2.initial_connection_window_size {
             builder = builder.initial_connection_window_size(sz);
         }
-        if let Some(sz) = initial_stream_window_size {
+        if let Some(sz) = http2.initial_stream_window_size {
             builder = builder.initial_stream_window_size(sz);
         }
 
@@ -3909,6 +3954,64 @@ mod tests {
             }],
             ..Default::default()
         }));
+    }
+
+    /// With shards, clients spread over the shards' listeners on one port are all served, and
+    /// the shard threads exit once the service is cancelled.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shards_serve_clients_on_one_port_and_stop_on_cancel() {
+        use {
+            crate::{file_watcher::FileWatcher, stream::tokio::BatchStreamUnboundedReceiver},
+            yellowstone_grpc_proto::prelude::geyser_client::GeyserClient,
+        };
+
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        // Rare race: if create() fails with AddrInUse, another process took this port first; rerun.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let cores = crate::util::cpu_core_affinity::get_thread_affinity().unwrap();
+        let cores: Vec<String> = cores.iter().take(2).map(ToString::to_string).collect();
+        let config = serde_json::json!({
+            "listen": [{ "address": format!("127.0.0.1:{port}") }],
+            "server_shard_cores": cores.join(","),
+        });
+        let config: crate::config::ConfigGrpc = serde_json::from_str(&config.to_string()).unwrap();
+
+        let cancellation_token = CancellationToken::new();
+        let (_messages_tx, messages_rx) = mpsc::unbounded_channel();
+        let service = GrpcService::create(
+            config,
+            false,
+            cancellation_token.clone(),
+            TaskTracker::new(),
+            Arc::new(FileWatcher::new().unwrap()),
+            BatchStreamUnboundedReceiver::new(messages_rx),
+        )
+        .await
+        .unwrap();
+
+        for count in 0..8 {
+            let channel =
+                tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+                    .unwrap()
+                    .connect()
+                    .await
+                    .unwrap();
+            let pong = GeyserClient::new(channel)
+                .ping(PingRequest { count })
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(pong.count, count);
+        }
+
+        cancellation_token.cancel();
+        tokio::task::spawn_blocking(move || service.shard_threads.join())
+            .await
+            .unwrap();
     }
 
     /// An oversized first, later or compressed request gets `ResourceExhausted` with the limit,

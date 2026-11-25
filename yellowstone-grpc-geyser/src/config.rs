@@ -51,9 +51,24 @@ pub struct Config {
 
 impl Config {
     fn load_from_str(config: &str) -> PluginResult<Self> {
-        serde_json::from_str(config).map_err(|error| GeyserPluginError::ConfigFileReadError {
-            msg: error.to_string(),
-        })
+        let config: Self = serde_json::from_str(config).map_err(|error| {
+            GeyserPluginError::ConfigFileReadError {
+                msg: error.to_string(),
+            }
+        })?;
+        // A shard pinned to a core the tokio workers also use would share it with them.
+        if let (Some(tokio), Some(shards)) =
+            (&config.tokio.affinity, &config.grpc.server_shard_cores)
+        {
+            if let Some(core) = shards.iter().find(|core| tokio.contains(core)) {
+                return Err(GeyserPluginError::ConfigFileReadError {
+                    msg: format!(
+                        "core {core} is in both tokio.affinity and grpc.server_shard_cores"
+                    ),
+                });
+            }
+        }
+        Ok(config)
     }
 
     pub fn load_from_file<P: AsRef<Path>>(file: P) -> PluginResult<Self> {
@@ -91,19 +106,31 @@ pub struct ConfigTokio {
     #[serde(default)]
     pub worker_threads: Option<usize>,
     /// Threads affinity
-    #[serde(default, deserialize_with = "ConfigTokio::deserialize_affinity")]
+    #[serde(default, deserialize_with = "deserialize_taskset")]
     pub affinity: Option<Vec<usize>>,
 }
 
-impl ConfigTokio {
-    fn deserialize_affinity<'de, D>(deserializer: D) -> Result<Option<Vec<usize>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        match Option::<&str>::deserialize(deserializer)? {
-            Some(taskset) => parse_taskset(taskset).map(Some).map_err(de::Error::custom),
-            None => Ok(None),
-        }
+/// Reads an optional taskset such as `"0-2,5"` into its sorted core indices.
+///
+/// # Arguments
+///
+/// * `deserializer` - The deserializer positioned at the taskset.
+///
+/// # Returns
+///
+/// The core indices, or [`None`] when the value is absent.
+///
+/// # Errors
+///
+/// Returns the deserializer's error when the taskset is malformed or names a core the process
+/// cannot use.
+fn deserialize_taskset<'de, D>(deserializer: D) -> Result<Option<Vec<usize>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Option::<&str>::deserialize(deserializer)? {
+        Some(taskset) => parse_taskset(taskset).map(Some).map_err(de::Error::custom),
+        None => Ok(None),
     }
 }
 
@@ -423,6 +450,10 @@ pub struct ConfigGrpc {
     pub server_initial_connection_window_size: Option<u32>,
     #[serde(default)]
     pub server_initial_stream_window_size: Option<u32>,
+    /// Cores for the gRPC shards, as a taskset such as `"12-15"`. Each core gets one pinned
+    /// thread with its own TCP listeners, so a client's whole connection runs on one core.
+    #[serde(default, deserialize_with = "deserialize_taskset")]
+    pub server_shard_cores: Option<Vec<usize>>,
 
     ///
     /// After how many bytes a TCP connection should update its traffic metrics for prometheus.
@@ -950,6 +981,26 @@ mod tests {
         },
         std::{path::Path, time::Duration},
     };
+
+    #[test]
+    fn a_shard_core_that_tokio_also_uses_is_rejected() {
+        let config = |shard_cores: &str| {
+            let config = serde_json::json!({
+                "libpath": "",
+                "tokio": { "affinity": "0" },
+                "grpc": { "server_shard_cores": shard_cores },
+            });
+            super::Config::load_from_str(&config.to_string())
+        };
+
+        assert!(config("0").is_err());
+        // Core 1 exists only on a machine with two or more cores.
+        if crate::util::cpu_core_affinity::get_thread_affinity()
+            .is_ok_and(|cores| cores.contains(&1))
+        {
+            assert!(config("1").is_ok());
+        }
+    }
 
     #[test]
     fn capacities_fall_back_to_channel_capacity() {

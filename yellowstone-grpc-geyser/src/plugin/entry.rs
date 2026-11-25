@@ -68,6 +68,7 @@ pub struct PluginInner {
     file_watcher: Arc<FileWatcher>,
     /// Stops and joins the bank thread once the runtime has shut down.
     bank_thread_handle: BankThreadHandle,
+    shard_threads: crate::shard::ShardThreads,
 }
 
 impl PluginInner {
@@ -243,6 +244,7 @@ impl GeyserPlugin for Plugin {
             plugin_task_tracker,
             file_watcher,
             bank_thread_handle: grpc_service_result.bank_thread_handle,
+            shard_threads: grpc_service_result.shard_threads,
         });
 
         Ok(())
@@ -273,6 +275,8 @@ impl GeyserPlugin for Plugin {
             log::info!("tokio runtime shut down in {:?}", now.elapsed());
             // Off the runtime's workers, and bounded even if a task outlived the shutdown.
             inner.bank_thread_handle.stop_and_join();
+            // The cancel above stopped the shards; their threads run plugin code until joined.
+            inner.shard_threads.join();
             log::info!("plugin shutdown complete");
         }
     }
