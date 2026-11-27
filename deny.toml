@@ -22,4 +22,10 @@ ignore = [
     "RUSTSEC-2026-0398",
     # Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0403
     "RUSTSEC-2026-0403",
+
+    # humantime 2.4.0 and chrono 0.4.45, unmaintained, no patched release
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0542
+    "RUSTSEC-2026-0542",
+    # Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0543
+    "RUSTSEC-2026-0543",
 ]

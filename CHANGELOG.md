@@ -10,6 +10,14 @@ The minor version will be incremented upon a breaking change and the patch versi
 
 ## [Unreleased]
 
+## 2026-11-27
+
+- yellowstone-grpc-geyser 17.0.3
+
+### Misc
+
+- plugin: build against agave 4.4.2, a stability release for all nodes.
+
 ## 2026-11-16
 
 - yellowstone-grpc-geyser 17.0.2
