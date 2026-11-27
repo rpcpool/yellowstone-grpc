@@ -19,6 +19,7 @@ The minor version will be incremented upon a breaking change and the patch versi
 ### Fixes
 
 - plugin: an unload no longer leaves the file watcher's thread and its inotify instance behind. Each unload leaked both, so after enough reloads a load failed with `failed to create file watcher`.
+- plugin: a method rate limit of 0 answers `RESOURCE_EXHAUSTED: rate limit exceeded`, with the warn line and the `yellowstone_grpc_geyser_method_ratelimited_count_total` count of an exhausted limit. An `http` auth forwarded header whose value is not visible ASCII gets HTTP 401 with `grpc-status: 16` and no message, without a resolver call or a cache entry, and counts in `yellowstone_grpc_geyser_unauthorized_count_total`. Both requests used to panic, and the server reset their stream with `CANCEL`.
 
 ### Misc
 

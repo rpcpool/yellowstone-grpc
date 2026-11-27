@@ -1,6 +1,7 @@
 use {
     crate::{auth::SubscriptionInfo, metrics},
     http::{request::Parts, uri::PathAndQuery},
+    prometheus::IntGauge,
     std::{
         collections::HashMap,
         sync::{LazyLock, Mutex},
@@ -52,6 +53,8 @@ fn decrement_active_metered_bodies_for_subscriber_and_path(
 pub struct PrometheusMeteredHooks {
     subscriber_id: String,
     uri_path: PathAndQuery,
+    /// The body's `service_outbound_bytes` series, looked up once, at the body's first report.
+    outbound_bytes_gauge: Option<IntGauge>,
 }
 
 impl Drop for PrometheusMeteredHooks {
@@ -77,11 +80,12 @@ impl MeteredBandwidthHooks for PrometheusMeteredHooks {
             return;
         }
         metrics::add_total_traffic_sent(byte_count);
-        metrics::add_grpc_service_outbound_bytes(
-            &self.subscriber_id,
-            self.uri_path.path(),
-            byte_count,
-        );
+        let (subscriber_id, uri_path) = (&self.subscriber_id, self.uri_path.path());
+        (self.outbound_bytes_gauge)
+            .get_or_insert_with(|| {
+                metrics::grpc_service_outbound_bytes_gauge(subscriber_id, uri_path)
+            })
+            .add(byte_count as i64);
     }
 }
 
@@ -109,6 +113,7 @@ impl MeteredManager for PrometheusMeteredManager {
         Some(PrometheusMeteredHooks {
             subscriber_id,
             uri_path,
+            outbound_bytes_gauge: None,
         })
     }
 }

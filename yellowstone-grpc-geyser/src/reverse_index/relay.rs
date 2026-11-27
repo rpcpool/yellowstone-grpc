@@ -9,7 +9,7 @@ use {
     crate::{
         grpc::{BroadcastedMessage, ReplayedResponse},
         plugin::message::CommitmentLevel,
-        route::OwnerRoutes,
+        reverse_index::OwnerIndexes,
     },
     std::task::Poll,
     tokio::sync::oneshot,
@@ -29,15 +29,10 @@ pub enum RelayedItem {
 
 impl RelayedItem {
     /// Sends a relayed batch at processed, or answers a replay request.
-    ///
-    /// # Arguments
-    ///
-    /// * `owner_routes` - The [`OwnerRoutes`] of [`GrpcService::geyser_loop`], the sender at
-    ///   processed.
-    pub fn send_or_answer(self, owner_routes: &mut OwnerRoutes) {
+    pub fn send_or_answer(self, owner_indexes: &mut OwnerIndexes) {
         match self {
             Self::Batch(relayed_batch) => {
-                owner_routes.send_batch(CommitmentLevel::Processed, relayed_batch)
+                owner_indexes.send_batch(CommitmentLevel::Processed, relayed_batch)
             }
             Self::Answer(response_tx, replayed_response) => {
                 let _ = response_tx.send(replayed_response);
@@ -53,10 +48,6 @@ impl RelayedItem {
 /// returns `Pending` once: tokio then puts the calling task at the back of the worker's run
 /// queue, where an idle worker can steal it, and polls the LIFO slot next. Unlike
 /// [`tokio::task::yield_now`], it does not wait for the worker to park first.
-///
-/// # Returns
-///
-/// A future that is ready at its second poll.
 pub async fn let_woken_task_run_first() {
     let mut rescheduled = false;
     std::future::poll_fn(|task_context| {

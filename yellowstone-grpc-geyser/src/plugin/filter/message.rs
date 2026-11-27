@@ -1,19 +1,20 @@
 use {
     crate::{
-        metrics,
+        body::{
+            account_info_item_len, block_shape::BlockSelectionTotals, put_account_info_item,
+            put_transaction_info, sliced_account_body_len, transaction_info_len,
+            transaction_status_body_len, transaction_update_body_len, write_sliced_account_body,
+            PublishedBody, SharedUpdateBody, StandardTransactionBodyWriter,
+        },
         plugin::{
-            filter::{
-                encoder::{AccountEncoder, TransactionEncoder},
-                name::FilterName,
-                FilterAccountsDataSlice,
-            },
+            filter::{name::FilterName, FilterAccountsDataSlice},
             message::{
-                MessageAccount, MessageAccountInfo, MessageBlockFooter, MessageBlockMeta,
-                MessageDeshredTransaction, MessageDeshredTransactionInfo,
-                MessageDeshredUpdateParent, MessageEntry, MessageEntryUpdateParent, MessageSlot,
-                MessageTransaction, MessageTransactionInfo,
+                MessageAccount, MessageBlockFooter, MessageBlockMeta, MessageDeshredTransaction,
+                MessageDeshredTransactionInfo, MessageDeshredUpdateParent, MessageEntry,
+                MessageEntryUpdateParent, MessageSlot, MessageTransaction,
             },
         },
+        telemetry::data_plane_counts::{DataPlaneCount, DATA_PLANE_COUNTS},
     },
     bytes::{
         buf::{Buf, BufMut},
@@ -28,18 +29,16 @@ use {
     },
     prost_types::Timestamp,
     smallvec::SmallVec,
-    solana_pubkey::Pubkey,
-    solana_signature::Signature,
     std::{
-        ops::{Deref, DerefMut},
+        ops::{Deref, Range},
         sync::Arc,
         time::SystemTime,
     },
     yellowstone_grpc_proto::geyser::{
         subscribe_update::UpdateOneof, SlotStatus as SlotStatusProto, SubscribeUpdate,
         SubscribeUpdateAccount, SubscribeUpdateAccountInfo, SubscribeUpdateBlock,
-        SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong, SubscribeUpdateSlot,
-        SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
+        SubscribeUpdateBlockFooter, SubscribeUpdateEntry, SubscribeUpdatePing, SubscribeUpdatePong,
+        SubscribeUpdateSlot, SubscribeUpdateTransaction, SubscribeUpdateTransactionInfo,
         SubscribeUpdateTransactionStatus,
     },
 };
@@ -127,8 +126,7 @@ impl WeightScales {
     /// Counts the full data, even under a data slice, because the queue holds the whole account.
     fn account_units(&self, account: &MessageAccount) -> u32 {
         let extra = account
-            .account
-            .data
+            .data()
             .len()
             .checked_div(self.account_data_unit)
             .unwrap_or_default();
@@ -140,10 +138,52 @@ impl WeightScales {
             .iter()
             .map(|filter_name| filter_name.len())
             .sum::<usize>();
+        self.filter_names_len_units(filter_names_len)
+    }
+
+    /// One unscaled unit per `filter_name_data_unit` bytes of an update's filter names.
+    pub fn filter_names_len_units(&self, filter_names_len: usize) -> u32 {
         let unit_count = filter_names_len
             .checked_div(self.filter_name_data_unit)
             .unwrap_or_default();
         u32::try_from(unit_count).unwrap_or(u32::MAX)
+    }
+
+    /// An account update's weight: its units, scaled.
+    pub fn account_update_weight(&self, account: &MessageAccount) -> u32 {
+        self.account
+            .max(1)
+            .saturating_mul(self.account_units(account))
+    }
+
+    /// A Transaction update's weight: one unit until some writer has written its
+    /// `TransactionInfo` bytes, then units of their length, scaled.
+    pub fn transaction_update_weight(&self, message_transaction: &MessageTransaction) -> u32 {
+        let units = message_transaction
+            .transaction_bodies()
+            .built_info_len()
+            .map_or(1, |transaction_info_len| {
+                data_units(1, transaction_info_len, self.transaction_data_unit)
+            });
+        self.transaction.max(1).saturating_mul(units)
+    }
+
+    /// A Block update's weight: `1` plus its selected transactions' and accounts' units, scaled.
+    pub fn block_update_weight(&self, selection_totals: &BlockSelectionTotals) -> u32 {
+        let transactions = self.transaction.max(1).saturating_mul(data_units(
+            selection_totals.transaction_count,
+            selection_totals.transaction_info_bytes,
+            self.transaction_data_unit,
+        ));
+        let accounts = self.account.max(1).saturating_mul(data_units(
+            selection_totals.account_count,
+            selection_totals.account_data_bytes,
+            self.account_data_unit,
+        ));
+        transactions
+            .saturating_add(accounts)
+            .saturating_add(1)
+            .saturating_mul(self.block.max(1))
     }
 
     /// Weighs a [`FilteredUpdate`] with these scales.
@@ -164,39 +204,21 @@ impl WeightScales {
     fn message_weight(&self, update_message: &FilteredUpdateOneof) -> u32 {
         let scale = match update_message {
             FilteredUpdateOneof::Account(update) => {
-                return self
-                    .account
-                    .max(1)
-                    .saturating_mul(self.account_units(&update.account));
+                return self.account_update_weight(&update.account);
             }
             FilteredUpdateOneof::Transaction(update) => {
-                let units = update
-                    .transaction
-                    .transaction
-                    .get_pre_encoded()
-                    .map_or(1, |encoded| {
-                        data_units(1, encoded.len(), self.transaction_data_unit)
-                    });
-                return self.transaction.max(1).saturating_mul(units);
+                return self.transaction_update_weight(&update.transaction);
             }
             FilteredUpdateOneof::Entry(_) | FilteredUpdateOneof::EntryUpdateParent(_) => self.entry,
             FilteredUpdateOneof::Slot(_) => self.slot,
             FilteredUpdateOneof::BlockFooter(_) => self.block_footer,
             FilteredUpdateOneof::Block(block) => {
-                let transactions = self.transaction.max(1).saturating_mul(data_units(
-                    block.transactions.len(),
-                    block.transactions_data_len,
-                    self.transaction_data_unit,
-                ));
-                let accounts = self.account.max(1).saturating_mul(data_units(
-                    block.accounts.len(),
-                    block.accounts_data_len,
-                    self.account_data_unit,
-                ));
-                return transactions
-                    .saturating_add(accounts)
-                    .saturating_add(1)
-                    .saturating_mul(self.block.max(1));
+                return self.block_update_weight(&BlockSelectionTotals {
+                    transaction_count: block.transactions.len(),
+                    transaction_info_bytes: block.transactions_data_len,
+                    account_count: block.accounts.len(),
+                    account_data_bytes: block.accounts_data_len,
+                });
             }
             FilteredUpdateOneof::TransactionStatus(_)
             | FilteredUpdateOneof::BlockMeta(_)
@@ -216,6 +238,20 @@ pub struct FilteredUpdate {
     pub created_at: Timestamp,
 }
 
+/// What an update writes after its filter names.
+#[derive(Debug)]
+pub enum UpdateBodyWrite<'update> {
+    /// The message's shared body: its oneof field, then `created_at`.
+    SharedBody(&'update SharedUpdateBody),
+    /// A transaction's body, published in its claim cell.
+    PublishedBody(PublishedBody),
+    /// An account's body cut by the member's data slice.
+    SlicedAccountBody(&'update SharedUpdateBody, &'update [Range<usize>]),
+    /// A kind encoded per member: its oneof field, then the update's `created_at`.
+    MemberOneof,
+}
+
+/// The filter names, then what [`FilteredUpdateOneof::update_body_write`] picks.
 impl prost::Message for FilteredUpdate {
     fn encode_raw(&self, buf: &mut impl BufMut) {
         for name in self.filters.iter().map(|filter| filter.as_ref()) {
@@ -223,14 +259,42 @@ impl prost::Message for FilteredUpdate {
             encode_varint(name.len() as u64, buf);
             buf.put_slice(name.as_bytes());
         }
-        self.message.encode_raw(buf);
-        message::encode(11u32, &self.created_at, buf);
+        match self.message.update_body_write() {
+            UpdateBodyWrite::SharedBody(shared_body) => shared_body.write_body(buf),
+            UpdateBodyWrite::PublishedBody(published_body) => {
+                if let FilteredUpdateOneof::Transaction(_) = &self.message {
+                    count_transaction_info_use(TransactionInfoUse::Published);
+                }
+                published_body.write_body(buf);
+            }
+            UpdateBodyWrite::SlicedAccountBody(account_body, data_slice_ranges) => {
+                write_sliced_account_body(account_body, data_slice_ranges, buf)
+            }
+            UpdateBodyWrite::MemberOneof => {
+                self.message.encode_member_oneof(buf);
+                message::encode(11u32, &self.created_at, buf);
+            }
+        }
     }
 
     fn encoded_len(&self) -> usize {
-        prost_repeated_encoded_len_map!(1u32, self.filters, |filter| filter.as_ref().len())
-            + self.message.encoded_len()
-            + message::encoded_len(11u32, &self.created_at)
+        let names_len =
+            prost_repeated_encoded_len_map!(1u32, self.filters, |filter| filter.as_ref().len());
+        if let Some(body_len) = self.message.body_len_from_fields() {
+            return names_len + body_len;
+        }
+        names_len
+            + match self.message.update_body_write() {
+                UpdateBodyWrite::SharedBody(shared_body) => shared_body.body_len(),
+                UpdateBodyWrite::PublishedBody(published_body) => published_body.body_len(),
+                UpdateBodyWrite::SlicedAccountBody(account_body, data_slice_ranges) => {
+                    sliced_account_body_len(account_body, data_slice_ranges)
+                }
+                UpdateBodyWrite::MemberOneof => {
+                    self.message.member_oneof_encoded_len()
+                        + message::encoded_len(11u32, &self.created_at)
+                }
+            }
     }
 
     fn merge_field(
@@ -249,11 +313,18 @@ impl prost::Message for FilteredUpdate {
 }
 
 impl FilteredUpdate {
-    pub const fn new(
+    /// An update writes its message's `created_at` from the body, so it must carry that stamp.
+    pub fn new(
         filters: FilteredUpdateFilters,
         message: FilteredUpdateOneof,
         created_at: Timestamp,
     ) -> Self {
+        debug_assert!(
+            message
+                .message_created_at()
+                .is_none_or(|message_created_at| message_created_at == created_at),
+            "an update carries its message's created_at"
+        );
         Self {
             filters,
             message,
@@ -261,12 +332,13 @@ impl FilteredUpdate {
         }
     }
 
+    /// An update with no filter names. It carries its message's `created_at`, as the filters'
+    /// updates do; a block, a ping or a pong is stamped now.
     pub fn new_empty(message: FilteredUpdateOneof) -> Self {
-        Self::new(
-            FilteredUpdateFilters::new(),
-            message,
-            Timestamp::from(SystemTime::now()),
-        )
+        let created_at = message
+            .message_created_at()
+            .unwrap_or_else(|| Timestamp::from(SystemTime::now()));
+        Self::new(FilteredUpdateFilters::new(), message, created_at)
     }
 
     fn as_subscribe_update_account(
@@ -274,7 +346,7 @@ impl FilteredUpdate {
         data_slice: &FilterAccountsDataSlice,
     ) -> SubscribeUpdateAccountInfo {
         let acc = &message.account;
-        let data_slice = data_slice.get_slice(acc.data.iter().as_slice());
+        let data_slice = data_slice.get_slice(message.data());
         SubscribeUpdateAccountInfo {
             pubkey: acc.pubkey.as_ref().into(),
             lamports: acc.lamports,
@@ -387,8 +459,8 @@ impl FilteredUpdate {
             FilteredUpdateOneof::Entry(msg) => {
                 UpdateOneof::Entry(Self::as_subscribe_update_entry(&msg.0))
             }
-            FilteredUpdateOneof::BlockFooter(msg) => {
-                UpdateOneof::BlockFooter(msg.block_footer.clone())
+            FilteredUpdateOneof::BlockFooter(footer_update) => {
+                UpdateOneof::BlockFooter(footer_update.member_block_footer())
             }
         };
 
@@ -418,7 +490,7 @@ pub enum FilteredUpdateOneof {
     BlockMeta(Arc<MessageBlockMeta>),                   // 7
     Entry(FilteredUpdateEntry),                         // 8
     EntryUpdateParent(Arc<MessageEntryUpdateParent>),   // 13
-    BlockFooter(Arc<MessageBlockFooter>),               // 12
+    BlockFooter(FilteredUpdateBlockFooter),             // 12
 }
 
 impl FilteredUpdateOneof {
@@ -432,7 +504,7 @@ impl FilteredUpdateOneof {
         })
     }
 
-    pub const fn slot(message: MessageSlot) -> Self {
+    pub const fn slot(message: Arc<MessageSlot>) -> Self {
         Self::Slot(FilteredUpdateSlot(message))
     }
 
@@ -470,59 +542,156 @@ impl FilteredUpdateOneof {
         Self::Entry(FilteredUpdateEntry(message))
     }
 
-    pub const fn block_footer(message: Arc<MessageBlockFooter>) -> Self {
-        Self::BlockFooter(message)
+    pub const fn block_footer(
+        footer_message: Arc<MessageBlockFooter>,
+        include_certificates: bool,
+    ) -> Self {
+        Self::BlockFooter(FilteredUpdateBlockFooter {
+            block_footer: footer_message,
+            include_certificates,
+        })
+    }
+
+    /// What this member's update writes after its names: the message's body, the account body
+    /// cut by the member's data slice, or a oneof field encoded for the member.
+    pub fn update_body_write(&self) -> UpdateBodyWrite<'_> {
+        match self {
+            Self::Account(account_update) => {
+                let account_body = account_update.account.account_body();
+                let data_slice_ranges = account_update.data_slice.as_ref();
+                if data_slice_ranges.is_empty() {
+                    UpdateBodyWrite::SharedBody(account_body)
+                } else {
+                    UpdateBodyWrite::SlicedAccountBody(account_body, data_slice_ranges)
+                }
+            }
+            Self::Slot(slot_update) => UpdateBodyWrite::SharedBody(slot_update.slot_body()),
+            Self::Entry(entry_update) => UpdateBodyWrite::SharedBody(entry_update.0.entry_body()),
+            Self::BlockMeta(block_meta) => {
+                UpdateBodyWrite::SharedBody(block_meta.block_meta_body())
+            }
+            Self::EntryUpdateParent(update_parent) => {
+                UpdateBodyWrite::SharedBody(update_parent.update_parent_body())
+            }
+            Self::BlockFooter(footer_update) => {
+                UpdateBodyWrite::SharedBody(footer_update.footer_body())
+            }
+            Self::Transaction(transaction_update) => transaction_update
+                .transaction
+                .transaction_update_body(&StandardTransactionBodyWriter)
+                .map_or(UpdateBodyWrite::MemberOneof, UpdateBodyWrite::PublishedBody),
+            Self::TransactionStatus(status_update) => status_update
+                .transaction
+                .transaction_status_body()
+                .map_or(UpdateBodyWrite::MemberOneof, UpdateBodyWrite::PublishedBody),
+            Self::Block(_) | Self::Ping | Self::Pong(_) => UpdateBodyWrite::MemberOneof,
+        }
+    }
+
+    /// The body length of a transaction kind, from its fields and its recorded `TransactionInfo`
+    /// length, without reading a claim cell; `None` when only the body can tell.
+    fn body_len_from_fields(&self) -> Option<usize> {
+        match self {
+            Self::Transaction(transaction_update) => {
+                let message_transaction = &transaction_update.transaction;
+                let transaction_info_len =
+                    message_transaction.transaction_bodies().built_info_len()?;
+                Some(transaction_update_body_len(
+                    message_transaction,
+                    transaction_info_len,
+                ))
+            }
+            Self::TransactionStatus(status_update) => {
+                Some(transaction_status_body_len(&status_update.transaction))
+            }
+            _ => None,
+        }
+    }
+
+    /// The `created_at` of the update's message, when the update holds the message.
+    fn message_created_at(&self) -> Option<Timestamp> {
+        match self {
+            Self::Account(account_update) => Some(account_update.account.created_at),
+            Self::Slot(slot_update) => Some(slot_update.created_at),
+            Self::Transaction(transaction_update) => {
+                Some(transaction_update.transaction.created_at)
+            }
+            Self::TransactionStatus(status_update) => Some(status_update.transaction.created_at),
+            Self::BlockMeta(block_meta) => Some(block_meta.created_at),
+            Self::Entry(entry_update) => Some(entry_update.0.created_at),
+            Self::EntryUpdateParent(update_parent) => Some(update_parent.created_at),
+            Self::BlockFooter(footer_update) => Some(footer_update.block_footer.created_at),
+            Self::Block(_) | Self::Ping | Self::Pong(_) => None,
+        }
+    }
+
+    /// Writes the oneof field of a kind that has no shared body.
+    fn encode_member_oneof(&self, output_buffer: &mut impl BufMut) {
+        match self {
+            Self::Transaction(transaction_update) => {
+                message::encode(4u32, transaction_update, output_buffer)
+            }
+            Self::TransactionStatus(status_update) => {
+                message::encode(10u32, status_update, output_buffer)
+            }
+            Self::Block(block_update) => message::encode(5u32, block_update, output_buffer),
+            Self::Ping => {
+                encode_key(6u32, WireType::LengthDelimited, output_buffer);
+                encode_varint(0, output_buffer);
+            }
+            Self::Pong(pong_update) => message::encode(9u32, pong_update, output_buffer),
+            Self::Account(_)
+            | Self::Slot(_)
+            | Self::Entry(_)
+            | Self::BlockMeta(_)
+            | Self::EntryUpdateParent(_)
+            | Self::BlockFooter(_) => unreachable!("a kind with a shared body writes the body"),
+        }
+    }
+
+    fn member_oneof_encoded_len(&self) -> usize {
+        match self {
+            Self::Transaction(transaction_update) => message::encoded_len(4u32, transaction_update),
+            Self::TransactionStatus(status_update) => message::encoded_len(10u32, status_update),
+            Self::Block(block_update) => message::encoded_len(5u32, block_update),
+            Self::Ping => key_len(6u32) + encoded_len_varint(0),
+            Self::Pong(pong_update) => message::encoded_len(9u32, pong_update),
+            Self::Account(_)
+            | Self::Slot(_)
+            | Self::Entry(_)
+            | Self::BlockMeta(_)
+            | Self::EntryUpdateParent(_)
+            | Self::BlockFooter(_) => unreachable!("a kind with a shared body writes the body"),
+        }
     }
 }
 
-impl prost::Message for FilteredUpdateOneof {
-    fn encode_raw(&self, buf: &mut impl BufMut) {
-        match self {
-            Self::EntryUpdateParent(msg) => message::encode(13u32, &msg.update_parent, buf),
-            Self::Account(msg) => message::encode(2u32, msg, buf),
-            Self::Slot(msg) => message::encode(3u32, msg, buf),
-            Self::Transaction(msg) => message::encode(4u32, msg, buf),
-            Self::TransactionStatus(msg) => message::encode(10u32, msg, buf),
-            Self::Block(msg) => message::encode(5u32, msg, buf),
-            Self::Ping => {
-                encode_key(6u32, WireType::LengthDelimited, buf);
-                encode_varint(0, buf);
-            }
-            Self::Pong(msg) => message::encode(9u32, msg, buf),
-            Self::BlockMeta(msg) => message::encode(7u32, &msg.block_meta, buf),
-            Self::Entry(msg) => message::encode(8u32, msg, buf),
-            Self::BlockFooter(msg) => message::encode(12u32, &msg.block_footer, buf),
+/// A footer update: the footer's message, and whether this member gets the certificates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilteredUpdateBlockFooter {
+    pub block_footer: Arc<MessageBlockFooter>,
+    pub include_certificates: bool,
+}
+
+impl FilteredUpdateBlockFooter {
+    pub fn footer_body(&self) -> &SharedUpdateBody {
+        let footer_bodies = self.block_footer.footer_bodies();
+        if self.include_certificates {
+            &footer_bodies.footer_with_certificates
+        } else {
+            &footer_bodies.footer_without_certificates
         }
     }
 
-    fn encoded_len(&self) -> usize {
-        match self {
-            Self::EntryUpdateParent(msg) => message::encoded_len(13u32, &msg.update_parent),
-            Self::Account(msg) => message::encoded_len(2u32, msg),
-            Self::Slot(msg) => message::encoded_len(3u32, msg),
-            Self::Transaction(msg) => message::encoded_len(4u32, msg),
-            Self::TransactionStatus(msg) => message::encoded_len(10u32, msg),
-            Self::Block(msg) => message::encoded_len(5u32, msg),
-            Self::Ping => key_len(6u32) + encoded_len_varint(0),
-            Self::Pong(msg) => message::encoded_len(9u32, msg),
-            Self::BlockMeta(msg) => message::encoded_len(7u32, &msg.block_meta),
-            Self::Entry(msg) => message::encoded_len(8u32, msg),
-            Self::BlockFooter(msg) => message::encoded_len(12u32, &msg.block_footer),
+    /// The footer as this member gets it: without the certificates unless it asked for them.
+    pub fn member_block_footer(&self) -> SubscribeUpdateBlockFooter {
+        let mut member_block_footer = self.block_footer.block_footer.clone();
+        if !self.include_certificates {
+            member_block_footer.block_final_cert = None;
+            member_block_footer.skip_reward_cert = None;
+            member_block_footer.notar_reward_cert = None;
         }
-    }
-
-    fn merge_field(
-        &mut self,
-        _tag: u32,
-        _wire_type: WireType,
-        _buf: &mut impl Buf,
-        _ctx: DecodeContext,
-    ) -> Result<(), DecodeError> {
-        unimplemented!()
-    }
-
-    fn clear(&mut self) {
-        unimplemented!()
+        member_block_footer
     }
 }
 
@@ -532,172 +701,16 @@ pub struct FilteredUpdateAccount {
     pub data_slice: FilterAccountsDataSlice,
 }
 
-impl prost::Message for FilteredUpdateAccount {
-    fn encode_raw(&self, buf: &mut impl BufMut) {
-        Self::account_encode_raw(1u32, &self.account.account, &self.data_slice, buf);
-        if self.account.slot != 0u64 {
-            ::prost::encoding::uint64::encode(2u32, &self.account.slot, buf);
-        }
-        if self.account.is_startup {
-            ::prost::encoding::bool::encode(3u32, &self.account.is_startup, buf);
-        }
-        if let ::core::option::Option::Some(ref value) = self.account.bank_id {
-            ::prost::encoding::uint64::encode(4u32, value, buf);
-        }
-    }
-
-    fn encoded_len(&self) -> usize {
-        prost_field_encoded_len(
-            1u32,
-            Self::account_encoded_len(&self.account.account, &self.data_slice),
-        ) + if self.account.slot != 0u64 {
-            ::prost::encoding::uint64::encoded_len(2u32, &self.account.slot)
-        } else {
-            0
-        } + if self.account.is_startup {
-            ::prost::encoding::bool::encoded_len(3u32, &self.account.is_startup)
-        } else {
-            0
-        } + self.account.bank_id.as_ref().map_or(0, |value| {
-            ::prost::encoding::uint64::encoded_len(4u32, value)
-        })
-    }
-
-    fn merge_field(
-        &mut self,
-        _tag: u32,
-        _wire_type: WireType,
-        _buf: &mut impl Buf,
-        _ctx: DecodeContext,
-    ) -> Result<(), DecodeError> {
-        unimplemented!()
-    }
-
-    fn clear(&mut self) {
-        unimplemented!()
-    }
-}
-
-fn account_return_encoded(pre_encoded: &[u8], tag: u32, buf: &mut impl BufMut) {
-    encode_key(tag, WireType::LengthDelimited, buf);
-    encode_varint(pre_encoded.len() as u64, buf);
-    buf.put_slice(pre_encoded);
-}
-
-impl FilteredUpdateAccount {
-    fn account_encode_raw(
-        tag: u32,
-        account: &MessageAccountInfo,
-        data_slice: &FilterAccountsDataSlice,
-        buf: &mut impl BufMut,
-    ) {
-        // use pre-encoded if: no slicing and pre-encoded exists
-        if data_slice.as_ref().is_empty() {
-            if let Some(pre_encoded) = account.get_pre_encoded() {
-                metrics::pre_encoded_cache_hit("account");
-                account_return_encoded(pre_encoded, tag, buf);
-                return;
-            } else {
-                // lazyily pre-encode the account for future use
-                AccountEncoder::pre_encode(account);
-
-                if let Some(pre_encoded) = account.get_pre_encoded() {
-                    account_return_encoded(pre_encoded, tag, buf);
-                    return;
-                }
-            }
-        }
-
-        // fallback: slice-aware encoding
-        encode_key(tag, WireType::LengthDelimited, buf);
-        encode_varint(Self::account_encoded_len(account, data_slice) as u64, buf);
-
-        prost_bytes_encode_raw(1u32, account.pubkey.as_ref(), buf);
-        if account.lamports != 0u64 {
-            ::prost::encoding::uint64::encode(2u32, &account.lamports, buf);
-        }
-        prost_bytes_encode_raw(3u32, account.owner.as_ref(), buf);
-        if account.executable {
-            ::prost::encoding::bool::encode(4u32, &account.executable, buf);
-        }
-        if account.rent_epoch != 0u64 {
-            ::prost::encoding::uint64::encode(5u32, &account.rent_epoch, buf);
-        }
-        data_slice.slice_encode_raw(6u32, &account.data, buf);
-        if account.write_version != 0u64 {
-            ::prost::encoding::uint64::encode(7u32, &account.write_version, buf);
-        }
-        if let Some(value) = &account.txn_signature {
-            prost_bytes_encode_raw(8u32, value.as_ref(), buf);
-        }
-    }
-
-    fn account_encoded_len(
-        account: &MessageAccountInfo,
-        data_slice: &FilterAccountsDataSlice,
-    ) -> usize {
-        const PUBKEY_FIELD_ENCODED_LEN: usize = prost_field_encoded_len(1u32, size_of::<Pubkey>());
-        const OWNER_FIELD_ENCODED_LEN: usize = prost_field_encoded_len(3u32, size_of::<Pubkey>());
-        const SIGNATURE_FIELD_ENCODED_LEN: usize =
-            prost_field_encoded_len(8u32, size_of::<Signature>());
-
-        // use pre-encoded length if: no slicing and pre-encoded exists
-        if data_slice.as_ref().is_empty() {
-            if let Some(pre_encoded) = account.get_pre_encoded() {
-                return pre_encoded.len();
-            }
-        }
-
-        // fallback: calculate with slicing
-        let data_len = data_slice.get_slice_len(&account.data);
-
-        PUBKEY_FIELD_ENCODED_LEN
-            + if account.lamports != 0u64 {
-                ::prost::encoding::uint64::encoded_len(2u32, &account.lamports)
-            } else {
-                0
-            }
-            + OWNER_FIELD_ENCODED_LEN
-            + if account.executable {
-                ::prost::encoding::bool::encoded_len(4u32, &account.executable)
-            } else {
-                0
-            }
-            + if account.rent_epoch != 0u64 {
-                ::prost::encoding::uint64::encoded_len(5u32, &account.rent_epoch)
-            } else {
-                0
-            }
-            + if data_len != 0 {
-                prost_field_encoded_len(6u32, data_len)
-            } else {
-                0
-            }
-            + if account.write_version != 0u64 {
-                ::prost::encoding::uint64::encoded_len(7u32, &account.write_version)
-            } else {
-                0
-            }
-            + account
-                .txn_signature
-                .map_or(0, |_| SIGNATURE_FIELD_ENCODED_LEN)
-    }
-}
-
+/// A slot update. Subscribe streams write its message's body; the deshred stream writes the
+/// fields below, under its own tags.
 #[derive(Debug, Clone, PartialEq)]
-pub struct FilteredUpdateSlot(MessageSlot);
+pub struct FilteredUpdateSlot(Arc<MessageSlot>);
 
 impl Deref for FilteredUpdateSlot {
     type Target = MessageSlot;
 
     fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-impl DerefMut for FilteredUpdateSlot {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
     }
 }
 
@@ -764,9 +777,11 @@ pub struct FilteredUpdateTransaction {
     pub slot: u64,
 }
 
+/// A member's own Transaction update, written when another writer holds the body's claim or it
+/// failed.
 impl prost::Message for FilteredUpdateTransaction {
     fn encode_raw(&self, buf: &mut impl BufMut) {
-        Self::tx_encode_raw(1u32, &self.transaction.transaction, buf);
+        put_private_transaction_info(1u32, &self.transaction, buf);
         if self.slot != 0u64 {
             ::prost::encoding::uint64::encode(2u32, &self.slot, buf);
         }
@@ -776,7 +791,7 @@ impl prost::Message for FilteredUpdateTransaction {
     }
 
     fn encoded_len(&self) -> usize {
-        prost_field_encoded_len(1u32, Self::tx_encoded_len(&self.transaction.transaction))
+        prost_field_encoded_len(1u32, private_transaction_info_len(&self.transaction))
             + if self.slot != 0u64 {
                 ::prost::encoding::uint64::encoded_len(2u32, &self.slot)
             } else {
@@ -804,70 +819,83 @@ impl prost::Message for FilteredUpdateTransaction {
     }
 }
 
-fn transaction_return_encoded(pre_encoded: &[u8], tag: u32, buf: &mut impl BufMut) {
-    encode_key(tag, WireType::LengthDelimited, buf);
-    encode_varint(pre_encoded.len() as u64, buf);
-    buf.put_slice(pre_encoded);
+/// How a writer got a transaction's `TransactionInfo` bytes.
+pub enum TransactionInfoUse {
+    /// From the body published in the transaction's claim cell.
+    Published,
+    /// Written by this writer, because another writer held the claim or it failed.
+    Private,
 }
 
-impl FilteredUpdateTransaction {
-    fn tx_encode_raw(tag: u32, tx: &MessageTransactionInfo, buf: &mut impl BufMut) {
-        // try to use pre-encoded bytes (fast path)
-        if let Some(pre_encoded) = tx.get_pre_encoded() {
-            metrics::pre_encoded_cache_hit("txn");
-            transaction_return_encoded(pre_encoded, tag, buf);
-            return;
-        } else {
-            // lazyly pre-encode the transaction for future use
-            TransactionEncoder::pre_encode(tx);
+pub fn count_transaction_info_use(transaction_info_use: TransactionInfoUse) {
+    let data_plane_count = match transaction_info_use {
+        TransactionInfoUse::Published => DataPlaneCount::PreEncodedTransactionHit,
+        TransactionInfoUse::Private => DataPlaneCount::PreEncodedTransactionMiss,
+    };
+    DATA_PLANE_COUNTS.add(data_plane_count, 1);
+}
 
-            if let Some(pre_encoded) = tx.get_pre_encoded() {
-                transaction_return_encoded(pre_encoded, tag, buf);
-                return;
-            }
-        }
+/// The `TransactionInfo` length a member writes when it writes the bytes itself.
+fn private_transaction_info_len(message_transaction: &MessageTransaction) -> usize {
+    message_transaction
+        .transaction_bodies()
+        .built_info_len()
+        .unwrap_or_else(|| transaction_info_len(&message_transaction.transaction))
+}
 
-        metrics::pre_encoded_cache_miss("txn");
+/// Writes a transaction's `TransactionInfo` as field `field_tag`, encoded by this writer, and
+/// records its length for weights.
+fn put_private_transaction_info(
+    field_tag: u32,
+    message_transaction: &MessageTransaction,
+    output_buffer: &mut impl BufMut,
+) {
+    let transaction_info_bytes_len = private_transaction_info_len(message_transaction);
+    encode_key(field_tag, WireType::LengthDelimited, output_buffer);
+    encode_varint(transaction_info_bytes_len as u64, output_buffer);
+    put_transaction_info(&message_transaction.transaction, output_buffer);
+    message_transaction
+        .transaction_bodies()
+        .record_built_info_len(transaction_info_bytes_len);
+    count_transaction_info_use(TransactionInfoUse::Private);
+}
 
-        // fallback: encode from scratch
-        encode_key(tag, WireType::LengthDelimited, buf);
-        encode_varint(Self::tx_encoded_len(tx) as u64, buf);
+/// Writes a Block's transaction item: the `TransactionInfo` bytes of the transaction's
+/// published body, or this writer's own when the body is not published.
+pub fn put_block_transaction_item(
+    field_tag: u32,
+    message_transaction: &MessageTransaction,
+    output_buffer: &mut impl BufMut,
+) {
+    let Some(published_body) =
+        message_transaction.transaction_update_body(&StandardTransactionBodyWriter)
+    else {
+        put_private_transaction_info(field_tag, message_transaction, output_buffer);
+        return;
+    };
+    let transaction_info_range = published_body
+        .inner_item_range()
+        .expect("a Transaction body holds its TransactionInfo");
+    encode_key(field_tag, WireType::LengthDelimited, output_buffer);
+    encode_varint(transaction_info_range.len() as u64, output_buffer);
+    published_body.for_each_slice_in_range(transaction_info_range, |transaction_info_slice| {
+        output_buffer.put_slice(transaction_info_slice)
+    });
+    count_transaction_info_use(TransactionInfoUse::Published);
+}
 
-        let index = tx.index as u64;
-
-        prost_bytes_encode_raw(1u32, tx.signature.as_ref(), buf);
-        if tx.is_vote {
-            ::prost::encoding::bool::encode(2u32, &tx.is_vote, buf);
-        }
-        message::encode(3u32, &tx.transaction, buf);
-        message::encode(4u32, &tx.meta, buf);
-        if index != 0u64 {
-            ::prost::encoding::uint64::encode(5u32, &index, buf);
-        }
+/// The `TransactionInfo` length of a Block's transaction item.
+pub fn block_transaction_item_len(message_transaction: &MessageTransaction) -> usize {
+    if let Some(transaction_info_len) = message_transaction.transaction_bodies().built_info_len() {
+        return transaction_info_len;
     }
-
-    fn tx_encoded_len(tx: &MessageTransactionInfo) -> usize {
-        // try to use pre-encoded length (fast path)
-        if let Some(pre_encoded) = tx.get_pre_encoded() {
-            return pre_encoded.len();
-        }
-
-        let index = tx.index as u64;
-
-        prost_bytes_encoded_len(1u32, tx.signature.as_ref())
-            + if tx.is_vote {
-                ::prost::encoding::bool::encoded_len(2u32, &tx.is_vote)
-            } else {
-                0
-            }
-            + message::encoded_len(3u32, &tx.transaction)
-            + message::encoded_len(4u32, &tx.meta)
-            + if index != 0u64 {
-                ::prost::encoding::uint64::encoded_len(5u32, &index)
-            } else {
-                0
-            }
-    }
+    message_transaction
+        .transaction_update_body(&StandardTransactionBodyWriter)
+        .and_then(|published_body| published_body.inner_item_range())
+        .map_or_else(
+            || private_transaction_info_len(message_transaction),
+            |transaction_info_range| transaction_info_range.len(),
+        )
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1131,7 +1159,7 @@ impl FilteredUpdateDeshredOneof {
         })
     }
 
-    pub const fn slot(message: MessageSlot) -> Self {
+    pub const fn slot(message: Arc<MessageSlot>) -> Self {
         Self::Slot(FilteredUpdateSlot(message))
     }
 
@@ -1209,7 +1237,7 @@ impl prost::Message for FilteredUpdateBlock {
             message::encode(5u32, msg, buf);
         }
         for tx in &self.transactions {
-            FilteredUpdateTransaction::tx_encode_raw(6u32, &tx.transaction, buf);
+            put_block_transaction_item(6u32, tx, buf);
         }
         if self.meta.parent_slot != 0u64 {
             ::prost::encoding::uint64::encode(7u32, &self.meta.parent_slot, buf);
@@ -1224,10 +1252,10 @@ impl prost::Message for FilteredUpdateBlock {
             ::prost::encoding::uint64::encode(10u32, &self.updated_account_count, buf);
         }
         for account in &self.accounts {
-            FilteredUpdateAccount::account_encode_raw(
+            put_account_info_item(
                 11u32,
-                &account.account,
-                &self.accounts_data_slice,
+                account.account_body(),
+                self.accounts_data_slice.as_ref(),
                 buf,
             );
         }
@@ -1272,7 +1300,7 @@ impl prost::Message for FilteredUpdateBlock {
                 .as_ref()
                 .map_or(0, |msg| message::encoded_len(5u32, msg))
             + prost_repeated_encoded_len_map!(6u32, self.transactions, |tx| {
-                FilteredUpdateTransaction::tx_encoded_len(&tx.transaction)
+                block_transaction_item_len(tx)
             })
             + if self.meta.parent_slot != 0u64 {
                 ::prost::encoding::uint64::encoded_len(7u32, &self.meta.parent_slot)
@@ -1295,10 +1323,7 @@ impl prost::Message for FilteredUpdateBlock {
                 0
             }
             + prost_repeated_encoded_len_map!(11u32, self.accounts, |account| {
-                FilteredUpdateAccount::account_encoded_len(
-                    &account.account,
-                    &self.accounts_data_slice,
-                )
+                account_info_item_len(account.account_body(), self.accounts_data_slice.as_ref())
             })
             + if self.meta.entries_count != 0u64 {
                 ::prost::encoding::uint64::encoded_len(12u32, &self.meta.entries_count)
@@ -1331,7 +1356,7 @@ impl prost::Message for FilteredUpdateBlock {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct FilteredUpdateEntry(Arc<MessageEntry>);
+pub struct FilteredUpdateEntry(pub Arc<MessageEntry>);
 
 impl prost::Message for FilteredUpdateEntry {
     fn encode_raw(&self, buf: &mut impl BufMut) {
@@ -1422,15 +1447,12 @@ pub mod tests {
     use super::{FilteredUpdate, FilteredUpdateOneof};
     #[cfg(test)]
     use crate::plugin::{
-        filter::{
-            encoder::{AccountEncoder, TransactionEncoder},
-            fixtures,
-            message::{FilteredUpdateAccount, FilteredUpdateTransaction},
-        },
+        filter::fixtures,
         message::{MessageBlockFooter, MessageSlot, SlotStatus},
     };
     #[cfg(test)]
     use yellowstone_grpc_proto::geyser::{SubscribeUpdate, SubscribeUpdateBlockFooter};
+    #[allow(clippy::disallowed_types, reason = "test messages' OnceLock caches")]
     use {
         super::{FilteredUpdateBlock, FilteredUpdateFilters},
         crate::plugin::{
@@ -1441,8 +1463,8 @@ pub mod tests {
                 MessageTransaction, MessageTransactionInfo,
             },
         },
+        agave_geyser_plugin_interface::geyser_plugin_interface::ReplicaEntryInfoV2,
         agave_geyser_plugin_interface::transaction_status_meta as mirror,
-        bytes::Bytes,
         foldhash::{HashSet as FoldHashSet, HashSetExt},
         prost::Message,
         prost_types::Timestamp,
@@ -1487,7 +1509,8 @@ pub mod tests {
         .collect()
     }
 
-    pub fn create_accounts_raw() -> Vec<MessageAccountInfo> {
+    /// Every presence case of an account write's fields, each with its data.
+    pub fn create_accounts_raw() -> Vec<(MessageAccountInfo, Vec<u8>)> {
         let pubkey = Pubkey::from_str("28Dncoh8nmzXYEGLUcBA5SUw5WDwDBn15uUCwrWBbyuu").unwrap();
         let owner = Pubkey::from_str("5jrPJWVGrFvQ2V9wRZC3kHEZhxo9pmMir15x73oHT6mn").unwrap();
         let txn_signature = Signature::from_str("4V36qYhukXcLFuvhZaudSoJpPaFNB7d5RqYKjL2xiSKrxaBfEajqqL4X6viZkEvHJ8XcTJsqVjZxFegxhN7EC9V5").unwrap();
@@ -1504,17 +1527,16 @@ pub mod tests {
                     ] {
                         for write_version in [0, 1] {
                             for txn_signature in [None, Some(txn_signature)] {
-                                accounts.push(MessageAccountInfo {
+                                let account = MessageAccountInfo {
                                     pubkey,
                                     lamports,
                                     owner,
                                     executable,
                                     rent_epoch,
-                                    data: Bytes::from(data.clone()),
                                     write_version,
                                     txn_signature,
-                                    pre_encoded: OnceLock::new(),
-                                });
+                                };
+                                accounts.push((account, data.clone()));
                             }
                         }
                     }
@@ -1526,17 +1548,18 @@ pub mod tests {
 
     pub fn create_accounts() -> Vec<(MessageAccount, FilterAccountsDataSlice)> {
         let mut vec = vec![];
-        for account in create_accounts_raw() {
+        for (account, account_data) in create_accounts_raw() {
             for slot in [0, 42] {
                 for is_startup in [true, false] {
                     for data_slice in create_account_data_slice() {
-                        let msg = MessageAccount {
-                            account: account.clone(),
+                        let msg = MessageAccount::new(
+                            account,
+                            account_data.as_slice(),
                             slot,
                             is_startup,
-                            bank_id: Some(slot),
-                            created_at: Timestamp::from(SystemTime::now()),
-                        };
+                            Some(slot),
+                            Timestamp::from(SystemTime::now()),
+                        );
                         vec.push((msg, data_slice));
                     }
                 }
@@ -1547,26 +1570,30 @@ pub mod tests {
 
     pub fn create_entries() -> Vec<Arc<MessageEntry>> {
         [
-            MessageEntry {
-                slot: 299888121,
-                index: 42,
-                num_hashes: 128,
-                hash: Hash::new_from_array([98; 32]),
-                executed_transaction_count: 32,
-                starting_transaction_index: 1000,
-                created_at: Timestamp::from(SystemTime::now()),
-                bank_id: 299888121,
-            },
-            MessageEntry {
-                slot: 299888121,
-                index: 0,
-                num_hashes: 16,
-                hash: Hash::new_from_array([42; 32]),
-                executed_transaction_count: 32,
-                starting_transaction_index: 1000,
-                created_at: Timestamp::from(SystemTime::now()),
-                bank_id: 299888121,
-            },
+            MessageEntry::from_entry_info(
+                &ReplicaEntryInfoV2 {
+                    slot: 299888121,
+                    index: 42,
+                    num_hashes: 128,
+                    hash: Hash::new_from_array([98; 32]).as_ref(),
+                    executed_transaction_count: 32,
+                    starting_transaction_index: 1000,
+                },
+                299888121,
+                Timestamp::from(SystemTime::now()),
+            ),
+            MessageEntry::from_entry_info(
+                &ReplicaEntryInfoV2 {
+                    slot: 299888121,
+                    index: 0,
+                    num_hashes: 16,
+                    hash: Hash::new_from_array([42; 32]).as_ref(),
+                    executed_transaction_count: 32,
+                    starting_transaction_index: 1000,
+                },
+                299888121,
+                Timestamp::from(SystemTime::now()),
+            ),
         ]
         .into_iter()
         .map(Arc::new)
@@ -1610,6 +1637,7 @@ pub mod tests {
             .collect()
     }
 
+    #[allow(clippy::disallowed_types, reason = "test messages' OnceLock caches")]
     pub fn load_predefined_blocks() -> Vec<FilteredUpdateBlock> {
         load_predefined()
             .into_iter()
@@ -1622,22 +1650,21 @@ pub mod tests {
                         let TransactionWithStatusMeta::Complete(tx) = tx else {
                             panic!("tx with missed meta");
                         };
-                        MessageTransaction {
-                            transaction: MessageTransactionInfo {
+                        MessageTransaction::new(
+                            MessageTransactionInfo {
                                 signature: tx.transaction.signatures[0],
                                 is_vote: true,
                                 transaction: convert_to::create_transaction(&tx.transaction),
                                 meta: create_transaction_meta(&tx.meta),
                                 index,
                                 account_keys: FoldHashSet::new(),
-                                pre_encoded: OnceLock::new(),
                                 token_owners_all: OnceLock::new(),
                                 token_owners_changed: OnceLock::new(),
                             },
-                            slot: block.parent_slot + 1,
-                            created_at: Timestamp::from(SystemTime::now()),
-                            bank_id: block.parent_slot + 1,
-                        }
+                            block.parent_slot + 1,
+                            block.parent_slot + 1,
+                            Timestamp::from(SystemTime::now()),
+                        )
                     })
                     .map(Arc::new)
                     .collect::<Vec<_>>();
@@ -1645,8 +1672,8 @@ pub mod tests {
                 let entries = create_entries();
 
                 let slot = block.parent_slot + 1;
-                let block_meta1 = MessageBlockMeta {
-                    block_meta: SubscribeUpdateBlockMeta {
+                let block_meta1 = MessageBlockMeta::from_update_oneof(
+                    SubscribeUpdateBlockMeta {
                         parent_slot: block.parent_slot,
                         slot,
                         parent_blockhash: block.previous_blockhash,
@@ -1658,24 +1685,27 @@ pub mod tests {
                         entries_count: entries.len() as u64,
                         bank_id: slot,
                     },
-                    created_at: Timestamp::from(SystemTime::now()),
-                };
-                let mut block_meta2 = block_meta1.clone();
-                block_meta2.rewards = Some(create_rewards_obj(&block.rewards, Some(42)));
+                    Timestamp::from(SystemTime::now()),
+                );
+                let mut block_meta2_fields = block_meta1.block_meta.clone();
+                block_meta2_fields.rewards = Some(create_rewards_obj(&block.rewards, Some(42)));
+                let block_meta2 =
+                    MessageBlockMeta::from_update_oneof(block_meta2_fields, block_meta1.created_at);
 
                 let block_meta1 = Arc::new(block_meta1);
                 let block_meta2 = Arc::new(block_meta2);
 
                 let accounts = create_accounts_raw()
                     .into_iter()
-                    .map(|acc_info| {
-                        Arc::new(MessageAccount {
-                            account: acc_info,
-                            slot: block.parent_slot + 1,
-                            is_startup: false,
-                            created_at: Timestamp::from(SystemTime::now()),
-                            bank_id: Some(block.parent_slot + 1),
-                        })
+                    .map(|(acc_info, acc_data)| {
+                        Arc::new(MessageAccount::new(
+                            acc_info,
+                            acc_data.as_slice(),
+                            block.parent_slot + 1,
+                            false,
+                            Some(block.parent_slot + 1),
+                            Timestamp::from(SystemTime::now()),
+                        ))
                     })
                     .collect::<Vec<_>>();
                 create_account_data_slice()
@@ -1811,101 +1841,19 @@ pub mod tests {
         }
     }
 
+    /// The update's bytes equal prost's encoding of the same `SubscribeUpdate`, byte for byte.
     #[cfg(test)]
     fn encode_decode_cmp(filters: &[&str], message: FilteredUpdateOneof) {
-        let msg = FilteredUpdate {
-            filters: create_message_filters(filters),
-            message,
-            created_at: Timestamp::from(SystemTime::now()),
-        };
+        let mut msg = FilteredUpdate::new_empty(message);
+        msg.filters = create_message_filters(filters);
         let update = msg.as_subscribe_update();
+        let update_bytes = msg.encode_to_vec();
         assert_eq!(msg.encoded_len(), update.encoded_len());
+        assert_eq!(update_bytes, update.encode_to_vec());
         assert_eq!(
-            SubscribeUpdate::decode(msg.encode_to_vec().as_slice()).expect("failed to decode"),
+            SubscribeUpdate::decode(update_bytes.as_slice()).expect("failed to decode"),
             update
         );
-    }
-
-    #[test]
-    fn test_account_pre_encoded_matches_manual_encoding() {
-        use {bytes::Bytes, solana_pubkey::Pubkey, solana_signature::Signature};
-
-        // Test various account configurations
-        let pubkeys = [Pubkey::new_unique(), Pubkey::new_unique()];
-        let owners = [Pubkey::new_unique(), Pubkey::new_unique()];
-        let data_samples = [
-            vec![],
-            vec![1, 2, 3, 4],
-            vec![0u8; 1000], // larger account data
-        ];
-
-        for pubkey in &pubkeys {
-            for owner in &owners {
-                for lamports in [0u64, 100, 1_000_000] {
-                    for executable in [false, true] {
-                        for rent_epoch in [0u64, 100] {
-                            for write_version in [0u64, 42] {
-                                for data in &data_samples {
-                                    for txn_signature in [None, Some(Signature::from([0u8; 64]))] {
-                                        // Create account WITH pre-encoding
-                                        let account_with = MessageAccountInfo {
-                                            pubkey: *pubkey,
-                                            lamports,
-                                            owner: *owner,
-                                            executable,
-                                            rent_epoch,
-                                            data: Bytes::from(data.clone()),
-                                            write_version,
-                                            txn_signature,
-                                            pre_encoded: OnceLock::new(),
-                                        };
-                                        AccountEncoder::pre_encode(&account_with);
-
-                                        // Create account WITHOUT pre-encoding (fallback path)
-                                        let account_without = MessageAccountInfo {
-                                            pubkey: *pubkey,
-                                            lamports,
-                                            owner: *owner,
-                                            executable,
-                                            rent_epoch,
-                                            data: Bytes::from(data.clone()),
-                                            write_version,
-                                            txn_signature,
-                                            pre_encoded: OnceLock::new(),
-                                        };
-
-                                        // Encode both using FilteredUpdateAccount (no slicing)
-                                        let data_slice = FilterAccountsDataSlice::default();
-
-                                        let mut buf_with = Vec::new();
-                                        FilteredUpdateAccount::account_encode_raw(
-                                            1u32,
-                                            &account_with,
-                                            &data_slice,
-                                            &mut buf_with,
-                                        );
-
-                                        let mut buf_without = Vec::new();
-                                        FilteredUpdateAccount::account_encode_raw(
-                                            1u32,
-                                            &account_without,
-                                            &data_slice,
-                                            &mut buf_without,
-                                        );
-
-                                        // Must be identical
-                                        assert_eq!(
-                                            buf_with, buf_without,
-                                            "pre-encoded bytes don't match manual encoding"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     #[test]
@@ -1942,106 +1890,29 @@ pub mod tests {
                     };
                     encode_decode_cmp(
                         &["123"],
-                        FilteredUpdateOneof::slot(MessageSlot {
+                        FilteredUpdateOneof::slot(Arc::new(MessageSlot::new(
                             slot,
                             parent,
                             status,
-                            dead_error: None,
-                            created_at: Timestamp::from(SystemTime::now()),
+                            None,
                             bank_id,
-                        }),
+                            Timestamp::from(SystemTime::now()),
+                        ))),
                     )
                 }
                 encode_decode_cmp(
                     &["123"],
-                    FilteredUpdateOneof::slot(MessageSlot {
+                    FilteredUpdateOneof::slot(Arc::new(MessageSlot::new(
                         slot,
                         parent,
-                        status: SlotStatus::Dead,
-                        dead_error: Some("123".to_owned()),
-                        created_at: Timestamp::from(SystemTime::now()),
-                        bank_id: None,
-                    }),
+                        SlotStatus::Dead,
+                        Some("123".to_owned()),
+                        None,
+                        Timestamp::from(SystemTime::now()),
+                    ))),
                 )
             }
         }
-    }
-
-    #[test]
-    fn test_pre_encoded_matches_manual_encoding() {
-        // Get real transactions from fixtures (these have pre_encoded: None)
-        for message_arc in load_predefined_transactions() {
-            let tx = &message_arc.transaction;
-            // Clone the transaction info
-            let tx_with_cache = Arc::new(MessageTransaction {
-                transaction: MessageTransactionInfo {
-                    signature: tx.signature,
-                    is_vote: tx.is_vote,
-                    transaction: tx.transaction.clone(),
-                    meta: tx.meta.clone(),
-                    index: tx.index,
-                    account_keys: tx.account_keys.clone(),
-                    pre_encoded: OnceLock::new(),
-                    token_owners_all: OnceLock::new(),
-                    token_owners_changed: OnceLock::new(),
-                },
-                slot: message_arc.slot,
-                created_at: message_arc.created_at,
-                bank_id: message_arc.bank_id,
-            });
-
-            // Create version without cache (fallback path)
-            let tx_without_cache = Arc::new(MessageTransaction {
-                transaction: MessageTransactionInfo {
-                    signature: tx.signature,
-                    is_vote: tx.is_vote,
-                    transaction: tx.transaction.clone(),
-                    meta: tx.meta.clone(),
-                    index: tx.index,
-                    account_keys: tx.account_keys.clone(),
-                    pre_encoded: OnceLock::new(),
-                    token_owners_all: OnceLock::new(),
-                    token_owners_changed: OnceLock::new(),
-                },
-                slot: message_arc.slot,
-                created_at: message_arc.created_at,
-                bank_id: message_arc.bank_id,
-            });
-
-            // Pre-encode one of them
-            TransactionEncoder::pre_encode(&tx_with_cache.transaction);
-
-            assert!(
-                tx_with_cache.transaction.pre_encoded.get().is_some(),
-                "pre_encode should populate the field"
-            );
-
-            // Wrap both in FilteredUpdateTransaction and encode via the public Message trait
-            let wrapped_cached = FilteredUpdateTransaction {
-                transaction: tx_with_cache,
-                slot: 42,
-            };
-            let wrapped_manual = FilteredUpdateTransaction {
-                transaction: tx_without_cache,
-                slot: 42,
-            };
-
-            // Encode both using prost::Message::encode_to_vec (public API)
-            let buf_cached = wrapped_cached.encode_to_vec();
-            let buf_manual = wrapped_manual.encode_to_vec();
-
-            // They must be identical
-            assert_eq!(
-                buf_cached, buf_manual,
-                "Pre-encoded bytes differ from manual encoding for tx {:?}",
-                tx.signature
-            );
-        }
-
-        println!(
-            "Tested {} transactions - all match!",
-            load_predefined_transactions().len()
-        );
     }
 
     #[test]
@@ -2102,8 +1973,8 @@ pub mod tests {
                 (Some(final_cert), Some(skip_cert), Some(notar_cert)),
             ),
         ] {
-            let message = Arc::new(MessageBlockFooter {
-                block_footer: SubscribeUpdateBlockFooter {
+            let message = Arc::new(MessageBlockFooter::new(
+                SubscribeUpdateBlockFooter {
                     slot: 42,
                     bank_id: 7,
                     bank_hash,
@@ -2113,9 +1984,14 @@ pub mod tests {
                     skip_reward_cert,
                     notar_reward_cert,
                 },
-                created_at: Timestamp::default(),
-            });
-            encode_decode_cmp(&["123"], FilteredUpdateOneof::block_footer(message));
+                Timestamp::default(),
+            ));
+            for include_certificates in [false, true] {
+                encode_decode_cmp(
+                    &["123"],
+                    FilteredUpdateOneof::block_footer(Arc::clone(&message), include_certificates),
+                );
+            }
         }
     }
 

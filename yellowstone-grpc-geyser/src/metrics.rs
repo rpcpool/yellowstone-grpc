@@ -1,10 +1,24 @@
 use {
     crate::{
         config::ConfigPrometheus,
+        extension::seams::ThreadRole,
         plugin::{
             filter::{Filter, FilterStats},
             message::SlotStatus,
         },
+        telemetry::{
+            data_plane_counts::{DataPlaneCount, DataPlaneCounts, OwnerQueue, DATA_PLANE_COUNTS},
+            safety_summary::SafetySummary,
+            slot_status_gauges::{
+                agave_slot_status_index, agave_slot_status_labels, plugin_slot_status_index,
+                plugin_slot_status_labels, SlotStatusGauges, AGAVE_SLOT_STATUS_GAUGES,
+                PLUGIN_SLOT_STATUS_GAUGES, SLOT_STATUS_KINDS,
+            },
+            stream_counters::{
+                empty_family, label_pair, SubscriberSeriesCollector, SUBSCRIBER_COUNTS,
+            },
+        },
+        threads::PluginThreads,
         version::Version,
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::SlotStatus as GeyserSlosStatus,
@@ -18,14 +32,19 @@ use {
         rt::tokio::{TokioExecutor, TokioIo},
         server::conn::auto::Builder as ServerBuilder,
     },
-    log::{debug, error, info},
+    log::{debug, error, info, warn},
     prometheus::{
+        core::{Collector, Desc},
+        proto::{Counter, Gauge, LabelPair, Metric, MetricFamily, MetricType},
         Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec,
         Opts, Registry, TextEncoder,
     },
-    std::{convert::Infallible, sync::Once},
-    tokio::net::TcpListener,
-    tokio_util::{sync::CancellationToken, task::TaskTracker},
+    std::{collections::HashMap, convert::Infallible, net::SocketAddr, sync::Once, time::Duration},
+    tokio::{
+        net::TcpListener,
+        time::{Instant, Interval, MissedTickBehavior},
+    },
+    tokio_util::sync::CancellationToken,
 };
 
 lazy_static::lazy_static! {
@@ -36,31 +55,9 @@ lazy_static::lazy_static! {
         &["buildts", "git", "package", "proto", "rustc", "solana", "version"]
     ).unwrap();
 
-    static ref SLOT_STATUS: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("yellowstone_grpc_geyser_slot_status", "Lastest received slot from Geyser"),
-        &["status"]
-    ).unwrap();
-
-    static ref SLOT_STATUS_PLUGIN: IntGaugeVec = IntGaugeVec::new(
-        Opts::new("yellowstone_grpc_geyser_slot_status_plugin", "Latest processed slot in the plugin to client queues"),
-        &["status"]
-    ).unwrap();
-
     static ref INVALID_FULL_BLOCKS: IntGaugeVec = IntGaugeVec::new(
         Opts::new("yellowstone_grpc_geyser_invalid_full_blocks_total", "Total number of fails on constructin full blocks"),
         &["reason"]
-    ).unwrap();
-
-    static ref MESSAGE_QUEUE_SIZE: IntGauge = IntGauge::new(
-        "yellowstone_grpc_geyser_message_queue_size", "Size of geyser message queue"
-    ).unwrap();
-
-    static ref DESHRED_QUEUE_SIZE: IntGauge = IntGauge::new(
-        "yellowstone_grpc_geyser_deshred_queue_size", "Size of deshred message queue"
-    ).unwrap();
-
-    static ref BLOCK_RECONSTRUCTION_QUEUE_SIZE: IntGauge = IntGauge::new(
-        "yellowstone_grpc_geyser_block_reconstruction_queue_size", "Size of block reconstruction message queue"
     ).unwrap();
 
     static ref SUBSCRIPTIONS_TOTAL: IntGaugeVec = IntGaugeVec::new(
@@ -73,29 +70,12 @@ lazy_static::lazy_static! {
         &["status"]
     ).unwrap();
 
-    static ref GRPC_MESSAGE_SENT: IntCounterVec = IntCounterVec::new(
-        Opts::new(
-            "yellowstone_grpc_geyser_message_sent_count",
-            "Number of message sent over grpc to downstream client",
-        ),
-        &["subscriber_id"]
-    ).unwrap();
-
     static ref GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD: IntGaugeVec = IntGaugeVec::new(
         Opts::new(
             "yellowstone_grpc_geyser_subscriber_send_bandwidth_load",
             "Current Send load we send to subscriber channel (in bytes per second)"
         ),
         &["subscriber_id"]
-    ).unwrap();
-
-    static ref GRPC_SUBSCRIBER_QUEUE_SIZE: HistogramVec = HistogramVec::new(
-        HistogramOpts::new(
-            "yellowstone_grpc_geyser_subscriber_queue_size",
-            "Current size of subscriber channel queue"
-        )
-        .buckets(vec![1.0, 10.0, 100.0, 1000.0, 10000.0, 20000.0, 50000.0, 100_000.0, 175_000.0, 250_000.0, 500_000.0, 1_000_000.0]),
-        &["subscriber_id", "kind"]
     ).unwrap();
 
     static ref GRPC_CLIENT_DISCONNECTS: IntCounterVec = IntCounterVec::new(
@@ -114,15 +94,8 @@ lazy_static::lazy_static! {
         .buckets(vec![5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0, 2000.0, 3000.0, 5000.0, 10000.0])
     ).unwrap();
 
-    static ref PRE_ENCODED_CACHE_HIT: IntCounterVec = IntCounterVec::new(
-        Opts::new("yellowstone_grpc_geyser_pre_encoded_cache_hit", "Pre-encoded cache hits by message type"),
-        &["type"]
-    ).unwrap();
-
-    static ref PRE_ENCODED_CACHE_MISS: IntCounterVec = IntCounterVec::new(
-        Opts::new("yellowstone_grpc_geyser_pre_encoded_cache_miss", "Pre-encoded cache misses by message type"),
-        &["type"]
-    ).unwrap();
+    static ref PRE_ENCODED_CACHE: PreEncodedCacheCollector =
+        PreEncodedCacheCollector::new(&DATA_PLANE_COUNTS);
 
     static ref GRPC_CONCURRENT_SUBSCRIBE_PER_SUBSCRIBER_ID: IntGaugeVec = IntGaugeVec::new(
         Opts::new(
@@ -130,11 +103,6 @@ lazy_static::lazy_static! {
             "Current concurrent subscriptions per subscriber ID"
         ),
         &["subscriber_id"]
-    ).unwrap();
-
-    static ref TOTAL_TRAFFIC_SENT: IntCounter = IntCounter::new(
-        "yellowstone_grpc_geyser_total_traffic_sent_bytes",
-        "Total traffic sent to subscriber by type (account_update, block_meta, etc)"
     ).unwrap();
 
     static ref GRPC_METHOD_CALL_COUNT: IntCounterVec = IntCounterVec::new(
@@ -155,14 +123,6 @@ lazy_static::lazy_static! {
         &["subscriber_id", "uri_path"]
     ).unwrap();
 
-    static ref GEYSER_EVENT_DROPPED: IntCounterVec = IntCounterVec::new(
-        Opts::new(
-            "yellowstone_grpc_geyser_event_dropped_total",
-            "Total number of events dropped in the plugin due to drop_list"
-        ),
-        &["event"]
-    ).unwrap();
-
     static ref GEYSER_BLOCK_MISMATCH_TRANSACTION: IntCounter = IntCounter::new(
         "yellowstone_grpc_geyser_block_mismatch_transaction", "Number of block mismatch transactions encountered in the plugin"
     ).unwrap();
@@ -170,7 +130,6 @@ lazy_static::lazy_static! {
     static ref GEYSER_UNTRACK_SLOT_EVENT_DROPPED: IntCounter = IntCounter::new(
         "yellowstone_grpc_geyser_untrack_slot_event_dropped_total", "Number of geyser event drop due to untrack slot"
     ).unwrap();
-
 
     static ref IP_CONNCUR_RATE_LIMIT_EXCEEDED: IntCounterVec = IntCounterVec::new(
         Opts::new(
@@ -227,53 +186,60 @@ lazy_static::lazy_static! {
     ).unwrap();
 }
 
+/// The collector of every baseline family, the families each load registers, in order.
+fn baseline_collectors() -> Vec<Box<dyn Collector>> {
+    vec![
+        Box::new(VERSION.clone()),
+        Box::new(INVALID_FULL_BLOCKS.clone()),
+        Box::new(SUBSCRIPTIONS_TOTAL.clone()),
+        Box::new(MISSED_STATUS_MESSAGE.clone()),
+        Box::new(SubscriberSeriesCollector::new(&SUBSCRIBER_COUNTS)),
+        Box::new(GEYSER_ACCOUNT_UPDATE_RECEIVED.clone()),
+        Box::new(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD.clone()),
+        Box::new(GRPC_CLIENT_DISCONNECTS.clone()),
+        Box::new(PRE_ENCODED_CACHE.clone()),
+        Box::new(GRPC_CONCURRENT_SUBSCRIBE_PER_SUBSCRIBER_ID.clone()),
+        Box::new(GRPC_METHOD_CALL_COUNT.clone()),
+        Box::new(GRPC_SUBSCRIPTION_LIMIT_EXCEEDED.clone()),
+        Box::new(GRPC_SERVICE_OUTBOUND_BYTES.clone()),
+        Box::new(DataPathGaugesCollector::new(
+            &DATA_PLANE_COUNTS,
+            &AGAVE_SLOT_STATUS_GAUGES,
+            &PLUGIN_SLOT_STATUS_GAUGES,
+        )),
+        Box::new(GEYSER_BLOCK_MISMATCH_TRANSACTION.clone()),
+        Box::new(GEYSER_UNTRACK_SLOT_EVENT_DROPPED.clone()),
+        Box::new(IP_CONNCUR_RATE_LIMIT_EXCEEDED.clone()),
+        Box::new(UNAUTHORIZED_COUNT.clone()),
+        Box::new(AUTHORIZED_COUNT.clone()),
+        Box::new(METHOD_RATELIMITED_COUNT.clone()),
+        Box::new(FILTER_STATS.clone()),
+    ]
+}
+
 pub struct PrometheusService;
 
+/// How long the metrics server waits after a failed accept, such as out of file descriptors.
+const ACCEPT_ERROR_PAUSE: Duration = Duration::from_millis(100);
+
 impl PrometheusService {
-    pub async fn spawn(
+    /// Registers the families once and starts `solGrpcMetrics`, which serves `/metrics` on its
+    /// own runtime when a `prometheus` section binds a listener, and writes the safety summary
+    /// every `summary_interval` that is not zero. Returns the bound address, if any.
+    pub fn spawn(
         config: Option<ConfigPrometheus>,
+        summary_interval: Duration,
         cancellation_token: CancellationToken,
-        task_tracker: TaskTracker,
         version: &Version,
-    ) -> std::io::Result<()> {
+        plugin_threads: &PluginThreads,
+    ) -> std::io::Result<Option<SocketAddr>> {
         static REGISTER: Once = Once::new();
         REGISTER.call_once(|| {
-            macro_rules! register {
-                ($collector:ident) => {
-                    REGISTRY
-                        .register(Box::new($collector.clone()))
-                        .expect("collector can't be registered");
-                };
+            for baseline_collector in baseline_collectors() {
+                REGISTRY
+                    .register(baseline_collector)
+                    .expect("collector can't be registered");
             }
-            register!(VERSION);
-            register!(SLOT_STATUS);
-            register!(SLOT_STATUS_PLUGIN);
-            register!(INVALID_FULL_BLOCKS);
-            register!(MESSAGE_QUEUE_SIZE);
-            register!(BLOCK_RECONSTRUCTION_QUEUE_SIZE);
-            register!(SUBSCRIPTIONS_TOTAL);
-            register!(MISSED_STATUS_MESSAGE);
-            register!(GRPC_MESSAGE_SENT);
-            register!(GEYSER_ACCOUNT_UPDATE_RECEIVED);
-            register!(GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD);
-            register!(GRPC_SUBSCRIBER_QUEUE_SIZE);
-            register!(GRPC_CLIENT_DISCONNECTS);
-            register!(PRE_ENCODED_CACHE_HIT);
-            register!(PRE_ENCODED_CACHE_MISS);
-            register!(GRPC_CONCURRENT_SUBSCRIBE_PER_SUBSCRIBER_ID);
-            register!(TOTAL_TRAFFIC_SENT);
-            register!(GRPC_METHOD_CALL_COUNT);
-            register!(GRPC_SUBSCRIPTION_LIMIT_EXCEEDED);
-            register!(GRPC_SERVICE_OUTBOUND_BYTES);
-            register!(GEYSER_EVENT_DROPPED);
-            register!(GEYSER_BLOCK_MISMATCH_TRANSACTION);
-            register!(GEYSER_UNTRACK_SLOT_EVENT_DROPPED);
-            register!(IP_CONNCUR_RATE_LIMIT_EXCEEDED);
-            register!(UNAUTHORIZED_COUNT);
-            register!(AUTHORIZED_COUNT);
-            register!(METHOD_RATELIMITED_COUNT);
-
-            register!(FILTER_STATS);
 
             VERSION
                 .with_label_values(&[
@@ -288,56 +254,177 @@ impl PrometheusService {
                 .inc();
         });
 
-        if let Some(ConfigPrometheus { address }) = config {
-            let listener = TcpListener::bind(&address).await?;
-            info!("start prometheus server: {address}");
-            let task_tracker_clone = task_tracker.clone();
-            task_tracker.spawn(async move {
-                debug!("Prometheus server listening on {}", address);
-                loop {
-                    let stream = tokio::select! {
-                        () = cancellation_token.cancelled() => {
-                            info!("Prometheus server received cancellation");
-                            break
-                        },
-                        maybe_conn = listener.accept() => {
-                            match maybe_conn {
-                                Ok((stream, _addr)) => stream,
-                                Err(error) => {
-                                    error!("failed to accept new connection: {error}");
-                                    break;
-                                }
-                            }
-                        }
-                    };
-                    task_tracker_clone.spawn(async move {
-                        let peer_addr = stream.peer_addr().ok();
-                        debug!(
-                            "Prometheus server accepted new connection from {:?}",
-                            peer_addr
-                        );
-                        if let Err(error) = ServerBuilder::new(TokioExecutor::new())
-                            .serve_connection(
-                                TokioIo::new(stream),
-                                service_fn(move |req: Request<BodyIncoming>| async move {
-                                    match req.uri().path() {
-                                        "/metrics" => metrics_handler(),
-                                        _ => not_found_handler(),
-                                    }
-                                }),
-                            )
-                            .await
-                        {
-                            error!("failed to handle request: {error}");
-                        }
-                        debug!("Prometheus server finished connection from {:?}", peer_addr);
-                    });
-                }
-                info!("Prometheus server exiting");
-            });
+        // Taken on the loading thread, after the load's reset of the counts.
+        let safety_summary = (!summary_interval.is_zero()).then(|| {
+            (
+                SafetySummary::new(&DATA_PLANE_COUNTS, Instant::now()),
+                summary_interval,
+            )
+        });
+        let std_listener = match config {
+            Some(ConfigPrometheus { address }) => {
+                let std_listener = std::net::TcpListener::bind(address)?;
+                std_listener.set_nonblocking(true)?;
+                Some(std_listener)
+            }
+            None => None,
+        };
+        let bound_address = std_listener
+            .as_ref()
+            .map(std::net::TcpListener::local_addr)
+            .transpose()?;
+        if bound_address.is_none() && safety_summary.is_none() {
+            return Ok(None);
         }
-        Ok(())
+        // A listener's start error fails the load as a bind error does; the summary's alone logs.
+        let summary_only = bound_address.is_none();
+        let metrics_runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(metrics_runtime) => metrics_runtime,
+            Err(build_error) if summary_only => {
+                error!("the safety summary has no runtime: {build_error}");
+                return Ok(None);
+            }
+            Err(build_error) => return Err(build_error),
+        };
+        if let Some(bound_address) = bound_address {
+            info!("start prometheus server: {bound_address}");
+        }
+        let thread_start =
+            plugin_threads.spawn_plugin_thread(ThreadRole::MetricsRender, 0, move || {
+                serve_metrics_on_this_thread(
+                    metrics_runtime,
+                    std_listener,
+                    safety_summary,
+                    cancellation_token,
+                )
+            });
+        match thread_start {
+            // The plugin token's cancellation ends the thread; `stop_and_join_all` joins it.
+            Ok(metrics_thread) => drop(metrics_thread),
+            Err(spawn_error) if summary_only => {
+                error!("the safety summary has no thread: {spawn_error}");
+                return Ok(None);
+            }
+            Err(spawn_error) => return Err(spawn_error),
+        }
+        Ok(bound_address)
     }
+}
+
+/// Runs `solGrpcMetrics`'s loop on `metrics_runtime`, a current-thread runtime, so a render, its
+/// response write and the summary hold only this thread.
+fn serve_metrics_on_this_thread(
+    metrics_runtime: tokio::runtime::Runtime,
+    std_listener: Option<std::net::TcpListener>,
+    safety_summary: Option<(SafetySummary, Duration)>,
+    cancellation_token: CancellationToken,
+) {
+    metrics_runtime.block_on(async move {
+        let scrape_listener = std_listener.and_then(|std_listener| {
+            TcpListener::from_std(std_listener)
+                .inspect_err(|listener_error| {
+                    error!("failed to register the metrics listener: {listener_error}");
+                })
+                .ok()
+        });
+        run_metrics_loop(
+            scrape_listener,
+            safety_summary,
+            cancellation_token,
+            &mut |summary_line| warn!("{summary_line}"),
+        )
+        .await;
+        info!("metrics thread exiting");
+    });
+}
+
+/// Serves `/metrics` on `scrape_listener` and writes each summary line through
+/// `write_summary_line`, one interval after another, until the cancellation writes a last one.
+pub async fn run_metrics_loop(
+    scrape_listener: Option<TcpListener>,
+    mut safety_summary: Option<(SafetySummary, Duration)>,
+    cancellation_token: CancellationToken,
+    write_summary_line: &mut dyn FnMut(&str),
+) {
+    // A period too long to add to now never ticks; the last summary still follows the cancellation.
+    let mut summary_interval = safety_summary.as_ref().and_then(|(_, summary_period)| {
+        let first_tick_at = Instant::now().checked_add(*summary_period)?;
+        let mut summary_interval = tokio::time::interval_at(first_tick_at, *summary_period);
+        summary_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        Some(summary_interval)
+    });
+    loop {
+        tokio::select! {
+            () = cancellation_token.cancelled() => break,
+            accept_result = accept_next_scrape(scrape_listener.as_ref()) => match accept_result {
+                Ok((scrape_stream, _)) => {
+                    tokio::spawn(serve_metrics_connection(scrape_stream));
+                }
+                Err(accept_error) => {
+                    // This is the instance's only metrics server, so it keeps accepting.
+                    error!("failed to accept new connection: {accept_error}");
+                    tokio::time::sleep(ACCEPT_ERROR_PAUSE).await;
+                }
+            },
+            () = next_summary_tick(summary_interval.as_mut()) => {
+                if let Some((safety_summary, _)) = &mut safety_summary {
+                    if let Some(summary_line) = safety_summary.next_line(Instant::now()) {
+                        write_summary_line(&summary_line);
+                    }
+                }
+            }
+        }
+    }
+    if let Some((safety_summary, _)) = &mut safety_summary {
+        if let Some(summary_line) = safety_summary.next_line(Instant::now()) {
+            write_summary_line(&summary_line);
+        }
+    }
+}
+
+async fn accept_next_scrape(
+    scrape_listener: Option<&TcpListener>,
+) -> std::io::Result<(tokio::net::TcpStream, SocketAddr)> {
+    match scrape_listener {
+        Some(scrape_listener) => scrape_listener.accept().await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn next_summary_tick(summary_interval: Option<&mut Interval>) {
+    match summary_interval {
+        Some(summary_interval) => {
+            summary_interval.tick().await;
+        }
+        None => std::future::pending().await,
+    }
+}
+
+/// One scraper's connection; the runtime's drop ends it at unload.
+async fn serve_metrics_connection(stream: tokio::net::TcpStream) {
+    let peer_addr = stream.peer_addr().ok();
+    debug!(
+        "Prometheus server accepted new connection from {:?}",
+        peer_addr
+    );
+    if let Err(error) = ServerBuilder::new(TokioExecutor::new())
+        .serve_connection(
+            TokioIo::new(stream),
+            service_fn(move |req: Request<BodyIncoming>| async move {
+                match req.uri().path() {
+                    "/metrics" => metrics_handler(),
+                    _ => not_found_handler(),
+                }
+            }),
+        )
+        .await
+    {
+        error!("failed to handle request: {error}");
+    }
+    debug!("Prometheus server finished connection from {:?}", peer_addr);
 }
 
 fn metrics_handler() -> http::Result<Response<BoxBody<Bytes, Infallible>>> {
@@ -455,10 +542,9 @@ pub fn incr_method_ratelimited_count<S1: AsRef<str>, S2: AsRef<str>>(
         .inc();
 }
 
-pub fn incr_geyser_event_dropped<S: AsRef<str>>(event: S) {
-    GEYSER_EVENT_DROPPED
-        .with_label_values(&[event.as_ref()])
-        .inc();
+/// Counts an account update that `accounts.owner_reject` dropped.
+pub fn incr_account_event_dropped() {
+    DATA_PLANE_COUNTS.add(DataPlaneCount::AccountEventDropped, 1);
 }
 
 pub fn incr_geyser_block_mismatch_transaction() {
@@ -469,37 +555,12 @@ pub fn incr_geyser_untrack_slot_event_dropped() {
     GEYSER_UNTRACK_SLOT_EVENT_DROPPED.inc();
 }
 
-/// The counter of updates sent under one subscriber id, to keep and bump without a label lookup
-/// per update.
-///
-/// # Arguments
-///
-/// * `subscriber_id` - The subscriber id whose updates it counts.
-///
-/// # Returns
-///
-/// The `yellowstone_grpc_geyser_message_sent_count` counter for `subscriber_id`, the one
-/// [`incr_grpc_message_sent_counter`] bumps.
-pub fn grpc_message_sent_counter(subscriber_id: &str) -> IntCounter {
-    GRPC_MESSAGE_SENT.with_label_values(&[subscriber_id])
-}
-
-pub fn incr_grpc_message_sent_counter<S: AsRef<str>>(remote_id: S) {
-    GRPC_MESSAGE_SENT
-        .with_label_values(&[remote_id.as_ref()])
-        .inc();
-}
-
 pub fn update_slot_status(status: &GeyserSlosStatus, slot: u64) {
-    SLOT_STATUS
-        .with_label_values(&[status.as_str()])
-        .set(slot as i64);
+    AGAVE_SLOT_STATUS_GAUGES.set(agave_slot_status_index(status), slot);
 }
 
 pub fn update_slot_plugin_status(status: SlotStatus, slot: u64) {
-    SLOT_STATUS_PLUGIN
-        .with_label_values(&[status.as_str()])
-        .set(slot as i64);
+    PLUGIN_SLOT_STATUS_GAUGES.set(plugin_slot_status_index(status), slot);
 }
 
 pub fn update_invalid_blocks(reason: impl AsRef<str>) {
@@ -510,31 +571,28 @@ pub fn update_invalid_blocks(reason: impl AsRef<str>) {
 }
 
 pub fn message_queue_size_inc() {
-    MESSAGE_QUEUE_SIZE.inc()
-}
-
-pub fn deshred_queue_size_inc(amount: i64) {
-    DESHRED_QUEUE_SIZE.add(amount);
+    DATA_PLANE_COUNTS.add(DataPlaneCount::OwnerQueueEntered(OwnerQueue::GeyserLoop), 1);
 }
 
 pub fn block_reconstruction_queue_size_inc() {
-    BLOCK_RECONSTRUCTION_QUEUE_SIZE.inc()
+    let block_queue = OwnerQueue::BlockReconstruction;
+    DATA_PLANE_COUNTS.add(DataPlaneCount::OwnerQueueEntered(block_queue), 1);
 }
 
 pub fn message_queue_size_dec() {
-    MESSAGE_QUEUE_SIZE.dec();
+    message_queue_size_dec_by(1);
 }
 
-pub fn message_queue_size_dec_by(amount: i64) {
-    MESSAGE_QUEUE_SIZE.sub(amount);
+pub fn message_queue_size_dec_by(amount: u64) {
+    DATA_PLANE_COUNTS.add(
+        DataPlaneCount::OwnerQueueLeft(OwnerQueue::GeyserLoop),
+        amount,
+    );
 }
 
-pub fn deshred_queue_size_dec() {
-    DESHRED_QUEUE_SIZE.dec()
-}
-
-pub fn block_reconstruction_queue_size_dec_by(amount: i64) {
-    BLOCK_RECONSTRUCTION_QUEUE_SIZE.sub(amount);
+pub fn block_reconstruction_queue_size_dec_by(amount: u64) {
+    let block_queue = OwnerQueue::BlockReconstruction;
+    DATA_PLANE_COUNTS.add(DataPlaneCount::OwnerQueueLeft(block_queue), amount);
 }
 
 pub fn subscription_limit_exceeded_inc<S: AsRef<str>>(subscriber_id: S) {
@@ -575,16 +633,6 @@ pub fn set_subscriber_send_bandwidth_load<S: AsRef<str>>(subscriber_id: S, load:
         .set(load);
 }
 
-pub fn observe_subscriber_queue_size<S: AsRef<str>>(
-    subscriber_id: S,
-    size: u64,
-    kind: &'static str,
-) {
-    GRPC_SUBSCRIBER_QUEUE_SIZE
-        .with_label_values(&[subscriber_id.as_ref(), kind])
-        .observe(size as f64);
-}
-
 /// Reads the `yellowstone_grpc_geyser_client_disconnects_total` counter for one subscriber
 /// and reason.
 ///
@@ -609,12 +657,239 @@ pub fn incr_client_disconnect<S: AsRef<str>>(subscriber_id: S, reason: &str) {
         .inc();
 }
 
-pub fn pre_encoded_cache_hit(msg_type: &str) {
-    PRE_ENCODED_CACHE_HIT.with_label_values(&[msg_type]).inc();
+/// `pre_encoded_cache_hit` and `_miss{type="txn"}` from a set of striped counts, each series once
+/// it counts. Accounts have no cache to count: capture builds their bodies.
+#[derive(Clone)]
+struct PreEncodedCacheCollector {
+    hit_desc: Desc,
+    miss_desc: Desc,
+    data_plane_counts: &'static DataPlaneCounts,
 }
 
-pub fn pre_encoded_cache_miss(msg_type: &str) {
-    PRE_ENCODED_CACHE_MISS.with_label_values(&[msg_type]).inc();
+impl PreEncodedCacheCollector {
+    fn new(data_plane_counts: &'static DataPlaneCounts) -> Self {
+        let counter_desc = |fq_name: &str, help: &str| {
+            Desc::new(
+                fq_name.to_owned(),
+                help.to_owned(),
+                vec!["type".to_owned()],
+                HashMap::new(),
+            )
+            .expect("a valid family name and label")
+        };
+        Self {
+            hit_desc: counter_desc(
+                "yellowstone_grpc_geyser_pre_encoded_cache_hit",
+                "Pre-encoded cache hits by message type",
+            ),
+            miss_desc: counter_desc(
+                "yellowstone_grpc_geyser_pre_encoded_cache_miss",
+                "Pre-encoded cache misses by message type",
+            ),
+            data_plane_counts,
+        }
+    }
+}
+
+impl Collector for PreEncodedCacheCollector {
+    fn desc(&self) -> Vec<&Desc> {
+        vec![&self.hit_desc, &self.miss_desc]
+    }
+
+    fn collect(&self) -> Vec<MetricFamily> {
+        [
+            (&self.hit_desc, DataPlaneCount::PreEncodedTransactionHit),
+            (&self.miss_desc, DataPlaneCount::PreEncodedTransactionMiss),
+        ]
+        .into_iter()
+        .map(|(counter_desc, data_plane_count)| {
+            let mut metric_family = MetricFamily::default();
+            metric_family.set_name(counter_desc.fq_name.clone());
+            metric_family.set_help(counter_desc.help.clone());
+            metric_family.set_field_type(MetricType::COUNTER);
+            let count_sum = self.data_plane_counts.sum(data_plane_count);
+            if count_sum > 0 {
+                let mut type_label = LabelPair::default();
+                type_label.set_name("type".to_owned());
+                type_label.set_value("txn".to_owned());
+                let mut series_counter = Counter::default();
+                series_counter.set_value(count_sum as f64);
+                let mut series_metric = Metric::default();
+                series_metric.set_label(vec![type_label]);
+                series_metric.set_counter(series_counter);
+                metric_family.mut_metric().push(series_metric);
+            }
+            metric_family
+        })
+        .collect()
+    }
+}
+
+/// The families the data path keeps in striped words and slot status words: the two owner queue
+/// gauges, the slot status gauges, dropped events and sent traffic, each as 8666a6c renders it.
+struct DataPathGaugesCollector {
+    message_queue_desc: Desc,
+    block_queue_desc: Desc,
+    slot_status_desc: Desc,
+    slot_status_plugin_desc: Desc,
+    event_dropped_desc: Desc,
+    traffic_sent_desc: Desc,
+    data_plane_counts: &'static DataPlaneCounts,
+    agave_slot_status_gauges: &'static SlotStatusGauges,
+    plugin_slot_status_gauges: &'static SlotStatusGauges,
+}
+
+impl DataPathGaugesCollector {
+    fn new(
+        data_plane_counts: &'static DataPlaneCounts,
+        agave_slot_status_gauges: &'static SlotStatusGauges,
+        plugin_slot_status_gauges: &'static SlotStatusGauges,
+    ) -> Self {
+        let family_desc = |fq_name: &str, help: &str, label_names: &[&str]| {
+            let variable_labels = label_names
+                .iter()
+                .map(|label_name| (*label_name).to_owned());
+            Desc::new(
+                fq_name.to_owned(),
+                help.to_owned(),
+                variable_labels.collect(),
+                HashMap::new(),
+            )
+            .expect("a valid family name and labels")
+        };
+        Self {
+            message_queue_desc: family_desc(
+                "yellowstone_grpc_geyser_message_queue_size",
+                "Size of geyser message queue",
+                &[],
+            ),
+            block_queue_desc: family_desc(
+                "yellowstone_grpc_geyser_block_reconstruction_queue_size",
+                "Size of block reconstruction message queue",
+                &[],
+            ),
+            slot_status_desc: family_desc(
+                "yellowstone_grpc_geyser_slot_status",
+                "Lastest received slot from Geyser",
+                &["status"],
+            ),
+            slot_status_plugin_desc: family_desc(
+                "yellowstone_grpc_geyser_slot_status_plugin",
+                "Latest processed slot in the plugin to client queues",
+                &["status"],
+            ),
+            event_dropped_desc: family_desc(
+                "yellowstone_grpc_geyser_event_dropped_total",
+                "Total number of events dropped in the plugin due to drop_list",
+                &["event"],
+            ),
+            traffic_sent_desc: family_desc(
+                "yellowstone_grpc_geyser_total_traffic_sent_bytes",
+                "Total traffic sent to subscriber by type (account_update, block_meta, etc)",
+                &[],
+            ),
+            data_plane_counts,
+            agave_slot_status_gauges,
+            plugin_slot_status_gauges,
+        }
+    }
+
+    /// A slot status family's series: each status set since the last reset, at its last slot.
+    fn slot_status_family(
+        family_desc: &Desc,
+        slot_status_gauges: &SlotStatusGauges,
+        status_labels: [&str; SLOT_STATUS_KINDS],
+    ) -> MetricFamily {
+        let status_metrics = (0..SLOT_STATUS_KINDS).filter_map(|status_index| {
+            let last_slot = slot_status_gauges.last_slot(status_index)?;
+            let status_label = label_pair("status", status_labels[status_index]);
+            Some(gauge_metric(vec![status_label], last_slot as i64 as f64))
+        });
+        rendered_family(family_desc, MetricType::GAUGE, status_metrics.collect())
+    }
+}
+
+fn gauge_metric(label_pairs: Vec<LabelPair>, gauge_value: f64) -> Metric {
+    let mut series_gauge = Gauge::default();
+    series_gauge.set_value(gauge_value);
+    let mut series_metric = Metric::default();
+    series_metric.set_label(label_pairs);
+    series_metric.set_gauge(series_gauge);
+    series_metric
+}
+
+fn counter_metric(label_pairs: Vec<LabelPair>, counter_value: f64) -> Metric {
+    let mut series_counter = Counter::default();
+    series_counter.set_value(counter_value);
+    let mut series_metric = Metric::default();
+    series_metric.set_label(label_pairs);
+    series_metric.set_counter(series_counter);
+    series_metric
+}
+
+fn rendered_family(
+    family_desc: &Desc,
+    family_type: MetricType,
+    series_metrics: Vec<Metric>,
+) -> MetricFamily {
+    let mut metric_family = empty_family(family_desc, family_type);
+    metric_family.set_metric(series_metrics);
+    metric_family
+}
+
+impl Collector for DataPathGaugesCollector {
+    fn desc(&self) -> Vec<&Desc> {
+        vec![
+            &self.message_queue_desc,
+            &self.block_queue_desc,
+            &self.slot_status_desc,
+            &self.slot_status_plugin_desc,
+            &self.event_dropped_desc,
+            &self.traffic_sent_desc,
+        ]
+    }
+
+    fn collect(&self) -> Vec<MetricFamily> {
+        let owner_queue_family = |family_desc: &Desc, owner_queue: OwnerQueue| {
+            let queue_size = self.data_plane_counts.owner_queue_size(owner_queue);
+            let queue_metric = gauge_metric(Vec::new(), queue_size as f64);
+            rendered_family(family_desc, MetricType::GAUGE, vec![queue_metric])
+        };
+        let dropped_accounts = (self.data_plane_counts).sum(DataPlaneCount::AccountEventDropped);
+        let dropped_metrics = (dropped_accounts > 0)
+            .then(|| {
+                let event_label = label_pair("event", "account");
+                counter_metric(vec![event_label], dropped_accounts as f64)
+            })
+            .into_iter()
+            .collect();
+        let traffic_sent_bytes = (self.data_plane_counts).sum(DataPlaneCount::TrafficSentBytes);
+        let traffic_metric = counter_metric(Vec::new(), traffic_sent_bytes as f64);
+        vec![
+            owner_queue_family(&self.message_queue_desc, OwnerQueue::GeyserLoop),
+            owner_queue_family(&self.block_queue_desc, OwnerQueue::BlockReconstruction),
+            Self::slot_status_family(
+                &self.slot_status_desc,
+                self.agave_slot_status_gauges,
+                agave_slot_status_labels(),
+            ),
+            Self::slot_status_family(
+                &self.slot_status_plugin_desc,
+                self.plugin_slot_status_gauges,
+                plugin_slot_status_labels(),
+            ),
+            rendered_family(
+                &self.event_dropped_desc,
+                MetricType::COUNTER,
+                dropped_metrics,
+            ),
+            rendered_family(
+                &self.traffic_sent_desc,
+                MetricType::COUNTER,
+                vec![traffic_metric],
+            ),
+        ]
+    }
 }
 
 pub fn incr_grpc_method_call_count<S: AsRef<str>>(method: S) {
@@ -623,14 +898,10 @@ pub fn incr_grpc_method_call_count<S: AsRef<str>>(method: S) {
         .inc();
 }
 
-pub fn add_grpc_service_outbound_bytes<S: AsRef<str>, P: AsRef<str>>(
-    subscriber_id: S,
-    uri_path: P,
-    bytes: u64,
-) {
-    GRPC_SERVICE_OUTBOUND_BYTES
-        .with_label_values(&[subscriber_id.as_ref(), uri_path.as_ref()])
-        .add(bytes as i64);
+/// The `service_outbound_bytes` series of one subscriber id and path, which a metered body keeps
+/// from its start, so a report adds to it without a label lookup.
+pub fn grpc_service_outbound_bytes_gauge(subscriber_id: &str, uri_path: &str) -> IntGauge {
+    GRPC_SERVICE_OUTBOUND_BYTES.with_label_values(&[subscriber_id, uri_path])
 }
 
 pub fn reset_grpc_service_outbound_bytes<S: AsRef<str>, P: AsRef<str>>(
@@ -643,7 +914,7 @@ pub fn reset_grpc_service_outbound_bytes<S: AsRef<str>, P: AsRef<str>>(
 }
 
 pub fn add_total_traffic_sent(bytes: u64) {
-    TOTAL_TRAFFIC_SENT.inc_by(bytes);
+    DATA_PLANE_COUNTS.add(DataPlaneCount::TrafficSentBytes, bytes);
 }
 
 pub fn set_grpc_concurrent_subscribe_per_subscriber_id<S: AsRef<str>>(subscriber_id: S, size: u64) {
@@ -661,34 +932,25 @@ pub fn remove_grpc_concurrent_subscribe_per_subscriber_id<S: AsRef<str>>(subscri
 
 /// Reset all metrics on plugin unload to prevent metric accumulation across plugin lifecycle
 pub fn reset_metrics() {
-    // Reset gauge metrics to 0
-    MESSAGE_QUEUE_SIZE.set(0);
-    DESHRED_QUEUE_SIZE.set(0);
-    BLOCK_RECONSTRUCTION_QUEUE_SIZE.set(0);
-
     // Reset gauge vectors (clears all label combinations)
     SUBSCRIPTIONS_TOTAL.reset();
-    SLOT_STATUS.reset();
-    SLOT_STATUS_PLUGIN.reset();
+    AGAVE_SLOT_STATUS_GAUGES.reset();
+    PLUGIN_SLOT_STATUS_GAUGES.reset();
     INVALID_FULL_BLOCKS.reset();
     GRPC_SUBSCRIBER_SEND_BANDWIDTH_LOAD.reset();
-    GRPC_SUBSCRIBER_QUEUE_SIZE.reset();
 
     // Reset counter vectors (clears all label combinations)
     MISSED_STATUS_MESSAGE.reset();
-    GRPC_MESSAGE_SENT.reset();
+    SUBSCRIBER_COUNTS.reset();
     GRPC_CLIENT_DISCONNECTS.reset();
     GRPC_CONCURRENT_SUBSCRIBE_PER_SUBSCRIBER_ID.reset();
-    TOTAL_TRAFFIC_SENT.reset();
     GRPC_SERVICE_OUTBOUND_BYTES.reset();
     GRPC_SUBSCRIPTION_LIMIT_EXCEEDED.reset();
     GRPC_METHOD_CALL_COUNT.reset();
 
-    // Pre-encoding
-    PRE_ENCODED_CACHE_HIT.reset();
-    PRE_ENCODED_CACHE_MISS.reset();
+    // Every data-path count: pre-encoding, the owner queue gauges, dropped events, traffic
+    DATA_PLANE_COUNTS.reset();
 
-    GEYSER_EVENT_DROPPED.reset();
     GEYSER_BLOCK_MISMATCH_TRANSACTION.reset();
     GEYSER_UNTRACK_SLOT_EVENT_DROPPED.reset();
 

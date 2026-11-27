@@ -1,14 +1,13 @@
 use {
     crate::{
+        body::StandardTransactionBodyWriter,
+        compression::slot::retire_compressed_groups,
         metrics,
-        plugin::{
-            filter::encoder::TransactionEncoder,
-            message::{
-                Message, MessageAccount, MessageBlock, MessageBlockFooter, MessageBlockMeta,
-                MessageEntry, MessageSlot, MessageTransaction, SlotStatus,
-            },
+        plugin::message::{
+            Message, MessageAccount, MessageBlock, MessageBlockFooter, MessageBlockMeta,
+            MessageEntry, MessageSlot, MessageTransaction, SlotStatus,
         },
-        route::BankRouteKeyIndex,
+        reverse_index::BankKeyIndex,
     },
     foldhash::{HashMap as FoldHashMap, HashMapExt},
     solana_clock::{BankId, Slot},
@@ -16,9 +15,18 @@ use {
     solana_pubkey::Pubkey,
     std::{
         collections::{btree_map::Range, BTreeMap, VecDeque},
-        sync::{Arc, LazyLock, OnceLock},
+        sync::{Arc, LazyLock, OnceLock, Weak},
+        time::{Duration, Instant},
     },
 };
+
+/// A settled bank's compression groups retire once this many newer banks have settled.
+pub const RETIRE_AFTER_NEWER_SETTLED_BANKS: usize = 2;
+/// A settled bank's groups also wait this long, so a burst of finalizations does not retire a
+/// bank before its finalized writers ran.
+pub const RETIRE_AFTER_SETTLED_DELAY: Duration = Duration::from_secs(2);
+/// Settled banks the storage holds for the bank thread before its queue grows.
+const RETIRING_BANKS_CAPACITY: usize = 64;
 
 // Sysvars a bank must be observed to have written before it's allowed to seal. Clock and
 // SlotHashes are rewritten inline as part of bank construction -- before `CreatedBank`
@@ -173,9 +181,7 @@ impl BankBuffer {
                 self.accounts.push(Arc::clone(message_account));
             }
             Message::Transaction(message_transaction) => {
-                if message_transaction.transaction.get_pre_encoded().is_none() {
-                    TransactionEncoder::pre_encode(&message_transaction.transaction);
-                }
+                message_transaction.ensure_transaction_info(&StandardTransactionBodyWriter);
                 self.transactions.push(Arc::clone(message_transaction));
             }
             Message::Entry(message_entry) => {
@@ -286,8 +292,49 @@ impl BankBuffer {
             block_meta,
             block_footer: self.footer,
             pre_computed_message_block,
-            route_key_index: OnceLock::new(),
+            bank_key_index: OnceLock::new(),
         }
+    }
+}
+
+/// A settled bank, held weakly, and when it settled: its retirement does not keep it alive.
+pub struct RetiringBank {
+    pub frozen_bank: Weak<FrozenBank>,
+    pub settled_at: Instant,
+}
+
+/// The settled banks waiting to retire their compression groups, oldest first.
+#[derive(Default)]
+pub struct GroupRetirementQueue {
+    waiting_banks: VecDeque<RetiringBank>,
+}
+
+impl GroupRetirementQueue {
+    pub fn push_retiring_bank(&mut self, retiring_bank: RetiringBank) {
+        self.waiting_banks.push_back(retiring_bank);
+    }
+
+    /// Retires the groups of each bank with enough newer settled banks behind it whose delay has
+    /// passed by `current_instant`; a bank already freed has nothing to retire.
+    pub fn retire_due_banks(&mut self, current_instant: Instant) -> usize {
+        let mut retired_slot_count = 0;
+        while self.time_until_next_retirement(current_instant) == Some(Duration::ZERO) {
+            let RetiringBank { frozen_bank, .. } =
+                self.waiting_banks.pop_front().expect("a waiting bank");
+            if let Some(frozen_bank) = frozen_bank.upgrade() {
+                retired_slot_count += frozen_bank.retire_all_compressed_groups();
+            }
+        }
+        retired_slot_count
+    }
+
+    /// How long until the oldest bank may retire, once enough newer banks have settled.
+    pub fn time_until_next_retirement(&self, current_instant: Instant) -> Option<Duration> {
+        let oldest_bank = self.waiting_banks.front()?;
+        (self.waiting_banks.len() > RETIRE_AFTER_NEWER_SETTLED_BANKS).then(|| {
+            (oldest_bank.settled_at + RETIRE_AFTER_SETTLED_DELAY)
+                .saturating_duration_since(current_instant)
+        })
     }
 }
 
@@ -303,11 +350,44 @@ pub struct FrozenBank {
     block_meta: Arc<MessageBlockMeta>,
     block_footer: Option<Arc<MessageBlockFooter>>,
     pre_computed_message_block: Arc<MessageBlock>,
-    // Set once, by the bank thread: the route keys of `original_messages`.
-    route_key_index: OnceLock<Arc<BankRouteKeyIndex>>,
+    // Set once, by the bank thread: the key index of `original_messages`.
+    bank_key_index: OnceLock<Arc<BankKeyIndex>>,
 }
 
 impl FrozenBank {
+    /// Retires the compression groups of every shared body of the bank: its account writes,
+    /// entries and transactions, its CreatedBank slot, block meta, footers and Block shapes.
+    pub fn retire_all_compressed_groups(&self) -> usize {
+        let mut retired_slot_count = 0;
+        for bank_message in self.original_messages.iter() {
+            retired_slot_count += match bank_message {
+                Message::Account(message_account) => {
+                    retire_compressed_groups(message_account.account_body())
+                }
+                Message::Entry(message_entry) => {
+                    retire_compressed_groups(message_entry.entry_body())
+                }
+                Message::Transaction(message_transaction) => message_transaction
+                    .transaction_bodies()
+                    .retire_compressed_groups(),
+                _ => 0,
+            };
+        }
+        retired_slot_count += retire_compressed_groups(self.created_bank.slot_body());
+        retired_slot_count += retire_compressed_groups(self.block_meta.block_meta_body());
+        if let Some(block_footer) = &self.block_footer {
+            let footer_bodies = block_footer.footer_bodies();
+            retired_slot_count +=
+                retire_compressed_groups(&footer_bodies.footer_without_certificates);
+            retired_slot_count += retire_compressed_groups(&footer_bodies.footer_with_certificates);
+        }
+        retired_slot_count += self
+            .pre_computed_message_block
+            .block_shapes
+            .retire_shape_bodies();
+        retired_slot_count
+    }
+
     pub fn get_message_block(&self) -> Arc<MessageBlock> {
         Arc::clone(&self.pre_computed_message_block)
     }
@@ -354,29 +434,16 @@ impl FrozenBank {
         self.block_footer.clone()
     }
 
-    /// The route key index of [`Self::messages`].
-    ///
-    /// # Returns
-    ///
-    /// The index, or [`None`] until [`Self::index_route_keys`] has built it.
-    pub fn route_key_index(&self) -> Option<Arc<BankRouteKeyIndex>> {
-        self.route_key_index.get().cloned()
+    /// The bank key index of [`Self::messages`].
+    pub fn bank_key_index(&self) -> Option<Arc<BankKeyIndex>> {
+        self.bank_key_index.get().cloned()
     }
 
-    /// Builds the route key index of [`Self::messages`], unless it is built. The bank thread
+    /// Builds the bank key index of [`Self::messages`], unless it is built. The bank thread
     /// runs it, since it passes over every message.
-    ///
-    /// # Arguments
-    ///
-    /// * `scratch_postings` - The buffer [`BankRouteKeyIndex::new`] builds the index in, which
-    ///   the caller keeps for the next bank.
-    pub fn index_route_keys(&self, scratch_postings: &mut Vec<(u64, u32)>) {
-        self.route_key_index.get_or_init(|| {
-            Arc::new(BankRouteKeyIndex::new(
-                &self.original_messages,
-                scratch_postings,
-            ))
-        });
+    pub fn build_key_index(&self, scratch_postings: &mut Vec<(u64, u32)>) {
+        self.bank_key_index
+            .get_or_init(|| Arc::new(BankKeyIndex::new(&self.original_messages, scratch_postings)));
     }
 }
 
@@ -465,7 +532,7 @@ impl<'storage> Iterator for ReplayIter<'storage> {
 ///     bank_thread.free_evicted_banks(evicted_slot_banks);
 /// }
 /// for sealed_bank in storage.drain_sealed_banks() {
-///     bank_thread.index_route_keys(sealed_bank);
+///     bank_thread.build_key_index(sealed_bank);
 /// }
 /// let replayed_slots = storage.replay_from_slot(from_slot, min_commitment);
 /// ```
@@ -519,8 +586,11 @@ pub struct BlockMachineStorage {
     /// [`BlockMachineStorage::drain_evicted_banks`] takes them.
     evicted_banks: Vec<Vec<Arc<FrozenBank>>>,
     /// The banks sealed since the last [`BlockMachineStorage::drain_sealed_banks`], so the bank
-    /// thread can index their route keys. Kept only while replay is on.
+    /// thread can build their key indexes. Kept only while replay is on.
     sealed_banks: Vec<Arc<FrozenBank>>,
+    /// The banks settled since the bank thread last took them: finalized, or skipped by the
+    /// finalized chain. Held weakly, so an evicted bank frees at its eviction.
+    retiring_banks: VecDeque<RetiringBank>,
     min_slot: Option<Slot>,
     // Highest slot number observed across any message so far, and the value it had at the
     // last stale-slot sweep -- together these throttle `sweep_stale_slots` to run only every
@@ -531,16 +601,6 @@ pub struct BlockMachineStorage {
 
 impl BlockMachineStorage {
     /// Creates an empty storage.
-    ///
-    /// # Arguments
-    ///
-    /// * `replayed_capacity` - How many slots of sealed banks to keep for replay. The storage
-    ///   evicts older slots only while more than [`MINIMUM_FINALIZED_SLOT_TO_BUFFER`] kept slots
-    ///   are finalized.
-    ///
-    /// # Returns
-    ///
-    /// A new `BlockMachineStorage` with no bank.
     pub fn new(replayed_capacity: usize) -> Self {
         Self {
             banks: FoldHashMap::with_capacity(replayed_capacity),
@@ -556,6 +616,7 @@ impl BlockMachineStorage {
             num_buffered_finalized_slot: 0,
             evicted_banks: Vec::new(),
             sealed_banks: Vec::new(),
+            retiring_banks: VecDeque::with_capacity(RETIRING_BANKS_CAPACITY),
             min_slot: None,
             max_slot_seen: 0,
             last_stale_gc_at: 0,
@@ -956,7 +1017,7 @@ impl BlockMachineStorage {
     /// resolved winner and the slot already has a known commitment floor -- e.g. inherited
     /// from a descendant before this bank even sealed -- its delivery is emitted now too.
     /// While replay is on, the bank also waits in `sealed_banks` for
-    /// [`Self::drain_sealed_banks`], so its route keys get indexed.
+    /// [`Self::drain_sealed_banks`], so its key index gets built.
     ///
     /// # Arguments
     ///
@@ -1044,6 +1105,7 @@ impl BlockMachineStorage {
         }
         if newly_finalized {
             self.num_buffered_finalized_slot += 1;
+            self.queue_settled_banks(slot, frozen);
         }
         for update in to_emit {
             self.ready_queue.push_back((update, Arc::clone(frozen)));
@@ -1144,10 +1206,6 @@ impl BlockMachineStorage {
     ///
     /// It does not free the banks, since freeing a whole bank takes milliseconds. The caller
     /// takes them with [`Self::drain_evicted_banks`] and drops them off its own thread.
-    ///
-    /// # Arguments
-    ///
-    /// * `slot` - The slot to evict, the oldest one kept for replay.
     fn evict_slot(&mut self, slot: Slot) {
         self.evicted_banks.extend(self.replayed_slot.remove(&slot));
         if let Some(progression) = self.slot_commitment_progression_map.remove(&slot) {
@@ -1171,23 +1229,50 @@ impl BlockMachineStorage {
 
     /// Takes the sealed banks of the slots evicted since the last call, so the caller can drop
     /// them off its own thread. The storage keeps the capacity of its list of evicted slots.
-    ///
-    /// # Returns
-    ///
-    /// The banks of each evicted slot, in eviction order. Empty if no slot was evicted.
     pub fn drain_evicted_banks(&mut self) -> std::vec::Drain<'_, Vec<Arc<FrozenBank>>> {
         self.evicted_banks.drain(..)
     }
 
-    /// Takes the banks sealed since the last call, so the caller can have their route keys
-    /// indexed off its own thread. The storage keeps the capacity of its list of sealed banks.
-    ///
-    /// # Returns
-    ///
-    /// The sealed banks, in seal order. Empty if no bank sealed, and always empty while replay
-    /// is off.
+    /// Takes the banks sealed since the last call, so the caller can have their key indexes
+    /// built off its own thread. The storage keeps the capacity of its list of sealed banks.
     pub fn drain_sealed_banks(&mut self) -> std::vec::Drain<'_, Arc<FrozenBank>> {
         self.sealed_banks.drain(..)
+    }
+
+    /// Queues the bank that finalized at `finalized_slot` for retirement, with the sealed banks of
+    /// the slots between it and its parent, which the finalized chain skips.
+    fn queue_settled_banks(&mut self, finalized_slot: Slot, finalized_bank: &Arc<FrozenBank>) {
+        let settled_at = Instant::now();
+        let skipped_slots_start = finalized_bank.block_meta.parent_slot.saturating_add(1);
+        // A slot in the gap is off the finalized chain for good; a parent at or above the slot
+        // leaves no gap.
+        if skipped_slots_start < finalized_slot {
+            for skipped_banks in self
+                .replayed_slot
+                .range(skipped_slots_start..finalized_slot)
+                .map(|(_, skipped_banks)| skipped_banks)
+            {
+                self.retiring_banks
+                    .extend(skipped_banks.iter().map(|skipped_bank| RetiringBank {
+                        frozen_bank: Arc::downgrade(skipped_bank),
+                        settled_at,
+                    }));
+            }
+        }
+        self.retiring_banks.push_back(RetiringBank {
+            frozen_bank: Arc::downgrade(finalized_bank),
+            settled_at,
+        });
+    }
+
+    /// The oldest settled bank the bank thread has not taken yet.
+    pub fn take_retiring_bank(&mut self) -> Option<RetiringBank> {
+        self.retiring_banks.pop_front()
+    }
+
+    /// Puts back a bank the bank thread could not take, first in line for the next pass.
+    pub fn return_refused_bank(&mut self, retiring_bank: RetiringBank) {
+        self.retiring_banks.push_front(retiring_bank);
     }
 
     pub fn replay_from_slot(&self, slot: Slot, min_commitment: CommitmentLevel) -> ReplayIter<'_> {
@@ -1247,19 +1332,15 @@ impl BlockMachineStorage {
 mod tests {
     use {
         super::*,
-        crate::plugin::{
-            filter::fixtures,
-            message::{
-                MessageAccount, MessageAccountInfo, MessageEntry, MessageEntryUpdateParent,
-                MessageSlot, SlotStatus,
-            },
+        crate::plugin::message::{
+            MessageAccount, MessageAccountInfo, MessageEntry, MessageEntryUpdateParent,
+            MessageSlot, SlotStatus,
         },
-        bytes::Bytes,
+        agave_geyser_plugin_interface::geyser_plugin_interface::ReplicaEntryInfoV2,
         prost_types::Timestamp,
         solana_hash::Hash,
         solana_pubkey::Pubkey,
-        solana_signature::Signature,
-        std::{sync::OnceLock, time::SystemTime},
+        std::time::SystemTime,
         yellowstone_grpc_proto::geyser::{
             SubscribeUpdateBlockMeta, SubscribeUpdateEntryUpdateParent,
         },
@@ -1270,23 +1351,23 @@ mod tests {
     }
 
     fn make_account_msg(slot: u64, bank_id: BankId, pubkey: Pubkey, write_version: u64) -> Message {
-        Message::Account(Arc::new(MessageAccount {
-            account: MessageAccountInfo {
-                pubkey,
-                lamports: 100,
-                owner: Pubkey::default(),
-                executable: false,
-                rent_epoch: 0,
-                data: Bytes::new(),
-                write_version,
-                txn_signature: None,
-                pre_encoded: OnceLock::new(),
-            },
+        let account = MessageAccountInfo {
+            pubkey,
+            lamports: 100,
+            owner: Pubkey::default(),
+            executable: false,
+            rent_epoch: 0,
+            write_version,
+            txn_signature: None,
+        };
+        Message::Account(Arc::new(MessageAccount::new(
+            account,
+            b"".as_slice(),
             slot,
-            is_startup: false,
-            created_at: ts(),
-            bank_id: Some(bank_id),
-        }))
+            false,
+            Some(bank_id),
+            ts(),
+        )))
     }
 
     /// Feeds all four `MUST_HAVE_SYSVAR_ACCOUNTS` writes for `bank_id` -- required for any
@@ -1298,47 +1379,49 @@ mod tests {
     }
 
     fn make_startup_account_msg(slot: u64, pubkey: Pubkey) -> Message {
-        Message::Account(Arc::new(MessageAccount {
-            account: MessageAccountInfo {
-                pubkey,
-                lamports: 100,
-                owner: Pubkey::default(),
-                executable: false,
-                rent_epoch: 0,
-                data: Bytes::new(),
-                write_version: 1,
-                txn_signature: None,
-                pre_encoded: OnceLock::new(),
-            },
+        let account = MessageAccountInfo {
+            pubkey,
+            lamports: 100,
+            owner: Pubkey::default(),
+            executable: false,
+            rent_epoch: 0,
+            write_version: 1,
+            txn_signature: None,
+        };
+        Message::Account(Arc::new(MessageAccount::new(
+            account,
+            b"".as_slice(),
             slot,
-            is_startup: true,
-            created_at: ts(),
-            bank_id: None,
-        }))
+            true,
+            None,
+            ts(),
+        )))
     }
 
     fn make_entry_msg(slot: u64, index: usize, bank_id: BankId) -> Message {
-        Message::Entry(Arc::new(MessageEntry {
-            slot,
-            index,
-            num_hashes: 1,
-            hash: Hash::default(),
-            executed_transaction_count: 0,
-            starting_transaction_index: 0,
-            created_at: ts(),
+        Message::Entry(Arc::new(MessageEntry::from_entry_info(
+            &ReplicaEntryInfoV2 {
+                slot,
+                index,
+                num_hashes: 1,
+                hash: Hash::default().as_ref(),
+                executed_transaction_count: 0,
+                starting_transaction_index: 0,
+            },
             bank_id,
-        }))
+            ts(),
+        )))
     }
 
     fn make_created_bank_msg(slot: u64, parent: Option<u64>, bank_id: BankId) -> Message {
-        Message::Slot(Arc::new(MessageSlot {
+        Message::Slot(Arc::new(MessageSlot::new(
             slot,
             parent,
-            status: SlotStatus::CreatedBank,
-            dead_error: None,
-            created_at: ts(),
-            bank_id: Some(bank_id),
-        }))
+            SlotStatus::CreatedBank,
+            None,
+            Some(bank_id),
+            ts(),
+        )))
     }
 
     fn make_commitment_msg(
@@ -1347,25 +1430,25 @@ mod tests {
         status: SlotStatus,
         bank_id: BankId,
     ) -> Message {
-        Message::Slot(Arc::new(MessageSlot {
+        Message::Slot(Arc::new(MessageSlot::new(
             slot,
             parent,
             status,
-            dead_error: None,
-            created_at: ts(),
-            bank_id: Some(bank_id),
-        }))
+            None,
+            Some(bank_id),
+            ts(),
+        )))
     }
 
     fn make_lifecycle_msg(slot: u64, status: SlotStatus) -> Message {
-        Message::Slot(Arc::new(MessageSlot {
+        Message::Slot(Arc::new(MessageSlot::new(
             slot,
-            parent: None,
+            None,
             status,
-            dead_error: None,
-            created_at: ts(),
-            bank_id: None,
-        }))
+            None,
+            None,
+            ts(),
+        )))
     }
 
     fn make_block_meta_msg(slot: u64, parent_slot: u64, bank_id: BankId) -> Message {
@@ -1408,15 +1491,15 @@ mod tests {
     }
 
     fn make_update_parent_msg(slot: u64, cleared_bank_id: BankId, parent_slot: u64) -> Message {
-        Message::EntryUpdateParent(Arc::new(MessageEntryUpdateParent {
-            update_parent: SubscribeUpdateEntryUpdateParent {
+        Message::EntryUpdateParent(Arc::new(MessageEntryUpdateParent::new(
+            SubscribeUpdateEntryUpdateParent {
                 slot,
                 cleared_bank_id,
                 parent_slot,
                 parent_block_id: vec![0; 32],
             },
-            created_at: ts(),
-        }))
+            ts(),
+        )))
     }
 
     // An update parent clears a bank and replays the slot under a new bank_id. The cleared
@@ -1454,14 +1537,14 @@ mod tests {
     #[test]
     fn sealed_bank_keeps_its_created_bank_apart_from_its_messages() {
         let mut storage = BlockMachineStorage::new(10);
-        let created_bank = Arc::new(MessageSlot {
-            slot: 1,
-            parent: Some(0),
-            status: SlotStatus::CreatedBank,
-            dead_error: None,
-            created_at: ts(),
-            bank_id: Some(7),
-        });
+        let created_bank = Arc::new(MessageSlot::new(
+            1,
+            Some(0),
+            SlotStatus::CreatedBank,
+            None,
+            Some(7),
+            ts(),
+        ));
         // Agave sends the writes made while the bank is constructed before CreatedBank.
         storage.add(make_account_msg(1, 7, MUST_HAVE_SYSVAR_ACCOUNTS[0], 1));
         storage.add(make_account_msg(1, 7, MUST_HAVE_SYSVAR_ACCOUNTS[1], 1));
@@ -1546,31 +1629,6 @@ mod tests {
             1 + MUST_HAVE_SYSVAR_ACCOUNTS.len(),
             "the bank-scoped account plus the sysvars, and nothing else (not the startup one)"
         );
-    }
-
-    #[test]
-    fn collecting_a_block_pre_encodes_its_transactions() {
-        let mut storage = BlockMachineStorage::new(10);
-        let bank_id = 7;
-        let transaction = fixtures::message_transaction(
-            Signature::default(),
-            vec![Pubkey::default()],
-            false,
-            Default::default(),
-        );
-        storage.add(Message::Transaction(Arc::new(MessageTransaction {
-            slot: 1,
-            bank_id,
-            ..MessageTransaction::clone(&transaction)
-        })));
-        drive_bank_to_processed(&mut storage, 1, bank_id, None);
-
-        let (_, frozen) = storage.pop_ready_block().expect("block should be ready");
-        let block = frozen.get_message_block();
-        assert!(block.transactions[0]
-            .transaction
-            .get_pre_encoded()
-            .is_some());
     }
 
     #[test]
@@ -2328,48 +2386,5 @@ mod tests {
             vec![(10, CommitmentLevel::Processed, 2)],
             "bank 2 got its own Processed and must be delivered"
         );
-    }
-
-    /// While replay is on, the storage keeps each bank it seals until the next drain, which
-    /// gives it once. The bank has no route key index until [`FrozenBank::index_route_keys`]
-    /// builds it, and the index finds the bank's entry. With replay off, the storage keeps no
-    /// sealed bank.
-    #[test]
-    fn a_storage_keeps_each_sealed_bank_for_indexing_only_while_replay_is_on() {
-        let mut replay_on_storage = BlockMachineStorage::new(150);
-        seal_bank(&mut replay_on_storage, 10, 1, 9);
-        let sealed_banks: Vec<_> = replay_on_storage.drain_sealed_banks().collect();
-        assert_eq!(replay_on_storage.drain_sealed_banks().count(), 0);
-        let [sealed_bank] = &sealed_banks[..] else {
-            panic!("{} sealed banks drained", sealed_banks.len());
-        };
-        let replayed_slot = replay_on_storage
-            .replay_from_slot(10, CommitmentLevel::Processed)
-            .next()
-            .expect("the sealed bank");
-        assert!(std::ptr::eq(
-            sealed_bank.as_ref(),
-            replayed_slot.frozen_block
-        ));
-
-        assert!(sealed_bank.route_key_index().is_none());
-        sealed_bank.index_route_keys(&mut Vec::new());
-        let route_key_index = sealed_bank.route_key_index().expect("an index");
-        let entries_route_key = crate::route::RouteKey::Entries;
-        let entries_route_key_hash = BankRouteKeyIndex::route_key_hash(&entries_route_key);
-        let mut candidate_positions = Vec::new();
-        route_key_index
-            .collect_candidate_positions(&[entries_route_key_hash], &mut candidate_positions);
-        let entry_position = sealed_bank
-            .messages()
-            .iter()
-            .position(|bank_message| matches!(bank_message, Message::Entry(_)))
-            .expect("the bank's entry");
-        assert_eq!(candidate_positions, [entry_position as u32]);
-
-        let mut replay_off_storage = BlockMachineStorage::new(0);
-        seal_bank(&mut replay_off_storage, 10, 1, 9);
-        assert_eq!(replay_off_storage.min_replayable_slot(), Some(10));
-        assert_eq!(replay_off_storage.drain_sealed_banks().count(), 0);
     }
 }

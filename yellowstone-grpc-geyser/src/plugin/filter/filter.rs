@@ -1,28 +1,43 @@
 use {
-    crate::plugin::{
-        filter::{
-            limits::{
-                FilterLimits, FilterLimitsAccounts, FilterLimitsBlockFooter, FilterLimitsBlocks,
-                FilterLimitsBlocksMeta, FilterLimitsCheckError, FilterLimitsDeshredTransactions,
-                FilterLimitsEntries, FilterLimitsSlots, FilterLimitsTransactions,
+    crate::{
+        body::{
+            block_shape::{
+                BlockSelectionTotals, BlockShapeEvent, MeasuredSelection, SelectedBlockItems,
+            },
+            BlockShapeSource, SharedUpdateBody,
+        },
+        plugin::{
+            filter::{
+                limits::{
+                    FilterLimits, FilterLimitsAccounts, FilterLimitsBlockFooter,
+                    FilterLimitsBlocks, FilterLimitsBlocksMeta, FilterLimitsCheckError,
+                    FilterLimitsDeshredTransactions, FilterLimitsEntries, FilterLimitsSlots,
+                    FilterLimitsTransactions,
+                },
+                message::{
+                    block_transaction_item_len, put_block_transaction_item, FilteredUpdate,
+                    FilteredUpdateBlock, FilteredUpdateDeshred, FilteredUpdateDeshredOneof,
+                    FilteredUpdateFilters, FilteredUpdateOneof, FilteredUpdates,
+                    FilteredUpdatesDeshred,
+                },
+                name::{
+                    FilterGenerationNames, FilterName, FilterNameError, FilterNameKind, FilterNames,
+                },
+                variant::{NormalizedBlockShape, UpdateBodyVariant},
             },
             message::{
-                FilteredUpdate, FilteredUpdateBlock, FilteredUpdateDeshred,
-                FilteredUpdateDeshredOneof, FilteredUpdateFilters, FilteredUpdateOneof,
-                FilteredUpdates, FilteredUpdatesDeshred,
+                CommitmentLevel, Message, MessageAccount, MessageBlock, MessageBlockFooter,
+                MessageBlockMeta, MessageDeshredTransaction, MessageEntry,
+                MessageEntryUpdateParent, MessageSlot, MessageTransaction, SlotStatus,
             },
-            name::{FilterName, FilterNameError, FilterNames},
         },
-        message::{
-            CommitmentLevel, Message, MessageAccount, MessageAccountInfo, MessageBlock,
-            MessageBlockFooter, MessageBlockMeta, MessageDeshredTransaction, MessageEntry,
-            MessageEntryUpdateParent, MessageSlot, MessageTransaction, SlotStatus,
-        },
+        subscribe::entry::BlockPinCounter,
     },
     base64::{engine::general_purpose::STANDARD as base64_engine, Engine},
     bytes::buf::BufMut,
     foldhash::{HashMap as FoldHashMap, HashMapExt, HashSet as FoldHashSet, HashSetExt},
     prost::encoding::{encode_key, encode_varint, WireType},
+    prost_types::Timestamp,
     solana_pubkey::{ParsePubkeyError, Pubkey},
     solana_signature::{ParseSignatureError, Signature},
     spl_token_2022_interface::{
@@ -41,11 +56,18 @@ use {
             SubscribeRequestFilterBlockFooter, SubscribeRequestFilterBlocks,
             SubscribeRequestFilterBlocksMeta, SubscribeRequestFilterDeshredTransactions,
             SubscribeRequestFilterEntry, SubscribeRequestFilterSlots,
-            SubscribeRequestFilterTransactions, TokenAccountExpansionControlFlag,
+            SubscribeRequestFilterTransactions, SubscribeUpdateBlockMeta,
+            TokenAccountExpansionControlFlag,
         },
         solana::storage::confirmed_block,
     },
 };
+
+/// A child of this module, so `match_update` reads each kind's compiled filters.
+#[path = "matching.rs"]
+mod matching;
+
+pub use matching::{MatchScratch, MatchedUpdate};
 
 #[derive(Debug, Clone)]
 struct HybridSet<T> {
@@ -121,6 +143,29 @@ pub enum FilterError {
 
 pub type FilterResult<T> = Result<T, FilterError>;
 
+/// One kind's request filters sorted by name bytes. Compiles validate them in this order, so
+/// the first bad filter by name is the one reported, and matched names come out sorted.
+fn sorted_by_filter_name<FilterConfig>(
+    filter_configs: &HashMap<String, FilterConfig>,
+) -> Vec<(&str, &FilterConfig)> {
+    let mut sorted_filter_configs: Vec<(&str, &FilterConfig)> = filter_configs
+        .iter()
+        .map(|(request_name, filter_config)| (request_name.as_str(), filter_config))
+        .collect();
+    sorted_filter_configs.sort_unstable_by(|(left_name, _), (right_name, _)| {
+        left_name.as_bytes().cmp(right_name.as_bytes())
+    });
+    sorted_filter_configs
+}
+
+/// The names of one kind that keeps its filters as (name, filter) pairs, in their order.
+fn named_filter_names<FilterInner>(named_filters: &[(FilterName, FilterInner)]) -> Vec<FilterName> {
+    named_filters
+        .iter()
+        .map(|(filter_name, _)| filter_name.clone())
+        .collect()
+}
+
 macro_rules! filtered_updates_once_owned {
     ($filters:ident, $message:expr, $created_at:expr) => {{
         let mut messages = FilteredUpdates::new();
@@ -158,6 +203,12 @@ pub struct Filter {
     commitment: CommitmentLevel,
     accounts_data_slice: FilterAccountsDataSlice,
     ping: Option<i32>,
+    filter_generation_names: Arc<FilterGenerationNames>,
+    account_body_variant: UpdateBodyVariant,
+    /// One per blocks filter, in the order of the Blocks names.
+    block_shapes: Box<[NormalizedBlockShape]>,
+    /// The blocks the session's Block entries pin, shared by each filter of the session.
+    block_pins: Arc<BlockPinCounter>,
 }
 
 impl Default for Filter {
@@ -180,6 +231,10 @@ impl Default for Filter {
             commitment: CommitmentLevel::Processed,
             accounts_data_slice: FilterAccountsDataSlice::default(),
             ping: None,
+            filter_generation_names: Arc::default(),
+            account_body_variant: UpdateBodyVariant::MessageBody,
+            block_shapes: Box::default(),
+            block_pins: Arc::default(),
         }
     }
 }
@@ -239,7 +294,7 @@ impl Filter {
         limits: &FilterLimits,
         names: &mut FilterNames,
     ) -> FilterResult<Self> {
-        Ok(Self {
+        let mut compiled_filter = Self {
             accounts: FilterAccounts::new(&config.accounts, &limits.accounts, names)?,
             slots: FilterSlots::new(&config.slots, &limits.slots, names)?,
             transactions: FilterTransactions::new(
@@ -268,7 +323,93 @@ impl Filter {
                 limits.accounts.data_slice_max,
             )?,
             ping: config.ping.as_ref().map(|msg| msg.id),
+            filter_generation_names: Arc::default(),
+            account_body_variant: UpdateBodyVariant::MessageBody,
+            block_shapes: Box::default(),
+            block_pins: Arc::default(),
+        };
+        compiled_filter.filter_generation_names =
+            Arc::new(compiled_filter.sorted_generation_names());
+        compiled_filter.account_body_variant =
+            UpdateBodyVariant::for_account_data_slice(compiled_filter.accounts_data_slice.as_ref());
+        compiled_filter.block_shapes = compiled_filter
+            .blocks
+            .normalized_block_shapes(&compiled_filter.accounts_data_slice);
+        Ok(compiled_filter)
+    }
+
+    /// Every kind's names, in the order each kind keeps its filters: sorted by bytes.
+    fn sorted_generation_names(&self) -> FilterGenerationNames {
+        FilterGenerationNames::from_sorted_kind_names(|filter_name_kind| match filter_name_kind {
+            FilterNameKind::Accounts => {
+                let account_aggregates = self.accounts.aggregates().iter();
+                account_aggregates
+                    .map(|account_aggregate| account_aggregate.filter_name.clone())
+                    .collect()
+            }
+            FilterNameKind::Slots => named_filter_names(&self.slots.filters),
+            FilterNameKind::Transactions => named_filter_names(&self.transactions.filters),
+            FilterNameKind::TransactionsStatus => {
+                named_filter_names(&self.transactions_status.filters)
+            }
+            FilterNameKind::Entries => self.entries.filters.clone(),
+            FilterNameKind::Blocks => named_filter_names(&self.blocks.filters),
+            FilterNameKind::BlocksMeta => self.blocks_meta.filters.clone(),
+            FilterNameKind::BlockFooter => {
+                let mut footer_names: Vec<FilterName> = self
+                    .block_footer
+                    .filters
+                    .iter()
+                    .flatten()
+                    .cloned()
+                    .collect();
+                footer_names.sort_unstable_by(|left_name, right_name| {
+                    left_name.as_bytes().cmp(right_name.as_bytes())
+                });
+                footer_names
+            }
         })
+    }
+
+    /// The data slice of the filter's account updates; empty when it sends whole accounts.
+    pub const fn accounts_data_slice(&self) -> &FilterAccountsDataSlice {
+        &self.accounts_data_slice
+    }
+
+    /// This filter generation's names, sorted per kind; matched names are masks over them.
+    pub const fn filter_generation_names(&self) -> &Arc<FilterGenerationNames> {
+        &self.filter_generation_names
+    }
+
+    /// Each blocks filter's normalized shape, in the order of the Blocks names.
+    pub fn block_shapes(&self) -> &[NormalizedBlockShape] {
+        &self.block_shapes
+    }
+
+    /// The blocks the session's queued Block entries pin, a count each of its filters shares.
+    pub fn block_pins(&self) -> &BlockPinCounter {
+        &self.block_pins
+    }
+
+    /// Shares `previous_filter`'s block pins, so a filter change keeps the session's count.
+    pub fn inherit_block_pins(&mut self, previous_filter: &Self) {
+        self.block_pins = Arc::clone(&previous_filter.block_pins);
+    }
+
+    /// The Block shape of the blocks filter at `blocks_filter_index`, one of this filter's, over
+    /// `message_block`; with its slot's `selected_items`, it reads them instead of matching keys.
+    pub fn member_block_shape<'member>(
+        &'member self,
+        blocks_filter_index: usize,
+        message_block: &'member MessageBlock,
+        selected_items: Option<&'member SelectedBlockItems>,
+    ) -> MemberBlockShape<'member> {
+        MemberBlockShape {
+            message_block,
+            blocks_filter: &self.blocks.filters[blocks_filter_index].1,
+            accounts_data_slice: &self.accounts_data_slice,
+            selected_items,
+        }
     }
 
     /// Build a static statistics snapshot of the currently parsed filter.
@@ -331,8 +472,8 @@ impl Filter {
         let blocks = self
             .blocks
             .filters
-            .values()
-            .map(|inner| BlocksFilterStats {
+            .iter()
+            .map(|(_, inner)| BlocksFilterStats {
                 include_len: inner.account_include.len()
                     + usize::from(inner.account_cuckoo.is_some())
                     + usize::from(matches!(inner.include_transactions, None | Some(true)))
@@ -417,81 +558,62 @@ impl Filter {
         self.commitment
     }
 
-    /// The route keys that find every message this filter can match, so an owner's index can
-    /// route its updates.
-    ///
-    /// Each part of the filter needs keys that every message it matches carries:
-    ///
-    /// - an account filter: its `account` list without a cuckoo filter, else a 32-byte memcmp at
-    ///   one of [`INDEXED_MEMCMP_OFFSETS`](crate::route::INDEXED_MEMCMP_OFFSETS), else its `owner`
-    ///   list;
-    /// - a transaction or transaction status filter without `token_accounts`: the smallest of
-    ///   its `account_required` keys, else its `account_include` list without a cuckoo filter;
-    /// - a slot, entry, block meta or block footer filter: its kind's key, and an entry filter
-    ///   with `include_update_parent` the UpdateParent key too.
-    ///
-    /// A message these keys find is only a candidate: [`Filter::get_updates`] makes the exact
-    /// match.
-    ///
-    /// # Returns
-    ///
-    /// The keys, sorted and without repeats, or [`None`] when the filter has a blocks filter, a
-    /// part without such keys, or more than [`MAX_ROUTE_KEYS`](crate::route::MAX_ROUTE_KEYS)
-    /// distinct keys. A key that several parts list counts once. A filter that asks for nothing
-    /// gets an empty list.
-    pub fn route_keys(&self) -> Option<Vec<crate::route::RouteKey>> {
-        use crate::route::{RouteKey, INDEXED_MEMCMP_OFFSETS, MAX_ROUTE_KEYS};
+    /// The index keys that find every message this filter can match, or `None` when a part has none.
+    /// A message they find is only a candidate: [`Filter::get_updates`] makes the exact match.
+    pub fn index_keys(&self) -> Option<Vec<crate::reverse_index::IndexKey>> {
+        use crate::reverse_index::{IndexKey, INDEXED_MEMCMP_OFFSETS, MAX_INDEX_KEYS};
 
-        /// Appends the route keys of one part of the filter to `route_keys`, unless the part
-        /// alone lists more than [`MAX_ROUTE_KEYS`] keys.
+        /// Appends the index keys of one part of the filter to `index_keys`, unless the part
+        /// alone lists more than [`MAX_INDEX_KEYS`] keys.
         ///
         /// A part lists each of its keys once, so such a part never fits. A key that several
         /// parts list is appended once per part, and counts once after the final dedup.
-        ///
-        /// # Arguments
-        ///
-        /// * `route_keys` - The route keys so far.
-        /// * `added_route_keys` - The route keys of one part, each listed once.
-        ///
-        /// # Returns
-        ///
-        /// `Some(())` once `added_route_keys` is appended, or [`None`] if it lists more than
-        /// [`MAX_ROUTE_KEYS`] keys.
         fn try_extend(
-            route_keys: &mut Vec<RouteKey>,
-            added_route_keys: impl ExactSizeIterator<Item = RouteKey>,
+            index_keys: &mut Vec<IndexKey>,
+            added_index_keys: impl ExactSizeIterator<Item = IndexKey>,
         ) -> Option<()> {
-            (added_route_keys.len() <= MAX_ROUTE_KEYS).then(|| route_keys.extend(added_route_keys))
+            (added_index_keys.len() <= MAX_INDEX_KEYS).then(|| index_keys.extend(added_index_keys))
         }
 
         if !self.blocks.filters.is_empty() {
             return None;
         }
-        let mut route_keys = Vec::new();
+        let mut index_keys = Vec::new();
+        let mut memcmp_gate_owners = Vec::new();
+        let mut has_ungated_memcmp = false;
         for account_aggregate in self.accounts.aggregates() {
-            let memcmp_route_key = account_aggregate
+            let memcmp_index_key = account_aggregate
                 .account_state
                 .iter()
                 .flat_map(|account_state| &account_state.memcmp)
                 .filter(|(memcmp_offset, _)| INDEXED_MEMCMP_OFFSETS.contains(memcmp_offset))
                 .find_map(|(memcmp_offset, memcmp_bytes)| {
                     let memcmp_bytes = memcmp_bytes.as_slice().try_into().ok()?;
-                    Some(RouteKey::Memcmp(*memcmp_offset, memcmp_bytes))
+                    Some(IndexKey::Memcmp(*memcmp_offset, memcmp_bytes))
                 });
             match (
                 &account_aggregate.accounts,
                 &account_aggregate.accounts_cuckoo,
-                memcmp_route_key,
+                memcmp_index_key,
                 &account_aggregate.owners,
             ) {
                 (Some(account_pubkeys), None, _, _) => try_extend(
-                    &mut route_keys,
-                    account_pubkeys.iter().copied().map(RouteKey::Account),
+                    &mut index_keys,
+                    account_pubkeys.iter().copied().map(IndexKey::Account),
                 )?,
-                (_, _, Some(memcmp_route_key), _) => route_keys.push(memcmp_route_key),
+                (_, _, Some(memcmp_index_key), memcmp_owners) => {
+                    match memcmp_owners
+                        .as_ref()
+                        .filter(|owner_pubkeys| !owner_pubkeys.is_empty())
+                    {
+                        Some(owner_pubkeys) => memcmp_gate_owners.extend(owner_pubkeys.iter()),
+                        None => has_ungated_memcmp = true,
+                    }
+                    index_keys.push(memcmp_index_key);
+                }
                 (_, _, None, Some(owner_pubkeys)) => try_extend(
-                    &mut route_keys,
-                    owner_pubkeys.iter().copied().map(RouteKey::Owner),
+                    &mut index_keys,
+                    owner_pubkeys.iter().copied().map(IndexKey::Owner),
                 )?,
                 _ => return None,
             }
@@ -502,33 +624,45 @@ impl Filter {
                 return None;
             }
             if let Some(min_required_pubkey) = txn_filter.account_required.iter().min() {
-                route_keys.push(RouteKey::Transaction(*min_required_pubkey));
+                index_keys.push(IndexKey::Transaction(*min_required_pubkey));
             } else if !txn_filter.account_include.is_empty() && txn_filter.account_cuckoo.is_none()
             {
                 let include_pubkeys = txn_filter.account_include.vec.iter().copied();
-                try_extend(&mut route_keys, include_pubkeys.map(RouteKey::Transaction))?;
+                try_extend(&mut index_keys, include_pubkeys.map(IndexKey::Transaction))?;
             } else {
                 return None;
             }
         }
         if !self.slots.filters.is_empty() {
-            route_keys.push(RouteKey::Slots);
+            index_keys.push(IndexKey::Slots);
         }
         if !self.entries.filters.is_empty() {
-            route_keys.push(RouteKey::Entries);
+            index_keys.push(IndexKey::Entries);
         }
         if !self.entries.update_parent_filters.is_empty() {
-            route_keys.push(RouteKey::UpdateParent);
+            index_keys.push(IndexKey::UpdateParent);
         }
         if !self.blocks_meta.filters.is_empty() {
-            route_keys.push(RouteKey::BlocksMeta);
+            index_keys.push(IndexKey::BlocksMeta);
         }
         if !self.block_footer.filters.iter().all(Vec::is_empty) {
-            route_keys.push(RouteKey::BlockFooter);
+            index_keys.push(IndexKey::BlockFooter);
         }
-        route_keys.sort_unstable();
-        route_keys.dedup();
-        (route_keys.len() <= MAX_ROUTE_KEYS).then_some(route_keys)
+        index_keys.sort_unstable();
+        index_keys.dedup();
+        if index_keys.len() > MAX_INDEX_KEYS {
+            return None;
+        }
+        memcmp_gate_owners.sort_unstable();
+        memcmp_gate_owners.dedup();
+        let gates_fit = index_keys.len() + memcmp_gate_owners.len() <= MAX_INDEX_KEYS;
+        if has_ungated_memcmp || !gates_fit {
+            index_keys.push(IndexKey::UngatedMemcmp);
+        } else {
+            index_keys.extend(memcmp_gate_owners.into_iter().map(IndexKey::MemcmpGate));
+        }
+        index_keys.sort_unstable();
+        Some(index_keys)
     }
 
     pub fn get_updates(
@@ -645,33 +779,30 @@ impl FilterAccountAggregate {
         true
     }
 
-    // Returns the filter name if all requirements are satisfied, otherwise returns None.
-    // This is used to determine if a filter should be included in the filtered updates.
-    // If a filter is not included, it means that the filter's requirements are not satisfied by the current message.
-    // If no filters are satisfied by the current message, then the update will not be sent to the client.
+    /// The filter name when this filter wants the account update, else `None`.
+    #[cfg(test)]
     pub fn match_filter(
         &self,
-        account: &MessageAccountInfo,
+        account: &MessageAccount,
         matched_account: Option<bool>,
         matched_owner: Option<bool>,
     ) -> Option<FilterName> {
-        if !self.match_txn_signature(&account.txn_signature) {
-            return None;
-        }
+        self.matches_account_update(account, matched_account, matched_owner)
+            .then(|| self.filter_name.clone())
+    }
 
-        if !self.match_account(&account.pubkey, matched_account) {
-            return None;
-        }
-
-        if !self.match_owner(&account.owner, matched_owner) {
-            return None;
-        }
-
-        if !self.match_data_lamports(&account.data, account.lamports) {
-            return None;
-        }
-
-        Some(self.filter_name.clone())
+    /// Whether every requirement of this filter holds for the account update. A known exact hit
+    /// on the account or owner axis comes in as `Some`, so its set is not probed again.
+    fn matches_account_update(
+        &self,
+        account_info: &MessageAccount,
+        matched_account: Option<bool>,
+        matched_owner: Option<bool>,
+    ) -> bool {
+        self.match_txn_signature(&account_info.txn_signature)
+            && self.match_account(&account_info.pubkey, matched_account)
+            && self.match_owner(&account_info.owner, matched_owner)
+            && self.match_data_lamports(account_info.data(), account_info.lamports)
     }
 }
 
@@ -745,7 +876,7 @@ impl FilterBitSet {
 /// ```
 ///
 /// Only the surviving candidates go through the full per-aggregate
-/// `match_filter` check (cuckoo filter, txn signature, data/lamports state).
+/// `matches_account_update` check (cuckoo filter, txn signature, data/lamports state).
 #[derive(Debug, Clone)]
 struct FilterAccountsIndex {
     // Owned so the index is self-sufficient: `get_filters` never needs a caller
@@ -841,18 +972,30 @@ impl FilterAccountsIndex {
         &self.aggregates
     }
 
-    fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
-        let matched_accounts = self.accounts.get(&account.pubkey);
+    #[cfg(test)]
+    fn get_filters(&self, account: &MessageAccount) -> FilteredUpdateFilters {
+        let mut matched_names = FilteredUpdateFilters::new();
+        self.for_each_matched_aggregate(account, |aggregate_index| {
+            matched_names.push(self.aggregates[aggregate_index].filter_name.clone());
+        });
+        matched_names
+    }
+
+    fn for_each_matched_aggregate(
+        &self,
+        account_info: &MessageAccount,
+        mut on_matched_aggregate: impl FnMut(usize),
+    ) {
+        let matched_accounts = self.accounts.get(&account_info.pubkey);
         if matched_accounts.is_none() && self.account_fallback_empty {
-            return FilteredUpdateFilters::new();
+            return;
         }
 
-        let matched_owners = self.owners.get(&account.owner);
+        let matched_owners = self.owners.get(&account_info.owner);
         if matched_owners.is_none() && self.owner_fallback_empty {
-            return FilteredUpdateFilters::new();
+            return;
         }
 
-        let mut filters = FilteredUpdateFilters::new();
         for word_index in 0..self.account_fallback.0.len() {
             let matched_accounts_word = matched_accounts
                 .map(|bitset| bitset.word(word_index))
@@ -868,19 +1011,17 @@ impl FilterAccountsIndex {
                 let aggregate_index = word_index * FilterBitSet::BITS_PER_WORD + bit_index;
                 let bit = 1 << bit_index;
 
-                if let Some(filter) = self.aggregates[aggregate_index].match_filter(
-                    account,
+                if self.aggregates[aggregate_index].matches_account_update(
+                    account_info,
                     Some(matched_accounts_word & bit != 0),
                     Some(matched_owners_word & bit != 0),
                 ) {
-                    filters.push(filter);
+                    on_matched_aggregate(aggregate_index);
                 }
 
                 candidates &= candidates - 1;
             }
         }
-
-        filters
     }
 }
 
@@ -925,7 +1066,7 @@ fn next_union(
 /// to pay for itself, or when indexing wasn't possible/worth it.
 ///
 /// ```text
-///  for aggregate in aggregates { aggregate.match_filter(account, None, None) }
+///  for aggregate in aggregates { aggregate.matches_account_update(account, None, None) }
 /// ```
 #[derive(Debug, Clone)]
 struct LinearScanFilter {
@@ -933,11 +1074,19 @@ struct LinearScanFilter {
 }
 
 impl LinearScanFilter {
-    fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
+    fn for_each_matched_aggregate(
+        &self,
+        account_info: &MessageAccount,
+        on_matched_aggregate: impl FnMut(usize),
+    ) {
         self.aggregates
             .iter()
-            .filter_map(|aggregate| aggregate.match_filter(account, None, None))
-            .collect()
+            .enumerate()
+            .filter(|(_, account_aggregate)| {
+                account_aggregate.matches_account_update(account_info, None, None)
+            })
+            .map(|(aggregate_index, _)| aggregate_index)
+            .for_each(on_matched_aggregate);
     }
 }
 
@@ -955,7 +1104,7 @@ impl LinearScanFilter {
 /// Still worth keeping the `accounts`/`owners` maps: an aggregate can be
 /// "unconstrained" while also carrying an explicit account/owner list
 /// alongside a cuckoo filter, so exact hits are looked up anyway and passed
-/// to `match_filter` as `Some(bool)` so it can skip re-checking its own sets.
+/// to `matches_account_update` as `Some(bool)` so it can skip re-checking its own sets.
 #[derive(Debug, Clone)]
 struct AllUnconstrainedFilter {
     aggregates: Vec<FilterAccountAggregate>,
@@ -964,19 +1113,23 @@ struct AllUnconstrainedFilter {
 }
 
 impl AllUnconstrainedFilter {
-    fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
+    fn for_each_matched_aggregate(
+        &self,
+        account_info: &MessageAccount,
+        on_matched_aggregate: impl FnMut(usize),
+    ) {
         let account_hits = if self.accounts.is_empty() {
             &[][..]
         } else {
             self.accounts
-                .get(&account.pubkey)
+                .get(&account_info.pubkey)
                 .map_or(&[][..], |v| v.as_slice())
         };
         let owner_hits = if self.owners.is_empty() {
             &[][..]
         } else {
             self.owners
-                .get(&account.owner)
+                .get(&account_info.owner)
                 .map_or(&[][..], |v| v.as_slice())
         };
 
@@ -1001,9 +1154,15 @@ impl AllUnconstrainedFilter {
                 } else {
                     false
                 };
-                aggregate.match_filter(account, Some(matched_account), Some(matched_owner))
+                aggregate
+                    .matches_account_update(
+                        account_info,
+                        Some(matched_account),
+                        Some(matched_owner),
+                    )
+                    .then_some(index)
             })
-            .collect()
+            .for_each(on_matched_aggregate);
     }
 }
 
@@ -1020,9 +1179,9 @@ impl AllUnconstrainedFilter {
 /// ```
 ///
 /// `unbounded_is_owner` records which axis was dropped, so the surviving
-/// axis's match result is passed to `match_filter` as the right one of
+/// axis's match result is passed to `matches_account_update` as the right one of
 /// `matched_account`/`matched_owner` — the other is hardcoded `false`, which
-/// `match_filter` ignores since that axis has no constraint to check anyway.
+/// `matches_account_update` ignores since that axis has no constraint to check anyway.
 #[derive(Debug, Clone)]
 struct SingleAxisMergeFilter {
     aggregates: Vec<FilterAccountAggregate>,
@@ -1032,11 +1191,15 @@ struct SingleAxisMergeFilter {
 }
 
 impl SingleAxisMergeFilter {
-    fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
+    fn for_each_matched_aggregate(
+        &self,
+        account_info: &MessageAccount,
+        mut on_matched_aggregate: impl FnMut(usize),
+    ) {
         let bounded_pubkey = if self.unbounded_is_owner {
-            &account.pubkey
+            &account_info.pubkey
         } else {
-            &account.owner
+            &account_info.owner
         };
         let hits = if self.bounded_hits.is_empty() {
             &[][..]
@@ -1047,11 +1210,10 @@ impl SingleAxisMergeFilter {
         };
 
         if hits.is_empty() && self.bounded_any.is_empty() {
-            return FilteredUpdateFilters::new();
+            return;
         }
 
         let (mut hits_cursor, mut any_cursor) = (0usize, 0usize);
-        let mut filters = FilteredUpdateFilters::new();
         while let Some((index, matched)) =
             next_union(hits, &self.bounded_any, &mut hits_cursor, &mut any_cursor)
         {
@@ -1060,15 +1222,14 @@ impl SingleAxisMergeFilter {
             } else {
                 (false, matched)
             };
-            if let Some(name) = self.aggregates[index].match_filter(
-                account,
+            if self.aggregates[index].matches_account_update(
+                account_info,
                 Some(matched_account),
                 Some(matched_owner),
             ) {
-                filters.push(name);
+                on_matched_aggregate(index);
             }
         }
-        filters
     }
 }
 
@@ -1081,9 +1242,9 @@ impl SingleAxisMergeFilter {
 ///  account_pos walks account_hits ∪ account_any:  0, 3, 5, 8, ...
 ///  owner_pos   walks owner_hits   ∪ owner_any:    0, 2, 5, 9, ...
 ///
-///  index 0:      both agree      -> match_filter(aggregates[0])
+///  index 0:      both agree      -> matches_account_update(aggregates[0])
 ///  3 vs 2:       owner is behind -> advance owner_pos only
-///  index 5:      both agree      -> match_filter(aggregates[5])
+///  index 5:      both agree      -> matches_account_update(aggregates[5])
 ///  8 vs 9:       account is behind -> advance account_pos only
 ///  ...
 /// ```
@@ -1100,26 +1261,30 @@ struct DualAxisMergeFilter {
 }
 
 impl DualAxisMergeFilter {
-    fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
+    fn for_each_matched_aggregate(
+        &self,
+        account_info: &MessageAccount,
+        mut on_matched_aggregate: impl FnMut(usize),
+    ) {
         let account_hits = if self.accounts.is_empty() {
             &[][..]
         } else {
             self.accounts
-                .get(&account.pubkey)
+                .get(&account_info.pubkey)
                 .map_or(&[][..], |v| v.as_slice())
         };
         let owner_hits = if self.owners.is_empty() {
             &[][..]
         } else {
             self.owners
-                .get(&account.owner)
+                .get(&account_info.owner)
                 .map_or(&[][..], |v| v.as_slice())
         };
 
         if (account_hits.is_empty() && self.account_any.is_empty())
             || (owner_hits.is_empty() && self.owner_any.is_empty())
         {
-            return FilteredUpdateFilters::new();
+            return;
         }
 
         let mut account_hits_cursor = 0;
@@ -1139,7 +1304,6 @@ impl DualAxisMergeFilter {
             &mut owner_any_cursor,
         );
 
-        let mut filters = FilteredUpdateFilters::new();
         while let (Some((account_index, matched_account)), Some((owner_index, matched_owner))) =
             (account_pos, owner_pos)
         {
@@ -1158,12 +1322,12 @@ impl DualAxisMergeFilter {
                     &mut owner_any_cursor,
                 );
             } else {
-                if let Some(name) = self.aggregates[account_index].match_filter(
-                    account,
+                if self.aggregates[account_index].matches_account_update(
+                    account_info,
                     Some(matched_account),
                     Some(matched_owner),
                 ) {
-                    filters.push(name);
+                    on_matched_aggregate(account_index);
                 }
                 account_pos = next_union(
                     account_hits,
@@ -1179,7 +1343,6 @@ impl DualAxisMergeFilter {
                 );
             }
         }
-        filters
     }
 }
 
@@ -1319,14 +1482,39 @@ impl FilterAccountsStrategy {
         })
     }
 
-    fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
+    fn get_filters(&self, account: &MessageAccount) -> FilteredUpdateFilters {
+        let account_aggregates = self.aggregates();
+        let mut matched_names = FilteredUpdateFilters::new();
+        self.for_each_matched_aggregate(account, |aggregate_index| {
+            matched_names.push(account_aggregates[aggregate_index].filter_name.clone());
+        });
+        matched_names
+    }
+
+    /// Calls `on_matched_aggregate` with the index of each aggregate that wants the account
+    /// update, in ascending order; aggregates are in name order, so an index is a name index.
+    fn for_each_matched_aggregate(
+        &self,
+        account_info: &MessageAccount,
+        on_matched_aggregate: impl FnMut(usize),
+    ) {
         match self {
-            Self::Empty => FilteredUpdateFilters::new(),
-            Self::LinearScan(strategy) => strategy.get_filters(account),
-            Self::Indexed(index) => index.get_filters(account),
-            Self::AllUnconstrained(strategy) => strategy.get_filters(account),
-            Self::SingleAxisMerge(strategy) => strategy.get_filters(account),
-            Self::DualAxisMerge(strategy) => strategy.get_filters(account),
+            Self::Empty => {}
+            Self::LinearScan(linear_scan) => {
+                linear_scan.for_each_matched_aggregate(account_info, on_matched_aggregate)
+            }
+            Self::Indexed(accounts_index) => {
+                accounts_index.for_each_matched_aggregate(account_info, on_matched_aggregate)
+            }
+            Self::AllUnconstrained(all_unconstrained) => {
+                all_unconstrained.for_each_matched_aggregate(account_info, on_matched_aggregate)
+            }
+            Self::SingleAxisMerge(single_axis_merge) => {
+                single_axis_merge.for_each_matched_aggregate(account_info, on_matched_aggregate)
+            }
+            Self::DualAxisMerge(dual_axis_merge) => {
+                dual_axis_merge.for_each_matched_aggregate(account_info, on_matched_aggregate)
+            }
         }
     }
 
@@ -1357,7 +1545,7 @@ impl FilterAccounts {
 
         let mut aggregates = Vec::new();
 
-        for (name, filter) in configs {
+        for (name, filter) in sorted_by_filter_name(configs) {
             let has_filter_criteria = !filter.account.is_empty()
                 || !filter.owner.is_empty()
                 || filter.cuckoo_accounts_filter.is_some();
@@ -1417,7 +1605,7 @@ impl FilterAccounts {
         message: &Arc<MessageAccount>,
         accounts_data_slice: &FilterAccountsDataSlice,
     ) -> FilteredUpdates {
-        let filters = self.strategy.get_filters(&message.account);
+        let filters = self.strategy.get_filters(message);
 
         filtered_updates_once_owned!(
             filters,
@@ -1599,11 +1787,27 @@ impl FilterSlotsInner {
             interslot_updates: filter.interslot_updates.unwrap_or_default(),
         }
     }
+
+    /// Whether this filter wants the slot update at `commitment_level`.
+    fn matches_slot(
+        self,
+        slot_message: &MessageSlot,
+        commitment_level: Option<CommitmentLevel>,
+    ) -> bool {
+        (!self.filter_by_commitment
+            || commitment_level
+                .is_some_and(|delivery_commitment| delivery_commitment == slot_message.status))
+            && (self.interslot_updates
+                || matches!(
+                    slot_message.status,
+                    SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Finalized
+                ))
+    }
 }
 
 #[derive(Debug, Default, Clone)]
 struct FilterSlots {
-    filters: HashMap<FilterName, FilterSlotsInner>,
+    filters: Vec<(FilterName, FilterSlotsInner)>,
 }
 
 impl FilterSlots {
@@ -1615,8 +1819,8 @@ impl FilterSlots {
         FilterLimits::check_max(configs.len(), limits.max)?;
 
         Ok(Self {
-            filters: configs
-                .iter()
+            filters: sorted_by_filter_name(configs)
+                .into_iter()
                 .map(|(name, filter)| {
                     names
                         .get(name)
@@ -1628,32 +1832,18 @@ impl FilterSlots {
 
     fn get_updates(
         &self,
-        message: &MessageSlot,
+        message: &Arc<MessageSlot>,
         commitment: Option<CommitmentLevel>,
     ) -> FilteredUpdates {
         let filters = self
             .filters
             .iter()
-            .filter_map(|(name, inner)| {
-                if (!inner.filter_by_commitment
-                    || commitment
-                        .map(|commitment| commitment == message.status)
-                        .unwrap_or(false))
-                    && (inner.interslot_updates
-                        || matches!(
-                            message.status,
-                            SlotStatus::Processed | SlotStatus::Confirmed | SlotStatus::Finalized
-                        ))
-                {
-                    Some(name.clone())
-                } else {
-                    None
-                }
-            })
+            .filter(|(_, slots_filter)| slots_filter.matches_slot(message, commitment))
+            .map(|(slots_filter_name, _)| slots_filter_name.clone())
             .collect::<FilteredUpdateFilters>();
         filtered_updates_once_owned!(
             filters,
-            FilteredUpdateOneof::slot(message.clone()),
+            FilteredUpdateOneof::slot(Arc::clone(message)),
             message.created_at
         )
     }
@@ -1701,6 +1891,94 @@ struct FilterTransactionsInner {
     token_accounts: Option<TokenAccountsMode>,
 }
 
+impl FilterTransactionsInner {
+    /// Whether this filter wants the transaction.
+    fn matches_transaction(&self, transaction_message: &MessageTransaction) -> bool {
+        let transaction_info = &transaction_message.transaction;
+        if let Some(is_vote) = self.vote {
+            if is_vote != transaction_info.is_vote {
+                return false;
+            }
+        }
+
+        if let Some(is_failed) = self.failed {
+            if is_failed != transaction_info.meta.err.is_some() {
+                return false;
+            }
+        }
+
+        if let Some(required_signature) = &self.signature {
+            let first_signature = transaction_info.transaction.signatures.first();
+            if Some(required_signature.as_ref())
+                != first_signature.map(|signature_bytes| signature_bytes.as_ref())
+            {
+                return false;
+            }
+        }
+
+        // The effective account set adds the owners of the token balances that the token_accounts
+        // mode selects; each mode's owner set is built at most once per transaction.
+        let token_owners: Option<&FoldHashSet<Pubkey>> =
+            self.token_accounts
+                .map(|token_accounts_mode| match token_accounts_mode {
+                    TokenAccountsMode::All => transaction_info
+                        .token_owners_all
+                        .get_or_init(|| owners_in_any_balance(&transaction_info.meta)),
+                    TokenAccountsMode::BalanceChanged => transaction_info
+                        .token_owners_changed
+                        .get_or_init(|| owners_with_changed_balance(&transaction_info.meta)),
+                });
+        let in_effective_set = |account_key: &Pubkey| -> bool {
+            transaction_info.account_keys.contains(account_key)
+                || token_owners.is_some_and(|owner_set| owner_set.contains(account_key))
+        };
+
+        // Iterate the transaction's tens of keys, not the filter's lists of up to tens of
+        // thousands. A key can be both an account key and a token owner.
+        let effective_keys = || {
+            transaction_info
+                .account_keys
+                .iter()
+                .chain(token_owners.into_iter().flatten())
+        };
+
+        if !self.account_required.iter().all(in_effective_set) {
+            return false;
+        }
+
+        let effective_len = transaction_info.account_keys.len()
+            + token_owners.map_or(0, |owner_set| owner_set.len());
+
+        if !(self.account_include.is_empty() && self.account_cuckoo.is_none()) {
+            let include_hit = !self.account_include.is_empty()
+                && self
+                    .account_include
+                    .overlaps(effective_len, in_effective_set, effective_keys);
+
+            let cuckoo_hit = || {
+                self.account_cuckoo.as_ref().is_some_and(|account_cuckoo| {
+                    effective_keys()
+                        .any(|effective_key| account_cuckoo.contains(&effective_key.to_bytes()))
+                })
+            };
+
+            if !include_hit && !cuckoo_hit() {
+                return false;
+            }
+        }
+
+        if !self.account_exclude.is_empty()
+            && self
+                .account_exclude
+                .overlaps(effective_len, in_effective_set, effective_keys)
+        {
+            return false;
+        }
+
+        true
+    }
+}
+
 #[derive(Debug, Clone)]
 struct FilterTransactions {
     filter_type: FilterTransactionsType,
@@ -1716,8 +1994,8 @@ impl FilterTransactions {
     ) -> FilterResult<Self> {
         FilterLimits::check_max(configs.len(), limits.max)?;
 
-        let mut filters = HashMap::with_capacity(configs.len());
-        for (name, filter) in configs {
+        let mut sorted_filters = Vec::with_capacity(configs.len());
+        for (name, filter) in sorted_by_filter_name(configs) {
             FilterLimits::check_any(
                 filter.vote.is_none()
                     && filter.failed.is_none()
@@ -1748,7 +2026,7 @@ impl FilterTransactions {
                 None
             };
 
-            filters.insert(
+            sorted_filters.push((
                 names.get(name)?,
                 FilterTransactionsInner {
                     vote: filter.vote,
@@ -1780,11 +2058,11 @@ impl FilterTransactions {
                         .map(TokenAccountsMode::from_proto)
                         .transpose()?,
                 },
-            );
+            ));
         }
         Ok(Self {
             filter_type,
-            filters: filters.into_iter().collect(),
+            filters: sorted_filters,
         })
     }
 
@@ -1792,99 +2070,8 @@ impl FilterTransactions {
         let filters = self
             .filters
             .iter()
-            .filter_map(|(name, inner)| {
-                if let Some(is_vote) = inner.vote {
-                    if is_vote != message.transaction.is_vote {
-                        return None;
-                    }
-                }
-
-                if let Some(is_failed) = inner.failed {
-                    if is_failed != message.transaction.meta.err.is_some() {
-                        return None;
-                    }
-                }
-
-                if let Some(signature) = &inner.signature {
-                    let tx_sig = message.transaction.transaction.signatures.first();
-                    if Some(signature.as_ref()) != tx_sig.map(|sig| sig.as_ref()) {
-                        return None;
-                    }
-                }
-
-                // Effective account set used by include/exclude/required.
-                // When token_accounts mode is set, owners of pre/post token
-                // balances are included alongside the real account keys.
-                // The owner set is built lazily on the tx via OnceLock so
-                // the pre/post scan runs at most once per (tx, mode) across
-                // all filters evaluating against this tx. A `None`
-                // configured mode skips the scan entirely.
-                let token_owners: Option<&FoldHashSet<Pubkey>> =
-                    inner.token_accounts.map(|mode| match mode {
-                        TokenAccountsMode::All => message
-                            .transaction
-                            .token_owners_all
-                            .get_or_init(|| owners_in_any_balance(&message.transaction.meta)),
-                        TokenAccountsMode::BalanceChanged => message
-                            .transaction
-                            .token_owners_changed
-                            .get_or_init(|| owners_with_changed_balance(&message.transaction.meta)),
-                    });
-                let in_effective_set = |pubkey: &Pubkey| -> bool {
-                    message.transaction.account_keys.contains(pubkey)
-                        || token_owners.is_some_and(|set| set.contains(pubkey))
-                };
-
-                // Iterate the transaction's keys, not the filter's lists.
-                // A tx carries tens of keys; include/exclude lists reach
-                // tens of thousands.
-                // NOTE: We can have duplicate entries between account_keys and token_owners here, worth revisiting at some point.
-                let effective_keys = || {
-                    message
-                        .transaction
-                        .account_keys
-                        .iter()
-                        .chain(token_owners.into_iter().flatten())
-                };
-
-                if !inner.account_required.iter().all(in_effective_set) {
-                    return None;
-                }
-
-                let effective_len = message.transaction.account_keys.len()
-                    + token_owners.map_or(0, |set| set.len());
-
-                if !(inner.account_include.is_empty() && inner.account_cuckoo.is_none()) {
-                    let include_hit = !inner.account_include.is_empty()
-                        && inner.account_include.overlaps(
-                            effective_len,
-                            in_effective_set,
-                            effective_keys,
-                        );
-
-                    let cuckoo_hit = || {
-                        inner.account_cuckoo.as_ref().is_some_and(|cuckoo| {
-                            effective_keys().any(|pk| cuckoo.contains(&pk.to_bytes()))
-                        })
-                    };
-
-                    if !include_hit && !cuckoo_hit() {
-                        return None;
-                    }
-                }
-
-                if !inner.account_exclude.is_empty()
-                    && inner.account_exclude.overlaps(
-                        effective_len,
-                        in_effective_set,
-                        effective_keys,
-                    )
-                {
-                    return None;
-                }
-
-                Some(name.clone())
-            })
+            .filter(|(_, transactions_filter)| transactions_filter.matches_transaction(message))
+            .map(|(transactions_filter_name, _)| transactions_filter_name.clone())
             .collect::<FilteredUpdateFilters>();
 
         filtered_updates_once_owned!(
@@ -1995,7 +2182,7 @@ struct FilterDeshredTransactionsInner {
 
 #[derive(Debug, Default, Clone)]
 struct FilterDeshredTransactions {
-    filters: HashMap<FilterName, FilterDeshredTransactionsInner>,
+    filters: Vec<(FilterName, FilterDeshredTransactionsInner)>,
 }
 
 impl FilterDeshredTransactions {
@@ -2006,8 +2193,8 @@ impl FilterDeshredTransactions {
     ) -> FilterResult<Self> {
         FilterLimits::check_max(configs.len(), limits.max)?;
 
-        let mut filters = HashMap::new();
-        for (name, filter) in configs {
+        let mut sorted_filters = Vec::with_capacity(configs.len());
+        for (name, filter) in sorted_by_filter_name(configs) {
             FilterLimits::check_any(
                 filter.vote.is_none()
                     && filter.account_include.is_empty()
@@ -2028,7 +2215,7 @@ impl FilterDeshredTransactions {
                 limits.account_required_max,
             )?;
 
-            filters.insert(
+            sorted_filters.push((
                 names.get(name)?,
                 FilterDeshredTransactionsInner {
                     vote: filter.vote,
@@ -2046,9 +2233,11 @@ impl FilterDeshredTransactions {
                     )?,
                     include_update_parent: filter.include_update_parent.unwrap_or(false),
                 },
-            );
+            ));
         }
-        Ok(Self { filters })
+        Ok(Self {
+            filters: sorted_filters,
+        })
     }
 
     pub fn get_updates(&self, message: &Arc<MessageDeshredTransaction>) -> FilteredUpdatesDeshred {
@@ -2165,7 +2354,7 @@ impl DeshredFilter {
 
     fn get_slot_updates(
         &self,
-        message: &MessageSlot,
+        message: &Arc<MessageSlot>,
         commitment: Option<CommitmentLevel>,
     ) -> FilteredUpdatesDeshred {
         let filters = self
@@ -2194,7 +2383,7 @@ impl DeshredFilter {
         if !filters.is_empty() {
             messages.push(FilteredUpdateDeshred::new(
                 filters,
-                FilteredUpdateDeshredOneof::slot(message.clone()),
+                FilteredUpdateDeshredOneof::slot(Arc::clone(message)),
                 message.created_at,
             ));
         }
@@ -2205,7 +2394,7 @@ impl DeshredFilter {
         self.ping.map(FilteredUpdateDeshred::pong)
     }
 
-    pub fn get_metrics(&self) -> [(&'static str, usize); 3] {
+    pub const fn get_metrics(&self) -> [(&'static str, usize); 3] {
         [
             (
                 "deshred_transactions",
@@ -2237,7 +2426,7 @@ impl FilterEntries {
         FilterLimits::check_max(configs.len(), limits.max)?;
 
         let mut this = Self::default();
-        for (name, config) in configs {
+        for (name, config) in sorted_by_filter_name(configs) {
             let name = names.get(name)?;
             if config.include_update_parent.unwrap_or(false) {
                 this.update_parent_filters.push(name.clone());
@@ -2280,7 +2469,7 @@ struct FilterBlocksInner {
 
 #[derive(Debug, Default, Clone)]
 struct FilterBlocks {
-    filters: HashMap<FilterName, FilterBlocksInner>,
+    filters: Vec<(FilterName, FilterBlocksInner)>,
 }
 
 impl FilterBlocks {
@@ -2292,7 +2481,7 @@ impl FilterBlocks {
         FilterLimits::check_max(configs.len(), limits.max)?;
 
         let mut this = Self::default();
-        for (name, filter) in configs {
+        for (name, filter) in sorted_by_filter_name(configs) {
             FilterLimits::check_any(
                 filter.account_include.is_empty(),
                 limits.account_include_any,
@@ -2318,7 +2507,7 @@ impl FilterBlocks {
                 None
             };
 
-            this.filters.insert(
+            this.filters.push((
                 names.get(name)?,
                 FilterBlocksInner {
                     account_include: Filter::decode_pubkeys_into_set(
@@ -2330,9 +2519,29 @@ impl FilterBlocks {
                     include_accounts: filter.include_accounts,
                     include_entries: filter.include_entries,
                 },
-            );
+            ));
         }
         Ok(this)
+    }
+
+    /// Each blocks filter's shape for this request's data slice, in name order.
+    fn normalized_block_shapes(
+        &self,
+        accounts_data_slice: &FilterAccountsDataSlice,
+    ) -> Box<[NormalizedBlockShape]> {
+        self.filters
+            .iter()
+            .map(|(_, blocks_filter_inner)| {
+                NormalizedBlockShape::from_blocks_filter_parts(
+                    matches!(blocks_filter_inner.include_transactions, None | Some(true)),
+                    blocks_filter_inner.include_accounts == Some(true),
+                    blocks_filter_inner.include_entries == Some(true),
+                    blocks_filter_inner.account_include.iter().copied(),
+                    blocks_filter_inner.account_cuckoo.as_deref(),
+                    accounts_data_slice.as_ref(),
+                )
+            })
+            .collect()
     }
 
     fn get_updates(
@@ -2343,45 +2552,23 @@ impl FilterBlocks {
         let mut updates = FilteredUpdates::new();
         for (filter, inner) in self.filters.iter() {
             let mut transactions_data_len = 0;
-            #[allow(clippy::unnecessary_filter_map)]
-            let transactions = if matches!(inner.include_transactions, None | Some(true)) {
-                message
-                    .transactions
-                    .iter()
-                    .filter_map(|tx| {
-                        if inner.matches_any_in_set(&tx.transaction.account_keys) {
-                            transactions_data_len +=
-                                tx.transaction.get_pre_encoded().map_or(0, Vec::len);
-                            Some(Arc::clone(tx))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                vec![]
-            };
+            let mut transactions = Vec::new();
+            inner.for_each_selected_transaction(message, |_, selected_transaction| {
+                transactions_data_len += selected_transaction
+                    .transaction_bodies()
+                    .built_info_len()
+                    .unwrap_or(0);
+                transactions.push(Arc::clone(selected_transaction));
+            });
 
             let mut accounts_data_len = 0;
-            #[allow(clippy::unnecessary_filter_map)]
-            let accounts = if inner.include_accounts == Some(true) {
-                message
-                    .accounts
-                    .iter()
-                    .filter_map(|account| {
-                        if inner.matches_account(&account.account.pubkey) {
-                            accounts_data_len += account.account.data.len();
-                            Some(Arc::clone(account))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                vec![]
-            };
+            let mut accounts = Vec::new();
+            inner.for_each_selected_account(message, |_, selected_account| {
+                accounts_data_len += selected_account.data().len();
+                accounts.push(Arc::clone(selected_account));
+            });
 
-            let entries = if inner.include_entries == Some(true) {
+            let entries = if inner.keeps_entries() {
                 message.entries.to_vec()
             } else {
                 vec![]
@@ -2409,6 +2596,59 @@ impl FilterBlocks {
 }
 
 impl FilterBlocksInner {
+    const fn keeps_transactions(&self) -> bool {
+        matches!(self.include_transactions, None | Some(true))
+    }
+
+    fn keeps_accounts(&self) -> bool {
+        self.include_accounts == Some(true)
+    }
+
+    fn keeps_entries(&self) -> bool {
+        self.include_entries == Some(true)
+    }
+
+    /// Whether the filter picks items by account keys, which only a walk of the block measures.
+    fn selects_by_account_keys(&self) -> bool {
+        (self.keeps_transactions() || self.keeps_accounts())
+            && !(self.account_include.is_empty() && self.account_cuckoo.is_none())
+    }
+
+    /// Visits each transaction of `message_block` that the filter selects, with its index, in
+    /// block order.
+    fn for_each_selected_transaction<'block>(
+        &self,
+        message_block: &'block MessageBlock,
+        mut visit_transaction: impl FnMut(usize, &'block Arc<MessageTransaction>),
+    ) {
+        if !self.keeps_transactions() {
+            return;
+        }
+        let block_transactions = message_block.transactions.iter().enumerate();
+        for (transaction_index, message_transaction) in block_transactions {
+            if self.matches_any_in_set(&message_transaction.transaction.account_keys) {
+                visit_transaction(transaction_index, message_transaction);
+            }
+        }
+    }
+
+    /// Visits each account of `message_block` that the filter selects, with its index, in block
+    /// order.
+    fn for_each_selected_account<'block>(
+        &self,
+        message_block: &'block MessageBlock,
+        mut visit_account: impl FnMut(usize, &'block Arc<MessageAccount>),
+    ) {
+        if !self.keeps_accounts() {
+            return;
+        }
+        for (account_index, message_account) in message_block.accounts.iter().enumerate() {
+            if self.matches_account(&message_account.account.pubkey) {
+                visit_account(account_index, message_account);
+            }
+        }
+    }
+
     fn matches_account(&self, pubkey: &Pubkey) -> bool {
         if self.account_include.is_empty() && self.account_cuckoo.is_none() {
             return true;
@@ -2458,6 +2698,177 @@ impl FilterBlocksInner {
     }
 }
 
+/// A Block member's shape over one block: the items its blocks filter selects, under its data
+/// slice. Every visit yields the same items, as the encoder needs.
+pub struct MemberBlockShape<'member> {
+    message_block: &'member MessageBlock,
+    blocks_filter: &'member FilterBlocksInner,
+    accounts_data_slice: &'member FilterAccountsDataSlice,
+    /// The selection its shape's slot holds; without it, a filter with keys matches each item.
+    selected_items: Option<&'member SelectedBlockItems>,
+}
+
+impl<'member> MemberBlockShape<'member> {
+    /// Whether measuring the selection walks the block: the filter picks items by account keys.
+    pub fn selects_by_account_keys(&self) -> bool {
+        self.blocks_filter.selects_by_account_keys()
+    }
+
+    /// What the filter selects: the kept kinds of the block's whole totals, or a walk's sums and
+    /// the items it selected, which the shape's slot keeps.
+    pub fn measure_selection(&self) -> MeasuredSelection {
+        let mut selected_items = self.selects_by_account_keys().then(|| {
+            SelectedBlockItems::new(
+                self.message_block.transactions.len(),
+                self.message_block.accounts.len(),
+            )
+        });
+        let selection_totals = self.walk_selection(selected_items.as_mut());
+        MeasuredSelection {
+            selection_totals,
+            selected_items,
+        }
+    }
+
+    /// What the filter selects, without keeping the items: for a member whose table is full.
+    pub fn measure_totals(&self) -> MeasuredSelection {
+        MeasuredSelection {
+            selection_totals: self.walk_selection(None),
+            selected_items: None,
+        }
+    }
+
+    /// The selection's totals, from the block's whole totals or a walk that marks each item it
+    /// selects in `selected_items`.
+    fn walk_selection(
+        &self,
+        mut selected_items: Option<&mut SelectedBlockItems>,
+    ) -> BlockSelectionTotals {
+        if !self.selects_by_account_keys() {
+            return BlockSelectionTotals::kept_kinds_of(
+                self.message_block.block_shapes.whole_block_totals(),
+                self.blocks_filter.keeps_transactions(),
+                self.blocks_filter.keeps_accounts(),
+            );
+        }
+        let mut selection_totals = BlockSelectionTotals::default();
+        self.blocks_filter.for_each_selected_transaction(
+            self.message_block,
+            |transaction_index, selected_transaction| {
+                if let Some(selected_items) = selected_items.as_deref_mut() {
+                    selected_items.select_transaction(transaction_index);
+                }
+                selection_totals.transaction_count += 1;
+                selection_totals.transaction_info_bytes += selected_transaction
+                    .transaction_bodies()
+                    .built_info_len()
+                    .unwrap_or(0);
+            },
+        );
+        self.blocks_filter.for_each_selected_account(
+            self.message_block,
+            |account_index, selected_account| {
+                if let Some(selected_items) = selected_items.as_deref_mut() {
+                    selected_items.select_account(account_index);
+                }
+                selection_totals.account_count += 1;
+                selection_totals.account_data_bytes += selected_account.data().len();
+            },
+        );
+        selection_totals
+    }
+
+    /// Counts a write's pass over a kind it keeps that matches keys: the member has no slot to read.
+    fn count_key_matching_pass(&self, keeps_kind: bool) {
+        if keeps_kind && self.selects_by_account_keys() {
+            let block_shapes = &self.message_block.block_shapes;
+            block_shapes.count_shape_event(BlockShapeEvent::KeyMatchingPass);
+        }
+    }
+
+    /// Visits each selected transaction, from the slot's selection when it has one.
+    fn for_each_member_transaction(
+        &self,
+        mut visit_transaction: impl FnMut(&'member Arc<MessageTransaction>),
+    ) {
+        let Some(selected_items) = self.selected_items else {
+            self.count_key_matching_pass(self.blocks_filter.keeps_transactions());
+            return self
+                .blocks_filter
+                .for_each_selected_transaction(self.message_block, |_, message_transaction| {
+                    visit_transaction(message_transaction)
+                });
+        };
+        let block_transactions = self.message_block.transactions.iter().enumerate();
+        for (transaction_index, message_transaction) in block_transactions {
+            if selected_items.selects_transaction(transaction_index) {
+                visit_transaction(message_transaction);
+            }
+        }
+    }
+
+    /// Visits each selected account, from the slot's selection when it has one.
+    fn for_each_member_account(&self, mut visit_account: impl FnMut(&'member Arc<MessageAccount>)) {
+        let Some(selected_items) = self.selected_items else {
+            self.count_key_matching_pass(self.blocks_filter.keeps_accounts());
+            return self
+                .blocks_filter
+                .for_each_selected_account(self.message_block, |_, message_account| {
+                    visit_account(message_account)
+                });
+        };
+        for (account_index, message_account) in self.message_block.accounts.iter().enumerate() {
+            if selected_items.selects_account(account_index) {
+                visit_account(message_account);
+            }
+        }
+    }
+}
+
+impl BlockShapeSource for MemberBlockShape<'_> {
+    fn block_meta(&self) -> &SubscribeUpdateBlockMeta {
+        &self.message_block.meta.block_meta
+    }
+
+    fn updated_account_count(&self) -> u64 {
+        self.message_block.updated_account_count
+    }
+
+    fn accounts_data_slice(&self) -> &[Range<usize>] {
+        self.accounts_data_slice.as_ref()
+    }
+
+    fn block_created_at(&self) -> Timestamp {
+        self.message_block.created_at
+    }
+
+    fn for_each_transaction_info_len(&self, mut visit_info_len: impl FnMut(usize)) {
+        self.for_each_member_transaction(|selected_transaction| {
+            visit_info_len(block_transaction_item_len(selected_transaction))
+        });
+    }
+
+    fn put_transaction_items(&self, field_tag: u32, output_buffer: &mut impl BufMut) {
+        self.for_each_member_transaction(|selected_transaction| {
+            put_block_transaction_item(field_tag, selected_transaction, output_buffer)
+        });
+    }
+
+    fn for_each_account_body(&self, mut visit_account_body: impl FnMut(&SharedUpdateBody)) {
+        self.for_each_member_account(|selected_account| {
+            visit_account_body(selected_account.account_body())
+        });
+    }
+
+    fn for_each_entry_body(&self, mut visit_entry_body: impl FnMut(&SharedUpdateBody)) {
+        if self.blocks_filter.keeps_entries() {
+            for message_entry in &self.message_block.entries {
+                visit_entry_body(message_entry.entry_body());
+            }
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 struct FilterBlocksMeta {
     filters: Vec<FilterName>,
@@ -2472,9 +2883,9 @@ impl FilterBlocksMeta {
         FilterLimits::check_max(configs.len(), limits.max)?;
 
         Ok(Self {
-            filters: configs
-                .keys()
-                .map(|name| names.get(name))
+            filters: sorted_by_filter_name(configs)
+                .into_iter()
+                .map(|(name, _)| names.get(name))
                 .collect::<Result<_, _>>()?,
         })
     }
@@ -2502,7 +2913,7 @@ impl FilterBlockFooter {
     ) -> FilterResult<Self> {
         FilterLimits::check_max(configs.len(), limits.max)?;
         let mut this = Self::default();
-        for (name, config) in configs {
+        for (name, config) in sorted_by_filter_name(configs) {
             let include_certificates = config.include_certificates.unwrap_or(false);
             this.filters[usize::from(include_certificates)].push(names.get(name)?);
         }
@@ -2515,27 +2926,9 @@ impl FilterBlockFooter {
             if filters.is_empty() {
                 continue;
             }
-            let filtered = if include_certificates == 1 {
-                Arc::clone(message)
-            } else {
-                let footer = &message.block_footer;
-                Arc::new(MessageBlockFooter {
-                    block_footer: yellowstone_grpc_proto::geyser::SubscribeUpdateBlockFooter {
-                        slot: footer.slot,
-                        bank_id: footer.bank_id,
-                        bank_hash: footer.bank_hash.clone(),
-                        block_producer_time_nanos: footer.block_producer_time_nanos,
-                        block_user_agent: footer.block_user_agent.clone(),
-                        block_final_cert: None,
-                        skip_reward_cert: None,
-                        notar_reward_cert: None,
-                    },
-                    created_at: message.created_at,
-                })
-            };
             updates.push(FilteredUpdate::new(
                 filters.iter().cloned().collect(),
-                FilteredUpdateOneof::block_footer(filtered),
+                FilteredUpdateOneof::block_footer(Arc::clone(message), include_certificates == 1),
                 message.created_at,
             ));
         }
@@ -2651,6 +3044,7 @@ impl FilterAccountsDataSlice {
 
 #[cfg(test)]
 mod tests {
+    #[allow(clippy::disallowed_types, reason = "test messages' OnceLock caches")]
     use {
         super::{DeshredFilter, Filter, FilterAccountsStrategy, FilterBitSet, FilterBlocksInner},
         crate::plugin::{
@@ -2743,6 +3137,7 @@ mod tests {
         assert!(!large_filter.matches_any_in_set(&nonmatching_message_keys));
     }
 
+    #[allow(clippy::disallowed_types, reason = "test messages' OnceLock caches")]
     fn create_message_transaction(
         keypair: &Keypair,
         account_keys: Vec<Pubkey>,
@@ -2783,48 +3178,46 @@ mod tests {
             .iter()
             .copied()
             .collect();
-        Arc::new(MessageTransaction {
-            transaction: MessageTransactionInfo {
+        Arc::new(MessageTransaction::new(
+            MessageTransactionInfo {
                 signature: *sig,
                 is_vote: true,
                 transaction: convert_to::create_transaction(&versioned_transaction),
                 meta,
                 index: 1,
                 account_keys,
-                pre_encoded: OnceLock::new(),
                 token_owners_all: OnceLock::new(),
                 token_owners_changed: OnceLock::new(),
             },
-            slot: 100,
-            created_at: Timestamp::from(SystemTime::now()),
-            bank_id: 100,
-        })
+            100,
+            100,
+            Timestamp::from(SystemTime::now()),
+        ))
     }
 
     pub(super) fn create_message_account(pubkey: Pubkey, owner: Pubkey) -> Arc<MessageAccount> {
         use {
-            bytes::Bytes,
             prost_types::Timestamp,
             std::{sync::Arc, time::SystemTime},
         };
 
-        Arc::new(MessageAccount {
-            account: MessageAccountInfo {
-                pubkey,
-                lamports: 1000,
-                owner,
-                executable: false,
-                rent_epoch: 0,
-                data: Bytes::new(),
-                write_version: 1,
-                txn_signature: None,
-                pre_encoded: std::sync::OnceLock::new(),
-            },
-            slot: 100,
-            is_startup: false,
-            created_at: Timestamp::from(SystemTime::now()),
-            bank_id: Some(100),
-        })
+        let account = MessageAccountInfo {
+            pubkey,
+            lamports: 1000,
+            owner,
+            executable: false,
+            rent_epoch: 0,
+            write_version: 1,
+            txn_signature: None,
+        };
+        Arc::new(MessageAccount::new(
+            account,
+            b"".as_slice(),
+            100,
+            false,
+            Some(100),
+            Timestamp::from(SystemTime::now()),
+        ))
     }
 
     #[test]
@@ -3257,6 +3650,7 @@ mod tests {
             },
             slot: 100,
             created_at: Timestamp::from(SystemTime::now()),
+            captured_header: Default::default(),
         })
     }
 
@@ -3975,9 +4369,8 @@ mod tests {
 mod account_filter_regression_tests {
     use {
         super::*,
-        bytes::Bytes,
+        crate::plugin::message::MessageAccountInfo,
         prost_types::Timestamp,
-        std::sync::OnceLock,
         yellowstone_grpc_proto::{
             cuckoo::CuckooFilter,
             geyser::{
@@ -4037,34 +4430,35 @@ mod account_filter_regression_tests {
         data
     }
 
-    fn account_info(
+    /// An account write at slot 42 in bank 42, with write version 7.
+    fn account_write(
         pubkey: Pubkey,
         owner: Pubkey,
         data: Vec<u8>,
         lamports: u64,
         has_signature: bool,
-    ) -> MessageAccountInfo {
-        MessageAccountInfo {
+    ) -> MessageAccount {
+        let account = MessageAccountInfo {
             pubkey,
             lamports,
             owner,
             executable: false,
             rent_epoch: 0,
-            data: Bytes::from(data),
             write_version: 7,
             txn_signature: has_signature.then(Signature::default),
-            pre_encoded: OnceLock::new(),
-        }
+        };
+        MessageAccount::new(
+            account,
+            data.as_slice(),
+            42,
+            false,
+            Some(42),
+            Timestamp::default(),
+        )
     }
 
-    fn sorted_matches(filter: &Filter, account: MessageAccountInfo) -> Vec<String> {
-        let message = Arc::new(MessageAccount {
-            account,
-            slot: 42,
-            is_startup: false,
-            created_at: Timestamp::default(),
-            bank_id: Some(42),
-        });
+    fn sorted_matches(filter: &Filter, account: MessageAccount) -> Vec<String> {
+        let message = Arc::new(account);
         let updates = filter.get_updates(&Message::Account(message), None);
         assert!(updates.len() <= 1);
 
@@ -4214,7 +4608,7 @@ mod account_filter_regression_tests {
         assert_eq!(
             sorted_matches(
                 &filter,
-                account_info(account, owner, data.clone(), 100, true)
+                account_write(account, owner, data.clone(), 100, true)
             ),
             [
                 "account",
@@ -4239,7 +4633,7 @@ mod account_filter_regression_tests {
         assert_eq!(
             sorted_matches(
                 &filter,
-                account_info(cuckoo_account, owner, data.clone(), 100, true)
+                account_write(cuckoo_account, owner, data.clone(), 100, true)
             ),
             [
                 "account-or-cuckoo",
@@ -4261,7 +4655,7 @@ mod account_filter_regression_tests {
         assert_eq!(
             sorted_matches(
                 &filter,
-                account_info(account, other_owner, vec![0; 3], 99, false)
+                account_write(account, other_owner, vec![0; 3], 99, false)
             ),
             [
                 "account",
@@ -4275,7 +4669,7 @@ mod account_filter_regression_tests {
         assert_eq!(
             sorted_matches(
                 &filter,
-                account_info(other_account, other_owner, vec![0; 3], 101, false)
+                account_write(other_account, other_owner, vec![0; 3], 101, false)
             ),
             ["lamports-gt", "lamports-ne", "signature-absent", "wildcard",]
         );
@@ -4381,14 +4775,14 @@ mod account_filter_regression_tests {
         let data = valid_token_data();
 
         let messages = [
-            account_info(account, owner, data.clone(), 100, true),
-            account_info(account, owner, data.clone(), 100, false),
-            account_info(account, other_owner, data.clone(), 100, true),
-            account_info(other_account, owner, data.clone(), 100, true),
-            account_info(cuckoo_account, owner, data.clone(), 100, true),
-            account_info(account, owner, vec![0; DATA_LEN], 100, true),
-            account_info(account, owner, data.clone(), 99, true),
-            account_info(
+            account_write(account, owner, data.clone(), 100, true),
+            account_write(account, owner, data.clone(), 100, false),
+            account_write(account, other_owner, data.clone(), 100, true),
+            account_write(other_account, owner, data.clone(), 100, true),
+            account_write(cuckoo_account, owner, data.clone(), 100, true),
+            account_write(account, owner, vec![0; DATA_LEN], 100, true),
+            account_write(account, owner, data.clone(), 99, true),
+            account_write(
                 Pubkey::new_from_array([16; 32]),
                 Pubkey::new_from_array([17; 32]),
                 vec![0; 3],
@@ -4432,7 +4826,7 @@ mod account_filter_regression_tests {
 
     fn linear_scan(
         aggregates: &[FilterAccountAggregate],
-        message: &MessageAccountInfo,
+        message: &MessageAccount,
     ) -> FilteredUpdateFilters {
         aggregates
             .iter()
@@ -4475,7 +4869,7 @@ mod account_filter_regression_tests {
         assert_eq!(
             linear_scan(
                 &aggregates,
-                &account_info(cuckoo_account, owner, data.clone(), 100, true),
+                &account_write(cuckoo_account, owner, data.clone(), 100, true),
             )
             .as_slice(),
             [
@@ -4488,7 +4882,7 @@ mod account_filter_regression_tests {
         assert_eq!(
             linear_scan(
                 &aggregates,
-                &account_info(
+                &account_write(
                     Pubkey::new_from_array([23; 32]),
                     owner,
                     vec![0; 3],
@@ -4530,7 +4924,7 @@ mod account_filter_regression_tests {
         );
 
         let stranger = Pubkey::new_from_array([250; 32]);
-        let miss = account_info(stranger, stranger, vec![0; 3], 100, false);
+        let miss = account_write(stranger, stranger, vec![0; 3], 100, false);
         assert!(index.get_filters(&miss).is_empty());
         assert!(linear_scan(&aggregates, &miss).is_empty());
 
@@ -4604,12 +4998,12 @@ mod account_filter_regression_tests {
         }
 
         let owner = Pubkey::new_from_array([200; 32]);
-        let hit = account_info(pool[0], owner, vec![0; 3], 100, false);
+        let hit = account_write(pool[0], owner, vec![0; 3], 100, false);
         let indexed = FilterAccountsIndex::try_init(&under_budget).unwrap();
         assert_eq!(indexed.get_filters(&hit), linear_scan(&under_budget, &hit));
         assert_eq!(linear_scan(&over_budget, &hit).len(), AGGREGATES);
 
-        let miss = account_info(
+        let miss = account_write(
             Pubkey::new_from_array([201; 32]),
             owner,
             vec![0; 3],
@@ -4728,7 +5122,7 @@ mod parity_oracle {
             Ok(())
         }
 
-        fn get_filters(&self, account: &MessageAccountInfo) -> FilteredUpdateFilters {
+        fn get_filters(&self, account: &MessageAccount) -> FilteredUpdateFilters {
             let mut nonempty_txn_signature = FoldHashSet::default();
             for (name, filter) in self.nonempty_txn_signature.iter() {
                 if let Some(required) = filter {
@@ -4754,12 +5148,14 @@ mod parity_oracle {
 
             let mut data = FoldHashSet::default();
             for (name, account_state) in self.state_check.iter() {
-                if account_state.is_match(&account.data, account.lamports) {
+                if account_state.is_match(account.data(), account.lamports) {
                     data.insert(name.as_ref());
                 }
             }
 
-            self.aggregates
+            // Master gives names in request map order, and the compiled filter sorts them.
+            let mut master_filter_names: FilteredUpdateFilters = self
+                .aggregates
                 .iter()
                 .filter_map(|aggregate| {
                     if aggregate.require_non_empty_txn_signature
@@ -4792,7 +5188,11 @@ mod parity_oracle {
 
                     Some(aggregate.filter_name.clone())
                 })
-                .collect()
+                .collect();
+            master_filter_names.sort_unstable_by(|left_name, right_name| {
+                left_name.as_bytes().cmp(right_name.as_bytes())
+            });
+            master_filter_names
         }
     }
 
@@ -4932,7 +5332,7 @@ mod parity_oracle {
                 let lamports = *pick(rng, &[0u64, 98, 99, 100, 101, u64::MAX]);
                 let txn_signature = rng.bool().then(Signature::default);
 
-                fixtures::message_account(fixtures::account_info(
+                fixtures::message_account(fixtures::account_write(
                     pubkey,
                     owner,
                     data,
@@ -5009,7 +5409,7 @@ mod parity_oracle {
                 .unwrap_or_else(|err| panic!("{}: oracle build failed: {err}", where_(0)));
 
                 for (message_index, message) in scenario.messages.iter().enumerate() {
-                    let account = &message.account;
+                    let account: &MessageAccount = message;
                     let expected = oracle.get_filters(account);
 
                     let updates = filter.get_updates(&Message::Account(Arc::clone(message)), None);
@@ -5265,13 +5665,14 @@ mod filter_kind_coverage {
             (None, None, None),
             (Some(final_cert), Some(skip_cert), Some(notar_cert)),
         ] {
-            let mut source = fixtures::message_block_footer(42, 7);
-            let footer = &mut Arc::make_mut(&mut source).block_footer;
+            let fixture_footer = fixtures::message_block_footer(42, 7);
+            let mut footer = fixture_footer.block_footer.clone();
             (
                 footer.block_final_cert,
                 footer.skip_reward_cert,
                 footer.notar_reward_cert,
             ) = certificates;
+            let source = Arc::new(MessageBlockFooter::new(footer, fixture_footer.created_at));
             let original = source.block_footer.clone();
 
             for settings in [
@@ -5901,6 +6302,7 @@ mod cuckoo_tests {
         //! `SubscribeRequestFilterTransactions` that expands the effective
         //! account set of a tx with owners of its pre/post token balances.
 
+        #[allow(clippy::disallowed_types, reason = "test messages' OnceLock caches")]
         use {
             super::{create_filter_names, Filter, FilterError, TokenAccountsMode},
             crate::plugin::{
@@ -5983,6 +6385,7 @@ mod cuckoo_tests {
         /// `Transaction::sign` does not reject the build with
         /// `KeypairPubkeyMismatch`. Tests should treat the signer's
         /// pubkey as opaque and only rely on the keys they pass in.
+        #[allow(clippy::disallowed_types, reason = "test messages' OnceLock caches")]
         fn make_tx_with_balances(
             account_keys: Vec<Pubkey>,
             pre: Vec<confirmed_block::TokenBalance>,
@@ -6035,22 +6438,21 @@ mod cuckoo_tests {
                 .iter()
                 .copied()
                 .collect();
-            Arc::new(MessageTransaction {
-                transaction: MessageTransactionInfo {
+            Arc::new(MessageTransaction::new(
+                MessageTransactionInfo {
                     signature: sig,
                     is_vote: false,
                     transaction: convert_to::create_transaction(&versioned),
                     meta,
                     index: 0,
                     account_keys: key_set,
-                    pre_encoded: OnceLock::new(),
                     token_owners_all: OnceLock::new(),
                     token_owners_changed: OnceLock::new(),
                 },
-                slot: 100,
-                created_at: Timestamp::from(SystemTime::now()),
-                bank_id: 100,
-            })
+                100,
+                100,
+                Timestamp::from(SystemTime::now()),
+            ))
         }
 
         fn filter_with_transactions(

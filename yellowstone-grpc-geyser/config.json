@@ -98,6 +98,33 @@
       "entries": {
         "max": 1
       }
+    },
+    "data_plane": {
+      "subscribe_body": "tonic",
+      "compression": {
+        "mode": "shared",
+        "group_slots": 4,
+        "inline_max_bytes": "64KiB",
+        "big_body_bytes": "1MiB",
+        "processed_pool_threads": 0,
+        "confirmed_pool_threads": 0,
+        "waiter_backstop": "1ms",
+        "retained_budget_bytes": "512MiB",
+        "block_shape_budget_bytes": "1GiB"
+      },
+      "threads": {
+        "filter_compile_threads": 0,
+        "control_cpus": null,
+        "compressor_cpus": null
+      },
+      "staging": {
+        "copy_threshold_bytes": "16KiB"
+      },
+      "telemetry": {
+        "extended_metrics": false,
+        "summary_interval": "60s"
+      },
+      "extensions": {}
     }
   },
   "prometheus": {

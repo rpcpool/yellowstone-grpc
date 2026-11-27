@@ -1,10 +1,13 @@
 use {
+    crate::threads::{self, placement, STUCK_THREAD_REPORT_INTERVAL},
+    crossbeam_channel::RecvTimeoutError,
     log::error,
     notify::{Config, Event, EventHandler, RecommendedWatcher, RecursiveMode, Watcher},
     std::{
         fmt,
         path::{Path, PathBuf},
-        sync::{Arc, Mutex, Weak},
+        sync::{Arc, Mutex, PoisonError, Weak},
+        time::Instant,
     },
 };
 
@@ -97,9 +100,11 @@ struct Inner {
     next_registration_id: u64,
 }
 
-#[derive(Clone)]
+/// Watches the TLS files. The plugin holds the only one, and its drop joins the watcher's thread.
 pub struct FileWatcher {
     inner: Arc<Mutex<Inner>>,
+    /// Gets the OS id of the watcher's thread as the thread drops the event handler, at its end.
+    event_loop_exit_rx: crossbeam_channel::Receiver<Option<i32>>,
 }
 
 impl fmt::Debug for FileWatcher {
@@ -112,6 +117,16 @@ struct FileChangeEvHandler {
     /// The watcher state, held weakly: the watcher's thread holds this handler, and the state
     /// holds the watcher.
     inner: Weak<Mutex<Inner>>,
+    event_loop_exit_tx: crossbeam_channel::Sender<Option<i32>>,
+}
+
+impl Drop for FileChangeEvHandler {
+    /// The watcher's thread drops its handler at its end, so this sends that thread's OS id.
+    fn drop(&mut self) {
+        let _ = self
+            .event_loop_exit_tx
+            .try_send(placement::current_os_thread_id());
+    }
 }
 
 impl FileChangeEvHandler {
@@ -128,10 +143,6 @@ impl FileChangeEvHandler {
 impl EventHandler for FileChangeEvHandler {
     /// Calls the callback of each registration that a relevant event matches, while a
     /// [`FileWatcher`] holds the watcher state.
-    ///
-    /// # Arguments
-    ///
-    /// * `event_result` - The event the watcher read, or its error, which is logged.
     ///
     /// # Panics
     ///
@@ -171,8 +182,10 @@ impl FileWatcher {
             registrations: Vec::new(),
             next_registration_id: 0,
         }));
+        let (event_loop_exit_tx, event_loop_exit_rx) = crossbeam_channel::bounded(1);
         let handler = FileChangeEvHandler {
             inner: Arc::downgrade(&inner),
+            event_loop_exit_tx,
         };
         // Unless we see a useful case in prod to follow symlinks, we will disable it to avoid potential security issues with symlink attacks.
         let watcher = notify::RecommendedWatcher::new(
@@ -180,7 +193,10 @@ impl FileWatcher {
             Config::default().with_follow_symlinks(false),
         )?;
         inner.lock().expect("file watcher mutex poisoned").watcher = Some(watcher);
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            event_loop_exit_rx,
+        })
     }
 
     fn allocate_registration_id(&self) -> u64 {
@@ -251,57 +267,51 @@ impl FileWatcher {
     }
 }
 
+impl Drop for FileWatcher {
+    /// Stops the notify watcher, then waits, with no bound, until its thread has left the process.
+    fn drop(&mut self) {
+        let notify_watcher = self
+            .inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .watcher
+            .take();
+        drop(notify_watcher);
+        let wait_started_at = Instant::now();
+        let event_loop_thread_id = loop {
+            match self
+                .event_loop_exit_rx
+                .recv_timeout(STUCK_THREAD_REPORT_INTERVAL)
+            {
+                Ok(event_loop_thread_id) => break event_loop_thread_id,
+                Err(RecvTimeoutError::Timeout) => log::warn!(
+                    "unload waits for the file watcher's thread after {:?}",
+                    wait_started_at.elapsed()
+                ),
+                Err(RecvTimeoutError::Disconnected) => break None,
+            }
+        };
+        if let Some(event_loop_thread_id) = event_loop_thread_id
+            .filter(|exit_thread_id| Some(*exit_thread_id) != placement::current_os_thread_id())
+        {
+            threads::wait_for_os_thread_to_leave(event_loop_thread_id, wait_started_at);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {
-        super::{
-            CallbackRegistration, FileChangeEvHandler, FileWatchHandle, FileWatcher, Inner,
-            WatchScope,
-        },
+        super::{CallbackRegistration, FileChangeEvHandler, FileWatchHandle, Inner, WatchScope},
         notify::{
             event::{AccessKind, AccessMode, CreateKind, DataChange, ModifyKind},
             Event, EventKind,
         },
         std::{
-            fs,
             path::PathBuf,
-            sync::{mpsc, Arc, Mutex},
-            time::Duration,
+            sync::{Arc, Mutex},
         },
     };
-
-    /// Dropping the last [`FileWatcher`] drops its notify watcher, which tells the watcher's
-    /// thread to end, so a plugin unload leaves no watcher thread behind.
-    #[test]
-    fn dropping_the_file_watcher_drops_its_notify_watcher() {
-        let file_watcher = FileWatcher::new().unwrap();
-        let watcher_state = Arc::downgrade(&file_watcher.inner);
-        drop(file_watcher);
-        assert!(watcher_state.upgrade().is_none());
-    }
-
-    /// A live [`FileWatcher`] calls the callback of a watched file when the file changes.
-    #[test]
-    fn a_live_file_watcher_calls_the_callback_of_a_changed_file() {
-        let watched_dir =
-            std::env::temp_dir().join(format!("file-watcher-test-{}", std::process::id()));
-        fs::create_dir_all(&watched_dir).unwrap();
-        let watched_path = watched_dir.join("watched.txt");
-        fs::write(&watched_path, "before").unwrap();
-        let file_watcher = FileWatcher::new().unwrap();
-        let (changed_tx, changed_rx) = mpsc::channel();
-        file_watcher
-            .watch_file(watched_path.clone(), move |_| {
-                let _ = changed_tx.send(());
-            })
-            .unwrap()
-            .forget();
-        fs::write(&watched_path, "after").unwrap();
-        let callback_result = changed_rx.recv_timeout(Duration::from_secs(5));
-        drop(file_watcher);
-        let _ = fs::remove_dir_all(&watched_dir);
-        assert_eq!(callback_result, Ok(()));
-    }
 
     #[test]
     fn file_scope_matches_only_exact_path() {

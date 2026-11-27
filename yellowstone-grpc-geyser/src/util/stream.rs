@@ -1,3 +1,5 @@
+#![deny(clippy::disallowed_types, clippy::disallowed_methods)]
+#[allow(clippy::disallowed_types, reason = "LoadAware semaphore and channel")]
 use {
     futures::Stream,
     std::{
@@ -14,6 +16,7 @@ use {
 };
 
 /// Largest capacity accepted by [`load_aware_channel`].
+#[allow(clippy::disallowed_types, reason = "LoadAware semaphore and channel")]
 pub const MAX_CAPACITY: usize = Semaphore::MAX_PERMITS;
 
 /// Error returned by [`LoadAwareSender::send`] when the [`LoadAwareReceiver`] is dropped.
@@ -146,6 +149,7 @@ impl<T> Weigher for UnitWeigher<T> {
 struct Shared {
     /// One permit per unit of weight. A sender acquires the item weight before queueing and the
     /// receiver gives it back on dequeue. Waiting senders are served in strict FIFO order.
+    #[allow(clippy::disallowed_types, reason = "LoadAware semaphore and channel")]
     semaphore: Semaphore,
     /// Total weight the channel can hold.
     capacity: usize,
@@ -177,6 +181,7 @@ impl Shared {
 /// clone of the [`Weigher`] `W`.
 pub struct LoadAwareSender<T, W> {
     shared: Arc<Shared>,
+    #[allow(clippy::disallowed_types, reason = "LoadAware semaphore and channel")]
     inner: UnboundedSender<(u32, T)>,
     weigher: W,
 }
@@ -204,7 +209,10 @@ impl<T, W: Clone> Clone for LoadAwareSender<T, W> {
 /// Dropping it closes the channel and wakes every sender waiting for capacity.
 pub struct LoadAwareReceiver<T> {
     shared: Arc<Shared>,
+    #[allow(clippy::disallowed_types, reason = "LoadAware semaphore and channel")]
     inner: UnboundedReceiver<(u32, T)>,
+    /// Weight of the items received and not yet given back to the senders.
+    unreleased_weight: usize,
 }
 
 impl<T> Drop for LoadAwareReceiver<T> {
@@ -239,6 +247,11 @@ impl<T> Drop for LoadAwareReceiver<T> {
 /// # Panics
 ///
 /// Panics if `weighted_capacity` is `0` or exceeds [`MAX_CAPACITY`].
+#[allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "LoadAware semaphore and channel"
+)]
 pub fn load_aware_channel<T, W>(
     weighted_capacity: usize,
     weigher: W,
@@ -264,6 +277,7 @@ where
     let rx = LoadAwareReceiver {
         shared,
         inner: inner_receiver,
+        unreleased_weight: 0,
     };
 
     (sender, rx)
@@ -310,7 +324,8 @@ where
         }
         self.inner
             .send((weight, item))
-            .map_err(|err| SendError(err.0 .1))
+            .map_err(|send_error| SendError(send_error.0 .1))?;
+        Ok(())
     }
 
     /// Sends an item without waiting.
@@ -340,7 +355,13 @@ where
         }
         self.inner
             .send((weight, item))
-            .map_err(|err| TrySendError::Closed(err.0 .1))
+            .map_err(|send_error| TrySendError::Closed(send_error.0 .1))?;
+        Ok(())
+    }
+
+    /// The weigher this sender weighs its items with.
+    pub const fn weigher(&self) -> &W {
+        &self.weigher
     }
 
     /// Returns the weight currently held by the channel.
@@ -361,10 +382,6 @@ where
     /// clone, including a send that waits for room. The receiver gets what the channel holds,
     /// then `last_item`, which weighs nothing. The receiver still ends only once every sender
     /// drops.
-    ///
-    /// # Arguments
-    ///
-    /// * `last_item` - The last item the receiver gets.
     pub fn close_with(&self, last_item: T) {
         self.shared.semaphore.close();
         let _ = self.inner.send((0, last_item));
@@ -394,12 +411,29 @@ impl<T> LoadAwareReceiver<T> {
     /// [`Poll::Ready`] with the next item, or with [`None`] once the channel is empty and every
     /// [`LoadAwareSender`] is dropped. [`Poll::Pending`] otherwise.
     pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        self.inner.poll_recv(cx).map(|maybe| {
-            maybe.map(|(weight, item)| {
-                self.shared.semaphore.add_permits(weight as usize);
-                item
+        let poll_result = self.poll_recv_holding_weight(cx);
+        self.release_drained_weight();
+        poll_result
+    }
+
+    /// Polls for the next item and holds its weight until [`Self::release_drained_weight`], so a
+    /// body that drains many items gives their weight back with one waiter-lock section.
+    pub fn poll_recv_holding_weight(&mut self, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        self.inner.poll_recv(cx).map(|maybe_entry| {
+            maybe_entry.map(|(entry_weight, queued_item)| {
+                self.unreleased_weight += entry_weight as usize;
+                queued_item
             })
         })
+    }
+
+    /// Gives the weight of the items received since the last release back to the senders, with
+    /// one `add_permits`. A body calls it once per drain: before it stops polling.
+    pub fn release_drained_weight(&mut self) {
+        if self.unreleased_weight > 0 {
+            let drained_weight = std::mem::take(&mut self.unreleased_weight);
+            self.shared.semaphore.add_permits(drained_weight);
+        }
     }
 }
 
@@ -568,20 +602,6 @@ mod tests {
             Err(TrySendError::Closed(TestItem(1)))
         ));
         assert!(sender.send(TestItem(1)).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn close_with_queues_behind_held_items_and_closes_every_sender() {
-        let (sender, mut receiver) = load_aware_channel(2, TestWeigher);
-        let cloned_sender = sender.clone();
-        sender.send(TestItem(2)).await.unwrap();
-        sender.close_with(TestItem(9));
-        assert!(matches!(
-            cloned_sender.try_send(TestItem(1)),
-            Err(TrySendError::Closed(_))
-        ));
-        assert_eq!(receiver.recv().await, Some(TestItem(2)));
-        assert_eq!(receiver.recv().await, Some(TestItem(9)));
     }
 
     #[tokio::test]

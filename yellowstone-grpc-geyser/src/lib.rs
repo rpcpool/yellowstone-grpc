@@ -1,9 +1,19 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "only data-path modules deny the lock audit's types and methods"
+)]
+
 pub mod auth;
 pub mod billing;
+pub mod body;
 // pub mod block_reconstruction;
 pub mod cache_ext;
+pub mod compression;
 pub mod config;
 pub mod contact_info;
+pub mod control;
+pub mod extension;
 pub mod file_watcher;
 pub mod geyser_subscriber;
 pub mod grpc;
@@ -12,11 +22,18 @@ pub mod metrics;
 pub mod plugin;
 pub mod ratelimit;
 pub mod stream;
+pub mod subscribe;
+pub mod telemetry;
+pub mod threads;
+pub mod transport;
 pub mod util;
 pub mod version;
 pub use agave_geyser_plugin_interface as plugin_interface;
 mod block_reconstruction_v2;
-pub mod route;
+pub mod reverse_index;
+
+#[cfg(feature = "plugin-entry")]
+export_geyser_plugin!(plugin::entry::Plugin::default);
 
 pub fn get_thread_name() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

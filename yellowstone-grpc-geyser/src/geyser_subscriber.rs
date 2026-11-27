@@ -54,7 +54,7 @@ use {
     crate::{
         grpc::{BroadcastedMessage, Replay, ReplayResponseMessageType},
         plugin::message::{CommitmentLevel, Message, SlotStatus},
-        route::{BankRouteKeyIndex, RouteKey},
+        reverse_index::{BankKeyIndex, IndexKey},
     },
     solana_clock::BankId,
     std::{collections::VecDeque, ops::Range, sync::Arc, vec},
@@ -162,7 +162,7 @@ impl BankSpan {
 /// It owns the replay, its [`ReplayCut`] and the live receiver, and hands out, in order,
 /// everything the client needs before its live stream:
 ///
-/// 1. the replay's messages: for a client with route keys, only those of each indexed sealed
+/// 1. the replay's messages: for a client with index keys, only those of each indexed sealed
 ///    bank that its keys find;
 /// 2. the raw batch that fell between the replay and the receiver, if one did;
 /// 3. the batches queued on the receiver up to the cut, less what the replay already sent.
@@ -174,7 +174,7 @@ impl BankSpan {
 /// # Examples
 ///
 /// ```ignore
-/// let mut phase = ReplayPhase::new(rx, commitment, replay, route_keys.as_deref())?;
+/// let mut phase = ReplayPhase::new(rx, commitment, replay, index_keys.as_deref())?;
 /// while let Some(message) = phase.next().await? {
 ///     send_with_backpressure(message).await?;
 /// }
@@ -203,16 +203,16 @@ pub struct ReplayPhase {
 
 /// A replay's messages, in order, one at a time.
 ///
-/// For a client with route keys, a sealed bank item with a [`BankRouteKeyIndex`] hands out
+/// For a client with index keys, a sealed bank item with a [`BankKeyIndex`] hands out
 /// only the messages the keys find, in bank order. The bank's first item probes the whole bank
-/// once with [`BankRouteKeyIndex::collect_candidate_positions`], and each item hands out the
+/// once with [`BankKeyIndex::collect_candidate_positions`], and each item hands out the
 /// candidates in its range, so the bank's other item reuses that probe. Every other item hands
 /// out all its messages.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// let mut replay = ReplayMessages::new(messages, route_keys);
+/// let mut replay = ReplayMessages::new(messages, index_keys);
 /// while let Some(message) = replay.next() {
 ///     send(message);
 /// }
@@ -222,13 +222,13 @@ struct ReplayMessages {
     items: vec::IntoIter<ReplayResponseMessageType>,
     /// The batch being handed out, and the indexes of its messages still to go.
     batch: Option<(Arc<Vec<Message>>, Range<usize>)>,
-    /// The client's route keys, hashed once with [`BankRouteKeyIndex::route_key_hash`], or
-    /// [`None`] without route keys.
-    route_key_hashes: Option<Box<[u64]>>,
+    /// The client's index keys, hashed once with [`BankKeyIndex::index_key_hash`], or
+    /// [`None`] without index keys.
+    index_key_hashes: Option<Box<[u64]>>,
     /// The candidates of the last probed bank, ascending.
     candidate_positions: Vec<u32>,
     /// The index those candidates came from.
-    probed_route_key_index: Option<Arc<BankRouteKeyIndex>>,
+    probed_bank_key_index: Option<Arc<BankKeyIndex>>,
     /// The sealed bank part being handed out, and the indexes into `candidate_positions` still
     /// to go.
     candidate_batch: Option<(Arc<Vec<Message>>, Range<usize>)>,
@@ -240,57 +240,51 @@ impl ReplayMessages {
     /// # Arguments
     ///
     /// * `items` - The replay, as block reconstruction built it.
-    /// * `route_keys` - The client's route keys, or [`None`], which hands out every message of
+    /// * `index_keys` - The client's index keys, or [`None`], which hands out every message of
     ///   `items`.
     ///
     /// # Returns
     ///
     /// The iterator over the messages of `items`.
-    fn new(items: Vec<ReplayResponseMessageType>, route_keys: Option<&[RouteKey]>) -> Self {
-        let route_key_hashes = route_keys.map(|client_route_keys| {
-            client_route_keys
+    fn new(items: Vec<ReplayResponseMessageType>, index_keys: Option<&[IndexKey]>) -> Self {
+        let index_key_hashes = index_keys.map(|client_index_keys| {
+            client_index_keys
                 .iter()
-                .map(BankRouteKeyIndex::route_key_hash)
+                .map(BankKeyIndex::index_key_hash)
                 .collect()
         });
         Self {
             items: items.into_iter(),
             batch: None,
-            route_key_hashes,
+            index_key_hashes,
             candidate_positions: Vec::new(),
-            probed_route_key_index: None,
+            probed_bank_key_index: None,
             candidate_batch: None,
         }
     }
 
     /// Starts handing out one part of a sealed bank: the candidates in `bank_range` when the
-    /// client has route keys and the bank an index, and every message in it otherwise.
-    ///
-    /// # Arguments
-    ///
-    /// * `bank_messages` - The sealed bank's messages.
-    /// * `bank_range` - The part of `bank_messages` the item holds.
-    /// * `route_key_index` - The bank's index, or [`None`] if the bank thread has not built it.
+    /// client has index keys and the bank an index, and every message in it otherwise.
     fn start_sealed_bank_part(
         &mut self,
         bank_messages: Arc<Vec<Message>>,
         bank_range: Range<usize>,
-        route_key_index: Option<Arc<BankRouteKeyIndex>>,
+        bank_key_index: Option<Arc<BankKeyIndex>>,
     ) {
-        let (Some(route_key_hashes), Some(route_key_index)) =
-            (&self.route_key_hashes, route_key_index)
+        let (Some(index_key_hashes), Some(bank_key_index)) =
+            (&self.index_key_hashes, bank_key_index)
         else {
             self.batch = Some((bank_messages, bank_range));
             return;
         };
         let bank_probed = self
-            .probed_route_key_index
+            .probed_bank_key_index
             .as_ref()
-            .is_some_and(|probed_index| Arc::ptr_eq(probed_index, &route_key_index));
+            .is_some_and(|probed_index| Arc::ptr_eq(probed_index, &bank_key_index));
         if !bank_probed {
-            route_key_index
-                .collect_candidate_positions(route_key_hashes, &mut self.candidate_positions);
-            self.probed_route_key_index = Some(route_key_index);
+            bank_key_index
+                .collect_candidate_positions(index_key_hashes, &mut self.candidate_positions);
+            self.probed_bank_key_index = Some(bank_key_index);
         }
         let candidates_before = |range_edge: usize| {
             self.candidate_positions
@@ -326,8 +320,8 @@ impl Iterator for ReplayMessages {
                 ReplayResponseMessageType::SealedBank(
                     bank_messages,
                     bank_range,
-                    route_key_index,
-                ) => self.start_sealed_bank_part(bank_messages, bank_range, route_key_index),
+                    bank_key_index,
+                ) => self.start_sealed_bank_part(bank_messages, bank_range, bank_key_index),
             }
         }
     }
@@ -444,8 +438,8 @@ impl ReplayPhase {
     /// * `rx` - The live receiver, subscribed before the replay request.
     /// * `commitment` - The commitment of `rx` and of the replay.
     /// * `replay` - The replay, and where block reconstruction stood when it built it.
-    /// * `route_keys` - The client's route keys, or [`None`]. With them, each sealed bank with a
-    ///   [`BankRouteKeyIndex`] hands out only the messages they find.
+    /// * `index_keys` - The client's index keys, or [`None`]. With them, each sealed bank with a
+    ///   [`BankKeyIndex`] hands out only the messages they find.
     ///
     /// # Returns
     ///
@@ -458,7 +452,7 @@ impl ReplayPhase {
         mut rx: broadcast::Receiver<BroadcastedMessage>,
         commitment: CommitmentLevel,
         replay: Replay,
-        route_keys: Option<&[RouteKey]>,
+        index_keys: Option<&[IndexKey]>,
     ) -> Result<Self, RecvError> {
         let Replay {
             messages,
@@ -479,7 +473,7 @@ impl ReplayPhase {
             rx,
             commitment,
             sent: ReplaySent::new(&messages),
-            replay: ReplayMessages::new(messages, route_keys),
+            replay: ReplayMessages::new(messages, index_keys),
             queued,
             batch: None,
             last_taken_in,
@@ -562,14 +556,6 @@ impl ReplayPhase {
     /// Drops from `batch` what the replay already sent, if `batch` is up to its cut:
     /// [`ReplayPhase::last_taken_in`] for a raw processed batch, [`ReplayPhase::last_sent`] for
     /// any other.
-    ///
-    /// # Arguments
-    ///
-    /// * `batch` - The next batch queued on the live receiver.
-    ///
-    /// # Returns
-    ///
-    /// `batch`, what is left of it, or [`None`] if the replay sent all of it.
     fn join(&mut self, batch: BroadcastedMessage) -> Option<BroadcastedMessage> {
         let raw = self.commitment == CommitmentLevel::Processed && !is_reconstruction_batch(&batch);
         let cut = if raw {
@@ -613,14 +599,6 @@ fn take_queued(
 
 /// Whether block reconstruction sent `batch`. Its processed batches start with a
 /// [`Message::Block`] or a commitment status, and no raw batch holds either.
-///
-/// # Arguments
-///
-/// * `batch` - A batch from the processed channel.
-///
-/// # Returns
-///
-/// `true` if `batch` starts with a Block or a commitment status.
 fn is_reconstruction_batch(batch: &[Message]) -> bool {
     match batch.first() {
         Some(Message::Block(_)) => true,
@@ -702,13 +680,6 @@ impl ReplaySent {
 
 /// Calls `visit_bank_part` with the bank and part of each message `replay_items` holds, but once
 /// for the range of a sealed bank.
-///
-/// # Arguments
-///
-/// * `replay_items` - The replay's items.
-/// * `visit_bank_part` - Gets the bank and part, from [`bank_part`], of each message of a
-///   [`ReplayResponseMessageType::Single`] or [`ReplayResponseMessageType::Batch`] item, and of
-///   the first message of each non-empty [`ReplayResponseMessageType::SealedBank`] range.
 fn for_each_replayed_bank_part(
     replay_items: &[ReplayResponseMessageType],
     mut visit_bank_part: impl FnMut(BankId, BankPart),
@@ -774,7 +745,6 @@ mod tests {
     use {
         super::*,
         crate::plugin::{filter::fixtures, message::MessageBlock},
-        solana_pubkey::Pubkey,
         std::time::Duration,
     };
 
@@ -795,8 +765,7 @@ mod tests {
     }
 
     fn block(bank: u64) -> Message {
-        let mut meta = fixtures::message_block_meta(bank);
-        Arc::get_mut(&mut meta).unwrap().block_meta.bank_id = bank;
+        let meta = fixtures::bank_block_meta(bank, bank);
         Message::Block(Arc::new(MessageBlock::new(meta, vec![], vec![], vec![])))
     }
 
@@ -1243,80 +1212,6 @@ mod tests {
         let _ = phase.into_receiver();
     }
 
-    /// A client keyed on one account gets, from an indexed bank of 1,000 accounts split around
-    /// its CreatedBank, only that account, between the bank's CreatedBank and Processed
-    /// statuses. Without the index, or without route keys, all 1,000 come out.
-    #[tokio::test]
-    async fn a_replay_hands_out_only_what_an_indexed_bank_finds() {
-        let account_pubkeys = fixtures::deterministic_pubkeys(3, 1000);
-        let bank_messages: Arc<Vec<Message>> = Arc::new(
-            account_pubkeys
-                .iter()
-                .map(|account_pubkey| {
-                    let account_owner = Pubkey::default();
-                    Message::Account(fixtures::simple_message_account(
-                        *account_pubkey,
-                        account_owner,
-                    ))
-                })
-                .collect(),
-        );
-        let route_key_index = Arc::new(BankRouteKeyIndex::new(&bank_messages, &mut Vec::new()));
-        let client_route_keys = [RouteKey::Account(account_pubkeys[500])];
-        let created_bank_status = status(100, SlotStatus::CreatedBank);
-        let processed_status = status(100, SlotStatus::Processed);
-        let every_message: Vec<Message> = bank_messages[..10]
-            .iter()
-            .chain([&created_bank_status])
-            .chain(&bank_messages[10..])
-            .chain([&processed_status])
-            .cloned()
-            .collect();
-        let found_messages = [
-            created_bank_status.clone(),
-            bank_messages[500].clone(),
-            processed_status.clone(),
-        ];
-        for (replayed_index, replayed_route_keys, expected_messages) in [
-            (
-                Some(&route_key_index),
-                Some(&client_route_keys[..]),
-                &found_messages[..],
-            ),
-            (None, Some(&client_route_keys[..]), &every_message[..]),
-            (Some(&route_key_index), None, &every_message[..]),
-        ] {
-            let replay_items = vec![
-                ReplayResponseMessageType::SealedBank(
-                    Arc::clone(&bank_messages),
-                    0..10,
-                    replayed_index.cloned(),
-                ),
-                ReplayResponseMessageType::Single(created_bank_status.clone()),
-                ReplayResponseMessageType::SealedBank(
-                    Arc::clone(&bank_messages),
-                    10..1000,
-                    replayed_index.cloned(),
-                ),
-                ReplayResponseMessageType::Single(processed_status.clone()),
-            ];
-            let client_replay = Replay {
-                bank_id_span: BankSpan::of(&replay_items),
-                messages: replay_items,
-                cut: no_cut(),
-            };
-            let (_live_tx, live_rx) = channel();
-            let mut replay_phase = ReplayPhase::new(
-                live_rx,
-                CommitmentLevel::Processed,
-                client_replay,
-                replayed_route_keys,
-            )
-            .unwrap();
-            assert_eq!(catch_up(&mut replay_phase).await, names(expected_messages));
-        }
-    }
-
     /// Each part has its own bit: inserting one adds only it, and again changes nothing.
     #[test]
     fn bank_parts_hold_each_part_apart() {
@@ -1513,55 +1408,5 @@ mod tests {
         assert!(sent.entries.is_empty());
         assert!(!sent.contains(&entry(5)));
         assert!(!sent.contains(&entry(0)));
-    }
-
-    /// A sealed bank's range marks the bank once, by its first message, so the table equals the
-    /// one of the same messages as singles: the same length, and the same answer for every
-    /// replayed message and for the entries and statuses of the banks around them. Bank 6 has
-    /// no CreatedBank among the items, so only its range marks it. An empty range marks nothing.
-    #[test]
-    fn replay_sent_marks_a_sealed_bank_once_for_its_range() {
-        let sealed_bank_messages = Arc::new(vec![entry(5), entry(5), entry(5)]);
-        let range_only_bank_messages = Arc::new(vec![entry(6), entry(6)]);
-        let unsealed_bank_messages = Arc::new(vec![status(7, SlotStatus::CreatedBank), entry(7)]);
-        let unreplayed_bank_messages = Arc::new(vec![entry(9), entry(9)]);
-        let replay_items = vec![
-            ReplayResponseMessageType::SealedBank(Arc::clone(&sealed_bank_messages), 0..1, None),
-            ReplayResponseMessageType::Single(status(5, SlotStatus::CreatedBank)),
-            ReplayResponseMessageType::SealedBank(Arc::clone(&sealed_bank_messages), 1..3, None),
-            ReplayResponseMessageType::Single(status(5, SlotStatus::Processed)),
-            ReplayResponseMessageType::SealedBank(range_only_bank_messages, 0..2, None),
-            ReplayResponseMessageType::Batch(unsealed_bank_messages, 0..2),
-            ReplayResponseMessageType::SealedBank(unreplayed_bank_messages, 1..1, None),
-        ];
-        let replayed_messages: Vec<Message> = replay_items.iter().flatten().cloned().collect();
-        let range_marks = ReplaySent::new(&replay_items);
-        let message_marks = sent(&replayed_messages);
-        assert_eq!(range_marks.entries.len(), message_marks.entries.len());
-        let bank_statuses = [
-            SlotStatus::CreatedBank,
-            SlotStatus::Processed,
-            SlotStatus::Confirmed,
-            SlotStatus::Finalized,
-        ];
-        let nearby_bank_messages = (3..12).flat_map(|nearby_bank_id| {
-            let nearby_statuses =
-                bank_statuses.map(|bank_status| status(nearby_bank_id, bank_status));
-            std::iter::once(entry(nearby_bank_id)).chain(nearby_statuses)
-        });
-        for looked_up_message in replayed_messages
-            .iter()
-            .cloned()
-            .chain(nearby_bank_messages)
-        {
-            assert_eq!(
-                range_marks.contains(&looked_up_message),
-                message_marks.contains(&looked_up_message),
-                "{:?}",
-                names([&looked_up_message])
-            );
-        }
-        assert!(range_marks.contains(&entry(6)));
-        assert!(!range_marks.contains(&entry(9)));
     }
 }

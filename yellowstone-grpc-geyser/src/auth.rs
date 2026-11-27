@@ -102,12 +102,15 @@ impl HttpSubscriptionRepository {
         // Make sure we build the cache key following the forwarded_headers order, so that the same headers in different order don't produce different cache keys.
         for header_to_forward in &self.forwarded_headers {
             if let Some(value) = headers.get(header_to_forward) {
+                // Deny a value that is not visible ASCII as a resolver 404 is, without the call.
+                let Ok(visible_ascii_value) = value.to_str() else {
+                    log::warn!(
+                        "Forwarded header {header_to_forward} is not visible ASCII, denying the request"
+                    );
+                    return Box::pin(future::ready(Ok(None)));
+                };
                 caching_key_parts.push(header_to_forward);
-                caching_key_parts.push(
-                    value
-                        .to_str()
-                        .expect("forwarder header value should be valid UTF-8"),
-                );
+                caching_key_parts.push(visible_ascii_value);
                 header_map.insert(
                     HeaderName::from_str(header_to_forward)
                         .expect("forwarder header name should be valid"),

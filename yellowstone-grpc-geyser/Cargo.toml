@@ -17,8 +17,10 @@ crate-type = ["cdylib", "rlib"]
 name = "config-check"
 
 [features]
-default = []
+default = ["plugin-entry"]
 bench = ["dep:solana-storage-proto"]
+# Exports `_create_plugin` for the standard plugin; an embedding crate turns it off.
+plugin-entry = []
 
 [dependencies]
 foldhash = { workspace = true }
@@ -30,7 +32,10 @@ bytes = { workspace = true }
 bytesize = { workspace = true, features = ["serde"]}
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
+crossbeam-queue = { workspace = true }
 dashmap = { workspace = true }
+# flate2 keeps miniz_oxide, its default backend: the workspace never turns on its zlib-rs feature.
+flate2 = { workspace = true }
 futures = { workspace = true }
 hashbrown = { workspace = true }
 hostname = { workspace = true }
@@ -40,6 +45,7 @@ humantime-serde = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 lazy_static = { workspace = true }
+libc = { workspace = true }
 log = { workspace = true }
 moka = { workspace = true, features = ["future"] }
 pin-project = { workspace = true }
@@ -63,6 +69,8 @@ tonic-prost = { workspace = true }
 wincode = { workspace = true }
 url = { workspace = true, features = ["serde"] }
 notify = { workspace = true }
+zlib-rs = { workspace = true, features = ["std"] }
+zstd = { workspace = true }
 
 # Agave Monorepo
 agave-feature-set = { workspace = true }
@@ -92,6 +100,7 @@ solana-storage-proto = { workspace = true, optional = true, features = ["agave-u
 spl-token-2022-interface = { workspace = true }
 
 # Yellowstone
+yellowstone-grpc-concurrency = { workspace = true }
 yellowstone-grpc-proto = { workspace = true, features = ["tonic", "account-data-as-bytes"] }
 yellowstone-grpc-tools = { workspace = true }
 
@@ -130,7 +139,6 @@ solana-signature = { workspace = true }
 solana-signer = { workspace = true }
 solana-storage-proto = { workspace = true, features = ["agave-unstable-api"] }
 solana-transaction = { workspace = true, features = ["wincode", "blake3"] }
-tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

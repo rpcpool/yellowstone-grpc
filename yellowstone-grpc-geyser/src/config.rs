@@ -13,13 +13,17 @@ use {
         GeyserPluginError, Result as PluginResult,
     },
     bytesize::ByteSize,
-    serde::{de, Deserialize, Deserializer},
+    serde::{
+        de::{self, DeserializeOwned},
+        Deserialize, Deserializer,
+    },
     std::{
         collections::HashSet,
-        fmt,
+        fmt::{self, Write as _},
         fs::read_to_string,
         net::SocketAddr,
         num::NonZeroUsize,
+        ops::RangeInclusive,
         path::{Path, PathBuf},
         str::FromStr,
         time::Duration,
@@ -281,13 +285,6 @@ impl<'de> Deserialize<'de> for GrpcAddresses {
 
 /// The gRPC server's settings, the `grpc` section of the plugin config. A missing key takes its
 /// default, and an unknown key fails to load.
-///
-/// # Examples
-///
-/// ```ignore
-/// let config_grpc: ConfigGrpc = serde_json::from_str(r#"{"filter_apply_interval": "1s"}"#)?;
-/// assert_eq!(config_grpc.filter_apply_interval, Duration::from_secs(1));
-/// ```
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigGrpc {
@@ -394,13 +391,13 @@ pub struct ConfigGrpc {
     )]
     pub filter_apply_interval: Duration,
     /// The shortest time between two slices of an owner's index work, which claims and releases
-    /// route keys for route changes. `0s` lets a slice run in every pass.
+    /// index keys for index changes. `0s` lets a slice run in every pass.
     #[serde(
         default = "ConfigGrpc::default_route_index_interval",
         with = "humantime_serde"
     )]
     pub route_index_interval: Duration,
-    /// The longest one slice of index work runs, plus one step of 64 route keys. `0s` runs one
+    /// The longest one slice of index work runs, plus one step of 64 index keys. `0s` runs one
     /// step per slice.
     #[serde(
         default = "ConfigGrpc::default_route_index_budget",
@@ -452,6 +449,10 @@ pub struct ConfigGrpc {
 
     #[serde(default)]
     pub listen: Option<Vec<ListenConfig>>,
+
+    /// The data plane settings, parsed leniently: a bad entry warns and keeps its default.
+    #[serde(default)]
+    pub data_plane: ConfigGrpcDataPlane,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -685,28 +686,16 @@ impl ConfigGrpc {
     }
 
     /// The default [`ConfigGrpc::filter_apply_interval`].
-    ///
-    /// # Returns
-    ///
-    /// 5 s.
     const fn default_filter_apply_interval() -> Duration {
         Duration::from_secs(5)
     }
 
     /// The default [`ConfigGrpc::route_index_interval`].
-    ///
-    /// # Returns
-    ///
-    /// 1 ms.
     const fn default_route_index_interval() -> Duration {
         Duration::from_millis(1)
     }
 
     /// The default [`ConfigGrpc::route_index_budget`].
-    ///
-    /// # Returns
-    ///
-    /// 100 µs.
     const fn default_route_index_budget() -> Duration {
         Duration::from_micros(100)
     }
@@ -895,6 +884,768 @@ impl ConfigGrpcCompression {
     }
 }
 
+/// The dotted path of the `grpc.data_plane` object, the prefix of its warnings' key paths.
+const DATA_PLANE_KEY_PATH: &str = "grpc.data_plane";
+
+/// The gzip levels flate2 and zlib accept.
+const GZIP_LEVEL_RANGE: RangeInclusive<u32> = 0..=9;
+
+/// The zstd levels the zstd library accepts, from its fastest negative level to its strongest.
+const ZSTD_LEVEL_RANGE: RangeInclusive<i32> = -131_072..=22;
+
+/// The `grpc.data_plane` object. Unlike the rest of the config it is lenient: a bad entry adds
+/// one warning to `load_warnings` and keeps its default, so a rollback still loads.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ConfigGrpcDataPlane {
+    /// `subscribe_body`: what writes Subscribe responses.
+    pub subscribe_body: SubscribeBodyKind,
+    /// `compression`: how Subscribe responses are compressed.
+    pub compression: ConfigGrpcDataPlaneCompression,
+    /// `threads`: the data plane's own threads.
+    pub threads: ConfigGrpcDataPlaneThreads,
+    /// `staging`: how the plugin's Subscribe body stages frames.
+    pub staging: ConfigGrpcDataPlaneStaging,
+    /// `telemetry`: metrics and log lines beyond the baseline set.
+    pub telemetry: ConfigGrpcDataPlaneTelemetry,
+    /// `extensions`: sections for an embedding crate, by name, as the file holds them.
+    pub extensions: serde_json::Map<String, serde_json::Value>,
+    /// One warning for each entry that parsing ignored or replaced with its default.
+    pub load_warnings: Vec<DataPlaneConfigWarning>,
+}
+
+impl<'de> Deserialize<'de> for ConfigGrpcDataPlane {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        serde_json::Value::deserialize(deserializer).map(Self::from_json_value)
+    }
+}
+
+impl ConfigGrpcDataPlane {
+    /// Parses the object leniently. It never fails: every problem becomes a warning in
+    /// `load_warnings`.
+    pub fn from_json_value(data_plane_value: serde_json::Value) -> Self {
+        let mut load_warnings = Vec::new();
+        let mut data_plane = Self::default();
+        if let Some(mut data_plane_section) = LenientSection::open_section(
+            DATA_PLANE_KEY_PATH.to_owned(),
+            data_plane_value,
+            &mut load_warnings,
+        ) {
+            data_plane_section.read_into(
+                &mut data_plane.subscribe_body,
+                "subscribe_body",
+                &mut load_warnings,
+                parse_json_value,
+            );
+            if let Some(compression_section) =
+                data_plane_section.take_section("compression", &mut load_warnings)
+            {
+                data_plane
+                    .compression
+                    .read_from(compression_section, &mut load_warnings);
+            }
+            if let Some(threads_section) =
+                data_plane_section.take_section("threads", &mut load_warnings)
+            {
+                data_plane
+                    .threads
+                    .read_from(threads_section, &mut load_warnings);
+            }
+            if let Some(mut staging_section) =
+                data_plane_section.take_section("staging", &mut load_warnings)
+            {
+                staging_section.read_into(
+                    &mut data_plane.staging.copy_threshold_bytes,
+                    "copy_threshold_bytes",
+                    &mut load_warnings,
+                    parse_byte_size_value,
+                );
+                staging_section.warn_unknown_keys(&mut load_warnings);
+            }
+            if let Some(telemetry_section) =
+                data_plane_section.take_section("telemetry", &mut load_warnings)
+            {
+                data_plane
+                    .telemetry
+                    .read_from(telemetry_section, &mut load_warnings);
+            }
+            data_plane_section.read_into(
+                &mut data_plane.extensions,
+                "extensions",
+                &mut load_warnings,
+                parse_json_value,
+            );
+            data_plane_section.warn_unknown_keys(&mut load_warnings);
+        }
+        data_plane.load_warnings = load_warnings;
+        data_plane
+    }
+
+    /// One warning for each `extensions` section whose name is not in `claimed_extension_names`.
+    pub fn unclaimed_extension_warnings(
+        &self,
+        claimed_extension_names: &[&str],
+    ) -> Vec<DataPlaneConfigWarning> {
+        self.extensions
+            .keys()
+            .filter(|extension_name| !claimed_extension_names.contains(&extension_name.as_str()))
+            .map(|extension_name| DataPlaneConfigWarning {
+                key_path: format!("{DATA_PLANE_KEY_PATH}.extensions.{extension_name}"),
+                config_problem: DataPlaneConfigProblem::UnclaimedExtension,
+            })
+            .collect()
+    }
+
+    /// One warning for each compression key that overrides the build's default. Only
+    /// `config-check --strict` reports them: rendered configs leave these keys unset.
+    pub fn compression_override_warnings(&self) -> Vec<DataPlaneConfigWarning> {
+        self.compression
+            .compression_overrides
+            .set_key_names()
+            .into_iter()
+            .map(|key_name| DataPlaneConfigWarning {
+                key_path: format!("{DATA_PLANE_KEY_PATH}.compression.{key_name}"),
+                config_problem: DataPlaneConfigProblem::CompressionOverrideSet,
+            })
+            .collect()
+    }
+
+    /// The one line that shows the settings in force, with each compression key over
+    /// `build_compression_defaults`.
+    pub fn effective_config_line(&self, build_compression_defaults: CompressionDefaults) -> String {
+        let effective_compression =
+            build_compression_defaults.with_overrides(self.compression.compression_overrides);
+        let mut effective_config_line = format!(
+            "{DATA_PLANE_KEY_PATH} in effect: subscribe_body={}",
+            self.subscribe_body.config_value()
+        );
+        let _ = write!(
+            effective_config_line,
+            " compression.mode={} compression.gzip_level={} compression.zstd_level={} \
+             compression.prefer_zstd={} compression.zstd_frame={} \
+             compression.keys_set_in_config=[{}] compression.group_slots={} \
+             compression.inline_max_bytes={} compression.big_body_bytes={} \
+             compression.processed_pool_threads={} compression.confirmed_pool_threads={} \
+             compression.waiter_backstop={:?} compression.retained_budget_bytes={} \
+             compression.block_shape_budget_bytes={}",
+            self.compression.mode.config_value(),
+            effective_compression.gzip_level,
+            effective_compression.zstd_level,
+            effective_compression.prefer_zstd,
+            effective_compression.zstd_frame_form.config_value(),
+            self.compression
+                .compression_overrides
+                .set_key_names()
+                .join(","),
+            self.compression.group_slots,
+            self.compression.inline_max_bytes,
+            self.compression.big_body_bytes,
+            self.compression.processed_pool_threads,
+            self.compression.confirmed_pool_threads,
+            self.compression.waiter_backstop,
+            self.compression.retained_budget_bytes,
+            self.compression.block_shape_budget_bytes,
+        );
+        let _ = write!(
+            effective_config_line,
+            " threads.filter_compile_threads={} threads.control_cpus={} \
+             threads.compressor_cpus={} staging.copy_threshold_bytes={} \
+             telemetry.extended_metrics={} telemetry.summary_interval={:?} extensions=[{}]",
+            self.threads.filter_compile_threads,
+            taskset_config_value(self.threads.control_cpus.as_deref()),
+            taskset_config_value(self.threads.compressor_cpus.as_deref()),
+            self.staging.copy_threshold_bytes,
+            self.telemetry.extended_metrics,
+            self.telemetry.summary_interval,
+            self.extensions
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        effective_config_line
+    }
+
+    /// Logs every load warning and unclaimed extension section, then the effective config line.
+    /// The plugin calls it once at load, after its logger is set up.
+    pub fn log_at_load(
+        &self,
+        build_compression_defaults: CompressionDefaults,
+        claimed_extension_names: &[&str],
+    ) {
+        for load_warning in &self.load_warnings {
+            log::warn!("{load_warning}");
+        }
+        for unclaimed_extension_warning in
+            self.unclaimed_extension_warnings(claimed_extension_names)
+        {
+            log::warn!("{unclaimed_extension_warning}");
+        }
+        log::info!("{}", self.effective_config_line(build_compression_defaults));
+    }
+}
+
+/// `grpc.data_plane.subscribe_body`: tonic's encoder or the plugin's own Subscribe body.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscribeBodyKind {
+    #[default]
+    Tonic,
+    Plugin,
+}
+
+impl SubscribeBodyKind {
+    /// The config value that selects this kind.
+    pub const fn config_value(self) -> &'static str {
+        match self {
+            Self::Tonic => "tonic",
+            Self::Plugin => "plugin",
+        }
+    }
+}
+
+/// `grpc.data_plane.compression.mode`: compress once per group of members, or per member.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompressionSharingMode {
+    #[default]
+    Shared,
+    PerStream,
+}
+
+impl CompressionSharingMode {
+    /// The config value that selects this mode.
+    pub const fn config_value(self) -> &'static str {
+        match self {
+            Self::Shared => "shared",
+            Self::PerStream => "per_stream",
+        }
+    }
+}
+
+/// The zstd frame form. `Streaming` is what tonic's encoder writes, with no content size;
+/// `OneShot` is what a one-shot compressor writes, with the content size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZstdFrameForm {
+    Streaming,
+    OneShot,
+}
+
+impl ZstdFrameForm {
+    /// The `compression.zstd_frame` value that selects this form.
+    pub const fn config_value(self) -> &'static str {
+        match self {
+            Self::Streaming => "streaming",
+            Self::OneShot => "one_shot",
+        }
+    }
+}
+
+/// A build's compression defaults. Each of the four compression keys overrides one field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompressionDefaults {
+    pub gzip_level: u32,
+    pub zstd_level: i32,
+    /// Send a Subscribe stream in zstd whenever the client accepts it, instead of the client's
+    /// first choice. Other methods keep the negotiation of the tonic the build links.
+    pub prefer_zstd: bool,
+    pub zstd_frame_form: ZstdFrameForm,
+}
+
+impl CompressionDefaults {
+    /// The public build's defaults, the calls tonic 0.14.9 makes: gzip 6, zstd 3, the client's
+    /// order and streaming zstd frames.
+    pub const PUBLIC: Self = Self {
+        gzip_level: 6,
+        zstd_level: 3,
+        prefer_zstd: false,
+        zstd_frame_form: ZstdFrameForm::Streaming,
+    };
+
+    /// These defaults, with each field the config sets taken from `compression_overrides`.
+    pub const fn with_overrides(self, compression_overrides: CompressionOverrides) -> Self {
+        Self {
+            gzip_level: match compression_overrides.gzip_level {
+                Some(gzip_level) => gzip_level,
+                None => self.gzip_level,
+            },
+            zstd_level: match compression_overrides.zstd_level {
+                Some(zstd_level) => zstd_level,
+                None => self.zstd_level,
+            },
+            prefer_zstd: match compression_overrides.prefer_zstd {
+                Some(prefer_zstd) => prefer_zstd,
+                None => self.prefer_zstd,
+            },
+            zstd_frame_form: match compression_overrides.zstd_frame_form {
+                Some(zstd_frame_form) => zstd_frame_form,
+                None => self.zstd_frame_form,
+            },
+        }
+    }
+}
+
+/// The keys `compression.gzip_level`, `zstd_level`, `prefer_zstd` and `zstd_frame`. Each is
+/// unset by default, which keeps the build's [`CompressionDefaults`] field.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CompressionOverrides {
+    pub gzip_level: Option<u32>,
+    pub zstd_level: Option<i32>,
+    pub prefer_zstd: Option<bool>,
+    pub zstd_frame_form: Option<ZstdFrameForm>,
+}
+
+impl CompressionOverrides {
+    /// The names of the keys the config sets, in the config's spelling.
+    pub fn set_key_names(self) -> Vec<&'static str> {
+        [
+            ("gzip_level", self.gzip_level.is_some()),
+            ("zstd_level", self.zstd_level.is_some()),
+            ("prefer_zstd", self.prefer_zstd.is_some()),
+            ("zstd_frame", self.zstd_frame_form.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(key_name, key_is_set)| key_is_set.then_some(key_name))
+        .collect()
+    }
+}
+
+/// `grpc.data_plane.compression`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfigGrpcDataPlaneCompression {
+    /// `mode`: compress once per group of members, or per member.
+    pub mode: CompressionSharingMode,
+    /// `gzip_level`, `zstd_level`, `prefer_zstd` and `zstd_frame`.
+    pub compression_overrides: CompressionOverrides,
+    /// `group_slots`: compression groups per shared body; a member of a further group compresses
+    /// its own copy.
+    pub group_slots: usize,
+    /// `inline_max_bytes`: a processed body above it compresses on the processed pool, if any.
+    pub inline_max_bytes: usize,
+    /// `big_body_bytes`: a confirmed or finalized body above it compresses on its pool, if any.
+    pub big_body_bytes: usize,
+    /// `processed_pool_threads`: the processed compressor pool's size; 0 compresses inline.
+    pub processed_pool_threads: usize,
+    /// `confirmed_pool_threads`: the confirmed and finalized pool's size; 0 compresses inline.
+    pub confirmed_pool_threads: usize,
+    /// `waiter_backstop`: when a confirmed or finalized waiter without a waker cell checks again.
+    pub waiter_backstop: Duration,
+    /// `retained_budget_bytes`: the cap on retained compressed bodies.
+    pub retained_budget_bytes: usize,
+    /// `block_shape_budget_bytes`: the cap on retained block shapes.
+    pub block_shape_budget_bytes: usize,
+}
+
+impl Default for ConfigGrpcDataPlaneCompression {
+    fn default() -> Self {
+        Self {
+            mode: CompressionSharingMode::Shared,
+            compression_overrides: CompressionOverrides::default(),
+            group_slots: 4,
+            inline_max_bytes: 64 * 1024,
+            big_body_bytes: 1024 * 1024,
+            processed_pool_threads: 0,
+            confirmed_pool_threads: 0,
+            waiter_backstop: Duration::from_millis(1),
+            retained_budget_bytes: 512 * 1024 * 1024,
+            block_shape_budget_bytes: 1024 * 1024 * 1024,
+        }
+    }
+}
+
+impl ConfigGrpcDataPlaneCompression {
+    fn read_from(
+        &mut self,
+        mut compression_section: LenientSection,
+        load_warnings: &mut Vec<DataPlaneConfigWarning>,
+    ) {
+        compression_section.read_into(&mut self.mode, "mode", load_warnings, parse_json_value);
+        self.compression_overrides.gzip_level =
+            compression_section.take_optional("gzip_level", load_warnings, |level_value| {
+                parse_integer_in_range(level_value, GZIP_LEVEL_RANGE)
+            });
+        self.compression_overrides.zstd_level =
+            compression_section.take_optional("zstd_level", load_warnings, |level_value| {
+                parse_integer_in_range(level_value, ZSTD_LEVEL_RANGE)
+            });
+        self.compression_overrides.prefer_zstd =
+            compression_section.take_optional("prefer_zstd", load_warnings, parse_json_value);
+        self.compression_overrides.zstd_frame_form =
+            compression_section.take_optional("zstd_frame", load_warnings, parse_json_value);
+        for (config_field, key_name) in [
+            (&mut self.group_slots, "group_slots"),
+            (&mut self.processed_pool_threads, "processed_pool_threads"),
+            (&mut self.confirmed_pool_threads, "confirmed_pool_threads"),
+        ] {
+            compression_section.read_into(
+                config_field,
+                key_name,
+                load_warnings,
+                parse_integer_value,
+            );
+        }
+        for (config_field, key_name) in [
+            (&mut self.inline_max_bytes, "inline_max_bytes"),
+            (&mut self.big_body_bytes, "big_body_bytes"),
+            (&mut self.retained_budget_bytes, "retained_budget_bytes"),
+            (
+                &mut self.block_shape_budget_bytes,
+                "block_shape_budget_bytes",
+            ),
+        ] {
+            compression_section.read_into(
+                config_field,
+                key_name,
+                load_warnings,
+                parse_byte_size_value,
+            );
+        }
+        compression_section.read_into(
+            &mut self.waiter_backstop,
+            "waiter_backstop",
+            load_warnings,
+            parse_duration_value,
+        );
+        compression_section.warn_unknown_keys(load_warnings);
+    }
+}
+
+/// `grpc.data_plane.threads`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigGrpcDataPlaneThreads {
+    /// `filter_compile_threads`: the filter compile lane's size; 0 compiles inline.
+    pub filter_compile_threads: usize,
+    /// `control_cpus`: a taskset for the control and compile lane threads.
+    pub control_cpus: Option<Vec<usize>>,
+    /// `compressor_cpus`: a taskset for the compressor pool threads.
+    pub compressor_cpus: Option<Vec<usize>>,
+}
+
+impl ConfigGrpcDataPlaneThreads {
+    fn read_from(
+        &mut self,
+        mut threads_section: LenientSection,
+        load_warnings: &mut Vec<DataPlaneConfigWarning>,
+    ) {
+        threads_section.read_into(
+            &mut self.filter_compile_threads,
+            "filter_compile_threads",
+            load_warnings,
+            parse_integer_value,
+        );
+        self.control_cpus =
+            threads_section.take_optional("control_cpus", load_warnings, parse_taskset_value);
+        self.compressor_cpus =
+            threads_section.take_optional("compressor_cpus", load_warnings, parse_taskset_value);
+        threads_section.warn_unknown_keys(load_warnings);
+    }
+}
+
+/// `grpc.data_plane.staging`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfigGrpcDataPlaneStaging {
+    /// `copy_threshold_bytes`: the plugin's body copies smaller frames and references larger.
+    pub copy_threshold_bytes: usize,
+}
+
+impl Default for ConfigGrpcDataPlaneStaging {
+    fn default() -> Self {
+        Self {
+            copy_threshold_bytes: 16 * 1024,
+        }
+    }
+}
+
+/// `grpc.data_plane.telemetry`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfigGrpcDataPlaneTelemetry {
+    /// `extended_metrics`: register the metric families the data plane adds.
+    pub extended_metrics: bool,
+    /// `summary_interval`: the period of the safety summary line; zero turns it off.
+    pub summary_interval: Duration,
+}
+
+impl Default for ConfigGrpcDataPlaneTelemetry {
+    fn default() -> Self {
+        Self {
+            extended_metrics: false,
+            summary_interval: Duration::from_secs(60),
+        }
+    }
+}
+
+impl ConfigGrpcDataPlaneTelemetry {
+    fn read_from(
+        &mut self,
+        mut telemetry_section: LenientSection,
+        load_warnings: &mut Vec<DataPlaneConfigWarning>,
+    ) {
+        telemetry_section.read_into(
+            &mut self.extended_metrics,
+            "extended_metrics",
+            load_warnings,
+            parse_json_value,
+        );
+        telemetry_section.read_into(
+            &mut self.summary_interval,
+            "summary_interval",
+            load_warnings,
+            parse_duration_value,
+        );
+        telemetry_section.warn_unknown_keys(load_warnings);
+    }
+}
+
+/// An entry of `grpc.data_plane` that parsing ignored or replaced with its default, or that a
+/// check reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataPlaneConfigWarning {
+    /// The entry's dotted path, such as `grpc.data_plane.compression.mode`.
+    pub key_path: String,
+    pub config_problem: DataPlaneConfigProblem,
+}
+
+/// What is wrong with a [`DataPlaneConfigWarning`]'s entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DataPlaneConfigProblem {
+    /// This build does not know the key, so it ignores it.
+    UnknownKey,
+    /// The value has the wrong type or is not one the key takes, so the default applies.
+    InvalidValue { rejection_reason: String },
+    /// No extension of this build claims the `extensions` section, so it is ignored.
+    UnclaimedExtension,
+    /// A compression key overrides the build's default.
+    CompressionOverrideSet,
+}
+
+impl fmt::Display for DataPlaneConfigWarning {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let key_path = &self.key_path;
+        match &self.config_problem {
+            DataPlaneConfigProblem::UnknownKey => {
+                write!(formatter, "{key_path}: unknown key, ignored")
+            }
+            DataPlaneConfigProblem::InvalidValue { rejection_reason } => {
+                write!(
+                    formatter,
+                    "{key_path}: {rejection_reason}; the default applies"
+                )
+            }
+            DataPlaneConfigProblem::UnclaimedExtension => write!(
+                formatter,
+                "{key_path}: no extension of this build claims the section, ignored"
+            ),
+            DataPlaneConfigProblem::CompressionOverrideSet => write!(
+                formatter,
+                "{key_path}: set, so it overrides the build's compression default"
+            ),
+        }
+    }
+}
+
+/// One JSON object of `grpc.data_plane`, read key by key. The keys left at the end are unknown.
+struct LenientSection {
+    key_path: String,
+    remaining_entries: serde_json::Map<String, serde_json::Value>,
+}
+
+impl LenientSection {
+    /// Opens an object, or warns and returns `None` when the value is not one.
+    fn open_section(
+        key_path: String,
+        section_value: serde_json::Value,
+        load_warnings: &mut Vec<DataPlaneConfigWarning>,
+    ) -> Option<Self> {
+        match section_value {
+            serde_json::Value::Object(remaining_entries) => Some(Self {
+                key_path,
+                remaining_entries,
+            }),
+            other_value => {
+                load_warnings.push(DataPlaneConfigWarning {
+                    key_path,
+                    config_problem: DataPlaneConfigProblem::InvalidValue {
+                        rejection_reason: format!(
+                            "expected an object, found {}",
+                            json_type_name(&other_value)
+                        ),
+                    },
+                });
+                None
+            }
+        }
+    }
+
+    fn child_key_path(&self, key_name: &str) -> String {
+        format!("{}.{key_name}", self.key_path)
+    }
+
+    /// Removes `key_name` and parses its value; a bad value warns and gives `None`.
+    fn take_entry<T>(
+        &mut self,
+        key_name: &str,
+        load_warnings: &mut Vec<DataPlaneConfigWarning>,
+        parse_value: impl FnOnce(serde_json::Value) -> Result<T, String>,
+    ) -> Option<T> {
+        let entry_value = self.remaining_entries.remove(key_name)?;
+        match parse_value(entry_value) {
+            Ok(parsed_value) => Some(parsed_value),
+            Err(rejection_reason) => {
+                load_warnings.push(DataPlaneConfigWarning {
+                    key_path: self.child_key_path(key_name),
+                    config_problem: DataPlaneConfigProblem::InvalidValue { rejection_reason },
+                });
+                None
+            }
+        }
+    }
+
+    /// [`Self::take_entry`] for a key that is unset by default, where `null` also means unset.
+    fn take_optional<T>(
+        &mut self,
+        key_name: &str,
+        load_warnings: &mut Vec<DataPlaneConfigWarning>,
+        parse_value: impl FnOnce(serde_json::Value) -> Result<T, String>,
+    ) -> Option<T> {
+        if self
+            .remaining_entries
+            .get(key_name)
+            .is_some_and(serde_json::Value::is_null)
+        {
+            self.remaining_entries.remove(key_name);
+            return None;
+        }
+        self.take_entry(key_name, load_warnings, parse_value)
+    }
+
+    /// [`Self::take_entry`] into `config_field`, which keeps its value if the key is absent or bad.
+    fn read_into<T>(
+        &mut self,
+        config_field: &mut T,
+        key_name: &str,
+        load_warnings: &mut Vec<DataPlaneConfigWarning>,
+        parse_value: impl FnOnce(serde_json::Value) -> Result<T, String>,
+    ) {
+        if let Some(parsed_value) = self.take_entry(key_name, load_warnings, parse_value) {
+            *config_field = parsed_value;
+        }
+    }
+
+    fn take_section(
+        &mut self,
+        key_name: &str,
+        load_warnings: &mut Vec<DataPlaneConfigWarning>,
+    ) -> Option<Self> {
+        let section_value = self.remaining_entries.remove(key_name)?;
+        Self::open_section(self.child_key_path(key_name), section_value, load_warnings)
+    }
+
+    /// Warns once for each key that no read took.
+    fn warn_unknown_keys(self, load_warnings: &mut Vec<DataPlaneConfigWarning>) {
+        for unknown_key in self.remaining_entries.keys() {
+            load_warnings.push(DataPlaneConfigWarning {
+                key_path: format!("{}.{unknown_key}", self.key_path),
+                config_problem: DataPlaneConfigProblem::UnknownKey,
+            });
+        }
+    }
+}
+
+const fn json_type_name(json_value: &serde_json::Value) -> &'static str {
+    match json_value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
+}
+
+fn parse_json_value<T: DeserializeOwned>(json_value: serde_json::Value) -> Result<T, String> {
+    serde_json::from_value(json_value).map_err(|serde_error| serde_error.to_string())
+}
+
+/// An integer, written as a number or as a string with optional `_` separators.
+fn parse_integer_value<T>(json_value: serde_json::Value) -> Result<T, String>
+where
+    T: DeserializeOwned + FromStr,
+    <T as FromStr>::Err: fmt::Display,
+{
+    match json_value {
+        serde_json::Value::String(integer_text) => integer_text
+            .replace('_', "")
+            .parse()
+            .map_err(|parse_error| format!("invalid integer {integer_text:?}: {parse_error}")),
+        other_value => parse_json_value(other_value),
+    }
+}
+
+fn parse_integer_in_range<T>(
+    json_value: serde_json::Value,
+    accepted_range: RangeInclusive<T>,
+) -> Result<T, String>
+where
+    T: DeserializeOwned + FromStr + PartialOrd + fmt::Display,
+    <T as FromStr>::Err: fmt::Display,
+{
+    let parsed_value = parse_integer_value(json_value)?;
+    if accepted_range.contains(&parsed_value) {
+        Ok(parsed_value)
+    } else {
+        Err(format!(
+            "{parsed_value} is outside {}..={}",
+            accepted_range.start(),
+            accepted_range.end()
+        ))
+    }
+}
+
+/// A byte size, written as a number of bytes or as a string such as `"64KiB"`.
+fn parse_byte_size_value(json_value: serde_json::Value) -> Result<usize, String> {
+    let byte_size: ByteSize = parse_json_value(json_value)?;
+    usize::try_from(byte_size.as_u64()).map_err(|conversion_error| conversion_error.to_string())
+}
+
+fn parse_duration_value(json_value: serde_json::Value) -> Result<Duration, String> {
+    match json_value {
+        serde_json::Value::String(duration_text) => {
+            humantime_serde::re::humantime::parse_duration(&duration_text)
+                .map_err(|parse_error| format!("invalid duration {duration_text:?}: {parse_error}"))
+        }
+        other_value => Err(format!(
+            "expected a duration string such as \"1ms\", found {}",
+            json_type_name(&other_value)
+        )),
+    }
+}
+
+fn parse_taskset_value(json_value: serde_json::Value) -> Result<Vec<usize>, String> {
+    match json_value {
+        serde_json::Value::String(taskset_text) => parse_taskset(&taskset_text),
+        other_value => Err(format!(
+            "expected a taskset string such as \"0-3\", found {}",
+            json_type_name(&other_value)
+        )),
+    }
+}
+
+fn taskset_config_value(taskset_cpus: Option<&[usize]>) -> String {
+    taskset_cpus.map_or_else(
+        || "none".to_owned(),
+        |cpu_indexes| {
+            cpu_indexes
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        },
+    )
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigPrometheus {
@@ -1063,53 +1814,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown field"), "{error}");
-    }
-
-    /// A missing `filter_apply_interval` is 5 s, and humantime values such as `0s` parse.
-    #[test]
-    fn filter_apply_interval_defaults_to_5s_and_parses_0s() {
-        let filter_apply_interval = |config_json: &str| {
-            serde_json::from_str::<ConfigGrpc>(config_json)
-                .expect("valid grpc config")
-                .filter_apply_interval
-        };
-        assert_eq!(filter_apply_interval(r#"{}"#), Duration::from_secs(5));
-        assert_eq!(
-            filter_apply_interval(r#"{"filter_apply_interval": "0s"}"#),
-            Duration::ZERO
-        );
-        assert_eq!(
-            filter_apply_interval(r#"{"filter_apply_interval": "250ms"}"#),
-            Duration::from_millis(250)
-        );
-    }
-
-    /// Missing `route_index_interval` and `route_index_budget` keys are 1 ms and 100 µs, and
-    /// humantime values such as `0s`, `2ms` and `250us` parse.
-    #[test]
-    fn route_index_settings_default_to_1ms_and_100us_and_parse() {
-        let route_index_settings = |config_json: &str| {
-            let config_grpc =
-                serde_json::from_str::<ConfigGrpc>(config_json).expect("valid grpc config");
-            (
-                config_grpc.route_index_interval,
-                config_grpc.route_index_budget,
-            )
-        };
-        assert_eq!(
-            route_index_settings(r#"{}"#),
-            (Duration::from_millis(1), Duration::from_micros(100))
-        );
-        assert_eq!(
-            route_index_settings(r#"{"route_index_interval": "0s", "route_index_budget": "0s"}"#),
-            (Duration::ZERO, Duration::ZERO)
-        );
-        assert_eq!(
-            route_index_settings(
-                r#"{"route_index_interval": "2ms", "route_index_budget": "250us"}"#
-            ),
-            (Duration::from_millis(2), Duration::from_micros(250))
-        );
     }
 
     #[test]

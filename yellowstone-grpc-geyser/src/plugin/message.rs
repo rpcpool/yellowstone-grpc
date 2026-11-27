@@ -1,5 +1,17 @@
+#![deny(clippy::disallowed_types, clippy::disallowed_methods)]
+#[allow(clippy::disallowed_types, reason = "OnceLock caches of a message")]
 use {
     super::convert_to,
+    crate::{
+        body::{
+            block_shape::{BlockSelectionTotals, BlockShapeTable},
+            encode_account_body, encode_account_body_with_clock, encode_block_footer_bodies,
+            encode_block_meta_body, encode_entry_body, encode_entry_update_parent_body,
+            encode_slot_body, BlockFooterBodies, PublishedBody, SharedUpdateBody,
+            TransactionBodies,
+        },
+        extension::seams::{AccountDataSource, AccountFields, TransactionBodyWriter},
+    },
     agave_geyser_plugin_interface::{
         block_footer::VersionedBlockFooter,
         geyser_plugin_interface::{
@@ -10,7 +22,6 @@ use {
             ReplicaTransactionInfoV4, SlotStatus as GeyserSlotStatus,
         },
     },
-    bytes::Bytes,
     foldhash::{HashSet as FoldHashSet, HashSetExt},
     prost_types::Timestamp,
     solana_clock::{BankId, Slot},
@@ -18,11 +29,13 @@ use {
     solana_pubkey::Pubkey,
     solana_signature::Signature,
     std::{
+        fmt,
         net::SocketAddr,
-        ops::{Deref, DerefMut},
+        ops::Deref,
         sync::{Arc, OnceLock},
         time::SystemTime,
     },
+    yellowstone_grpc_concurrency::counted_message::{CountedMessageOwner, CountedMessageRef},
     yellowstone_grpc_proto::{
         geyser::{
             CommitmentLevel as CommitmentLevelProto, SlotStatus as SlotStatusProto,
@@ -34,6 +47,64 @@ use {
 };
 
 type FromUpdateOneofResult<T> = Result<T, &'static str>;
+
+/// The header of every captured message: the count of its queue entries, which keeps the
+/// message alive while entries of it are queued.
+#[derive(Default)]
+pub struct CapturedMessageHeader {
+    entry_references: CountedMessageRef,
+}
+
+impl CapturedMessageHeader {
+    pub const fn entry_references(&self) -> &CountedMessageRef {
+        &self.entry_references
+    }
+}
+
+/// A clone is a new message, so it starts with no entries.
+impl Clone for CapturedMessageHeader {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+/// The entry count is bookkeeping, so it never makes two messages differ.
+impl PartialEq for CapturedMessageHeader {
+    fn eq(&self, _other_header: &Self) -> bool {
+        true
+    }
+}
+
+impl fmt::Debug for CapturedMessageHeader {
+    fn fmt(&self, debug_formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.entry_references.fmt(debug_formatter)
+    }
+}
+
+macro_rules! counted_message_owners {
+    ($($message_type:ty),+ $(,)?) => {$(
+        // SAFETY: entries are added only through an `Arc` of the message, and the count is a
+        // field of the message's own header.
+        unsafe impl CountedMessageOwner for $message_type {
+            fn entry_references(&self) -> &CountedMessageRef {
+                self.captured_header.entry_references()
+            }
+        }
+    )+};
+}
+
+counted_message_owners!(
+    MessageSlot,
+    MessageAccount,
+    MessageTransaction,
+    MessageDeshredTransaction,
+    MessageEntry,
+    MessageBlockFooter,
+    MessageBlockMeta,
+    MessageBlock,
+    MessageEntryUpdateParent,
+    MessageDeshredUpdateParent,
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CommitmentLevel {
@@ -159,62 +230,107 @@ pub struct MessageSlot {
     pub created_at: Timestamp,
     // FIRST_SHRED_RECEIVED and COMPLETED does not have any bank id.
     pub bank_id: Option<BankId>,
+    pub captured_header: CapturedMessageHeader,
+    /// The update's bytes after `filters`, built from the fields above.
+    slot_body: SharedUpdateBody,
 }
 
 impl MessageSlot {
+    pub fn new(
+        slot: Slot,
+        parent: Option<Slot>,
+        status: SlotStatus,
+        dead_error: Option<String>,
+        bank_id: Option<BankId>,
+        created_at: Timestamp,
+    ) -> Self {
+        let slot_body = encode_slot_body(
+            slot,
+            parent,
+            status,
+            dead_error.as_deref(),
+            bank_id,
+            created_at,
+        );
+        Self {
+            slot,
+            parent,
+            status,
+            dead_error,
+            created_at,
+            bank_id,
+            captured_header: CapturedMessageHeader::default(),
+            slot_body,
+        }
+    }
+
     pub fn from_geyser(
         slot: Slot,
         parent: Option<Slot>,
         status: &GeyserSlotStatus,
         bank_id: Option<BankId>,
     ) -> Self {
-        Self {
-            slot,
-            parent,
-            status: status.into(),
-            dead_error: if let GeyserSlotStatus::Dead(error) = status {
-                Some(error.clone())
-            } else {
-                None
-            },
-            created_at: Timestamp::from(SystemTime::now()),
-            bank_id,
-        }
+        let dead_error = if let GeyserSlotStatus::Dead(error) = status {
+            Some(error.clone())
+        } else {
+            None
+        };
+        let created_at = Timestamp::from(SystemTime::now());
+        Self::new(slot, parent, status.into(), dead_error, bank_id, created_at)
+    }
+
+    pub const fn slot_body(&self) -> &SharedUpdateBody {
+        &self.slot_body
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// The fields filters read of one account write. Its data lives in its message's body.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MessageAccountInfo {
     pub pubkey: Pubkey,
     pub lamports: u64,
     pub owner: Pubkey,
     pub executable: bool,
     pub rent_epoch: u64,
-    pub data: Bytes,
     pub write_version: u64,
     pub txn_signature: Option<Signature>,
-    pub pre_encoded: OnceLock<Vec<u8>>,
 }
 
 impl MessageAccountInfo {
     pub fn from_geyser(info: &ReplicaAccountInfoV3<'_>) -> Self {
-        let shared = info.data.to_vec();
-        let data = Bytes::from(shared);
         Self {
             pubkey: Pubkey::try_from(info.pubkey).expect("valid Pubkey"),
             lamports: info.lamports,
             owner: Pubkey::try_from(info.owner).expect("valid Pubkey"),
             executable: info.executable,
             rent_epoch: info.rent_epoch,
-            data,
             write_version: info.write_version,
             txn_signature: info.txn.map(|txn| *txn.signature()),
-            pre_encoded: OnceLock::new(),
         }
     }
 
-    pub fn get_pre_encoded(&self) -> Option<&Vec<u8>> {
-        self.pre_encoded.get()
+    pub const fn from_account_fields(account_fields: &AccountFields) -> Self {
+        Self {
+            pubkey: account_fields.account_pubkey,
+            lamports: account_fields.account_lamports,
+            owner: account_fields.owner_pubkey,
+            executable: account_fields.is_executable,
+            rent_epoch: account_fields.rent_epoch,
+            write_version: account_fields.write_version,
+            txn_signature: account_fields.transaction_signature,
+        }
+    }
+
+    pub const fn account_fields(&self) -> AccountFields {
+        AccountFields {
+            account_pubkey: self.pubkey,
+            account_lamports: self.lamports,
+            owner_pubkey: self.owner,
+            is_executable: self.executable,
+            rent_epoch: self.rent_epoch,
+            write_version: self.write_version,
+            transaction_signature: self.txn_signature,
+        }
     }
 }
 
@@ -226,9 +342,76 @@ pub struct MessageAccount {
     // startup account update has no bank id.
     pub bank_id: Option<BankId>,
     pub created_at: Timestamp,
+    pub captured_header: CapturedMessageHeader,
+    /// The update's bytes after `filters`, which hold the account's only copy of its data.
+    account_body: SharedUpdateBody,
+}
+
+/// Filters read the account's fields through its message.
+impl Deref for MessageAccount {
+    type Target = MessageAccountInfo;
+
+    fn deref(&self) -> &Self::Target {
+        &self.account
+    }
 }
 
 impl MessageAccount {
+    pub fn new(
+        account: MessageAccountInfo,
+        account_data: impl AccountDataSource,
+        slot: Slot,
+        is_startup: bool,
+        bank_id: Option<BankId>,
+        created_at: Timestamp,
+    ) -> Self {
+        let account_body = encode_account_body(
+            &account.account_fields(),
+            account_data,
+            slot,
+            is_startup,
+            bank_id,
+            created_at,
+        );
+        Self {
+            account,
+            slot,
+            is_startup,
+            bank_id,
+            created_at,
+            captured_header: CapturedMessageHeader::default(),
+            account_body,
+        }
+    }
+
+    /// Builds an account write's update as capture does: it stamps `created_at` after it copies
+    /// the data into the body.
+    pub fn capture(
+        account: MessageAccountInfo,
+        account_data: impl AccountDataSource,
+        slot: Slot,
+        is_startup: bool,
+        bank_id: Option<BankId>,
+    ) -> Self {
+        let (account_body, created_at) = encode_account_body_with_clock(
+            &account.account_fields(),
+            account_data,
+            slot,
+            is_startup,
+            bank_id,
+            || Timestamp::from(SystemTime::now()),
+        );
+        Self {
+            account,
+            slot,
+            is_startup,
+            bank_id,
+            created_at,
+            captured_header: CapturedMessageHeader::default(),
+            account_body,
+        }
+    }
+
     pub fn from_geyser(
         info: &ReplicaAccountInfoV3<'_>,
         slot: Slot,
@@ -241,13 +424,19 @@ impl MessageAccount {
                 "startup account update should have no bank id"
             );
         }
-        Self {
-            account: MessageAccountInfo::from_geyser(info),
-            slot,
-            is_startup,
-            bank_id,
-            created_at: Timestamp::from(SystemTime::now()),
-        }
+        let account = MessageAccountInfo::from_geyser(info);
+        Self::capture(account, info.data, slot, is_startup, bank_id)
+    }
+
+    /// The account's data: a view into the body.
+    pub fn data(&self) -> &[u8] {
+        self.account_body
+            .account_data()
+            .expect("an account body holds its data")
+    }
+
+    pub const fn account_body(&self) -> &SharedUpdateBody {
+        &self.account_body
     }
 }
 
@@ -259,17 +448,19 @@ pub struct MessageTransactionInfo {
     pub meta: confirmed_block::TransactionStatusMeta,
     pub index: usize,
     pub account_keys: FoldHashSet<Pubkey>,
-    pub pre_encoded: OnceLock<Vec<u8>>,
     /// Per-tx cache of token-balance owners under `TokenAccountsMode::All`.
     /// Lazily built on first read; shared across all filters evaluating
     /// against this tx so the pre/post scan runs at most once per tx.
+    #[allow(clippy::disallowed_types, reason = "lazy token owner cache")]
     pub token_owners_all: OnceLock<FoldHashSet<Pubkey>>,
     /// Per-tx cache of token-balance owners under
     /// `TokenAccountsMode::BalanceChanged`. Same laziness as above.
+    #[allow(clippy::disallowed_types, reason = "lazy token owner cache")]
     pub token_owners_changed: OnceLock<FoldHashSet<Pubkey>>,
 }
 
 impl MessageTransactionInfo {
+    #[allow(clippy::disallowed_types, reason = "creates the lazy caches")]
     pub fn from_geyser(info: &ReplicaTransactionInfoV4<'_>) -> Self {
         let account_keys = info
             .transaction
@@ -298,7 +489,6 @@ impl MessageTransactionInfo {
             meta: convert_to::create_transaction_meta(info.transaction_status_meta),
             index: info.index,
             account_keys,
-            pre_encoded: OnceLock::new(),
             token_owners_all: OnceLock::new(),
             token_owners_changed: OnceLock::new(),
         }
@@ -334,11 +524,6 @@ impl MessageTransactionInfo {
         self.account_keys = account_keys;
         Ok(())
     }
-
-    #[inline]
-    pub fn get_pre_encoded(&self) -> Option<&Vec<u8>> {
-        self.pre_encoded.get()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -347,15 +532,66 @@ pub struct MessageTransaction {
     pub slot: u64,
     pub created_at: Timestamp,
     pub bank_id: BankId,
+    pub captured_header: CapturedMessageHeader,
+    /// The update bodies, each built by the first writer that needs it.
+    transaction_bodies: TransactionBodies,
 }
 
 impl MessageTransaction {
-    pub fn from_geyser(info: &ReplicaTransactionInfoV4<'_>, slot: Slot, bank_id: BankId) -> Self {
+    pub fn new(
+        transaction: MessageTransactionInfo,
+        slot: Slot,
+        bank_id: BankId,
+        created_at: Timestamp,
+    ) -> Self {
         Self {
-            transaction: MessageTransactionInfo::from_geyser(info),
+            transaction,
             slot,
-            created_at: Timestamp::from(SystemTime::now()),
+            created_at,
             bank_id,
+            captured_header: CapturedMessageHeader::default(),
+            transaction_bodies: TransactionBodies::default(),
+        }
+    }
+
+    pub fn from_geyser(info: &ReplicaTransactionInfoV4<'_>, slot: Slot, bank_id: BankId) -> Self {
+        let transaction = MessageTransactionInfo::from_geyser(info);
+        Self::new(
+            transaction,
+            slot,
+            bank_id,
+            Timestamp::from(SystemTime::now()),
+        )
+    }
+
+    pub const fn transaction_bodies(&self) -> &TransactionBodies {
+        &self.transaction_bodies
+    }
+
+    /// The Transaction update body, built by this call when its cell is free; `None` when
+    /// another writer holds the claim or it failed.
+    pub fn transaction_update_body<Writer: TransactionBodyWriter>(
+        &self,
+        body_writer: &Writer,
+    ) -> Option<PublishedBody> {
+        self.transaction_bodies
+            .transaction_update_body(body_writer, self)
+    }
+
+    /// The TransactionStatus update body, built by this call when its cell is free.
+    pub fn transaction_status_body(&self) -> Option<PublishedBody> {
+        self.transaction_bodies.transaction_status_body(self)
+    }
+
+    /// Makes the `TransactionInfo` length known, as block take-in needs: builds the Transaction
+    /// body when its cell is free, and otherwise measures the bytes another writer is building.
+    pub fn ensure_transaction_info<Writer: TransactionBodyWriter>(&self, body_writer: &Writer) {
+        if self.transaction_update_body(body_writer).is_none()
+            && self.transaction_bodies.built_info_len().is_none()
+        {
+            let transaction_info_len = body_writer.transaction_info_len(&self.transaction);
+            self.transaction_bodies
+                .record_built_info_len(transaction_info_len);
         }
     }
 }
@@ -440,6 +676,7 @@ pub struct MessageDeshredTransaction {
     pub transaction: MessageDeshredTransactionInfo,
     pub slot: u64,
     pub created_at: Timestamp,
+    pub captured_header: CapturedMessageHeader,
 }
 
 impl MessageDeshredTransaction {
@@ -459,11 +696,12 @@ impl MessageDeshredTransaction {
             transaction: info,
             slot,
             created_at: Timestamp::from(SystemTime::now()),
+            captured_header: CapturedMessageHeader::default(),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessageEntry {
     pub slot: u64,
     pub index: usize,
@@ -473,23 +711,40 @@ pub struct MessageEntry {
     pub starting_transaction_index: u64,
     pub bank_id: BankId,
     pub created_at: Timestamp,
+    pub captured_header: CapturedMessageHeader,
+    /// The update's bytes after `filters`, built from the fields above.
+    entry_body: SharedUpdateBody,
 }
 
 impl MessageEntry {
     pub fn from_geyser(info: &ReplicaEntryInfoV2, bank_id: BankId) -> Self {
+        Self::from_entry_info(info, bank_id, Timestamp::from(SystemTime::now()))
+    }
+
+    pub fn from_entry_info(
+        entry_info: &ReplicaEntryInfoV2,
+        bank_id: BankId,
+        created_at: Timestamp,
+    ) -> Self {
         Self {
-            slot: info.slot,
-            index: info.index,
-            num_hashes: info.num_hashes,
-            hash: Hash::new_from_array(<[u8; HASH_BYTES]>::try_from(info.hash).unwrap()),
-            executed_transaction_count: info.executed_transaction_count,
-            starting_transaction_index: info
+            slot: entry_info.slot,
+            index: entry_info.index,
+            num_hashes: entry_info.num_hashes,
+            hash: Hash::new_from_array(<[u8; HASH_BYTES]>::try_from(entry_info.hash).unwrap()),
+            executed_transaction_count: entry_info.executed_transaction_count,
+            starting_transaction_index: entry_info
                 .starting_transaction_index
                 .try_into()
                 .expect("failed convert usize to u64"),
-            created_at: Timestamp::from(SystemTime::now()),
+            created_at,
             bank_id,
+            captured_header: CapturedMessageHeader::default(),
+            entry_body: encode_entry_body(entry_info, bank_id, created_at),
         }
+    }
+
+    pub const fn entry_body(&self) -> &SharedUpdateBody {
+        &self.entry_body
     }
 }
 
@@ -497,6 +752,9 @@ impl MessageEntry {
 pub struct MessageBlockFooter {
     pub block_footer: SubscribeUpdateBlockFooter,
     pub created_at: Timestamp,
+    pub captured_header: CapturedMessageHeader,
+    /// The update's bytes after `filters`, without and with the certificates.
+    footer_bodies: BlockFooterBodies,
 }
 
 impl Deref for MessageBlockFooter {
@@ -508,11 +766,25 @@ impl Deref for MessageBlockFooter {
 }
 
 impl MessageBlockFooter {
+    pub fn new(block_footer: SubscribeUpdateBlockFooter, created_at: Timestamp) -> Self {
+        let footer_bodies = encode_block_footer_bodies(&block_footer, created_at);
+        Self {
+            block_footer,
+            created_at,
+            captured_header: CapturedMessageHeader::default(),
+            footer_bodies,
+        }
+    }
+
+    pub const fn footer_bodies(&self) -> &BlockFooterBodies {
+        &self.footer_bodies
+    }
+
     pub fn from_geyser(info: &ReplicaBlockFooterInfo<'_>, bank_id: BankId) -> Self {
         let VersionedBlockFooter::V1(footer) = info.block_footer;
 
-        Self {
-            block_footer: SubscribeUpdateBlockFooter {
+        Self::new(
+            SubscribeUpdateBlockFooter {
                 slot: info.slot,
                 bank_id,
                 bank_hash: footer.bank_hash.to_bytes().to_vec(),
@@ -531,8 +803,8 @@ impl MessageBlockFooter {
                     .as_ref()
                     .map(convert_to::create_notar_reward_cert),
             },
-            created_at: Timestamp::from(SystemTime::now()),
-        }
+            Timestamp::from(SystemTime::now()),
+        )
     }
 }
 
@@ -540,6 +812,9 @@ impl MessageBlockFooter {
 pub struct MessageBlockMeta {
     pub block_meta: SubscribeUpdateBlockMeta,
     pub created_at: Timestamp,
+    pub captured_header: CapturedMessageHeader,
+    /// The update's bytes after `filters`, built from the fields above.
+    block_meta_body: SharedUpdateBody,
 }
 
 impl Deref for MessageBlockMeta {
@@ -550,16 +825,10 @@ impl Deref for MessageBlockMeta {
     }
 }
 
-impl DerefMut for MessageBlockMeta {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.block_meta
-    }
-}
-
 impl MessageBlockMeta {
     pub fn from_geyser(info: &ReplicaBlockInfoV5<'_>, bank_id: BankId) -> Self {
-        Self {
-            block_meta: SubscribeUpdateBlockMeta {
+        Self::from_update_oneof(
+            SubscribeUpdateBlockMeta {
                 parent_slot: info.parent_slot,
                 slot: info.slot,
                 parent_blockhash: info.parent_blockhash.to_string(),
@@ -574,18 +843,22 @@ impl MessageBlockMeta {
                 entries_count: info.entry_count,
                 bank_id,
             },
-            created_at: Timestamp::from(SystemTime::now()),
-        }
+            Timestamp::from(SystemTime::now()),
+        )
     }
 
-    pub const fn from_update_oneof(
-        block_meta: SubscribeUpdateBlockMeta,
-        created_at: Timestamp,
-    ) -> Self {
+    pub fn from_update_oneof(block_meta: SubscribeUpdateBlockMeta, created_at: Timestamp) -> Self {
+        let block_meta_body = encode_block_meta_body(&block_meta, created_at);
         Self {
             block_meta,
             created_at,
+            captured_header: CapturedMessageHeader::default(),
+            block_meta_body,
         }
+    }
+
+    pub const fn block_meta_body(&self) -> &SharedUpdateBody {
+        &self.block_meta_body
     }
 }
 
@@ -597,6 +870,9 @@ pub struct MessageBlock {
     pub accounts: Vec<Arc<MessageAccount>>,
     pub entries: Vec<Arc<MessageEntry>>,
     pub created_at: Timestamp,
+    pub captured_header: CapturedMessageHeader,
+    /// The Block bodies of the block's shapes, and the totals of its whole item lists.
+    pub block_shapes: BlockShapeTable,
 }
 
 impl MessageBlock {
@@ -606,13 +882,43 @@ impl MessageBlock {
         accounts: Vec<Arc<MessageAccount>>,
         entries: Vec<Arc<MessageEntry>>,
     ) -> Self {
+        let created_at = Timestamp::from(SystemTime::now());
+        Self::new_created_at(meta, transactions, accounts, entries, created_at)
+    }
+
+    /// The block, sealed at `created_at`. Its whole totals read the `TransactionInfo` lengths
+    /// that take-in recorded, as the reference matcher's weights do.
+    pub fn new_created_at(
+        meta: Arc<MessageBlockMeta>,
+        transactions: Vec<Arc<MessageTransaction>>,
+        accounts: Vec<Arc<MessageAccount>>,
+        entries: Vec<Arc<MessageEntry>>,
+        created_at: Timestamp,
+    ) -> Self {
+        let whole_block_totals = BlockSelectionTotals {
+            transaction_count: transactions.len(),
+            transaction_info_bytes: transactions
+                .iter()
+                .map(|message_transaction| {
+                    let transaction_bodies = message_transaction.transaction_bodies();
+                    transaction_bodies.built_info_len().unwrap_or(0)
+                })
+                .sum(),
+            account_count: accounts.len(),
+            account_data_bytes: accounts
+                .iter()
+                .map(|message_account| message_account.data().len())
+                .sum(),
+        };
         Self {
             meta,
             transactions,
             updated_account_count: accounts.len() as u64,
             accounts,
             entries,
-            created_at: Timestamp::from(SystemTime::now()),
+            created_at,
+            captured_header: CapturedMessageHeader::default(),
+            block_shapes: BlockShapeTable::new(whole_block_totals),
         }
     }
 }
@@ -699,19 +1005,36 @@ pub enum ContactInfoMessage {
 pub struct MessageEntryUpdateParent {
     pub update_parent: SubscribeUpdateEntryUpdateParent,
     pub created_at: Timestamp,
+    pub captured_header: CapturedMessageHeader,
+    /// The update's bytes after `filters`, built from the fields above.
+    update_parent_body: SharedUpdateBody,
 }
 
 impl MessageEntryUpdateParent {
-    pub fn from_geyser(info: &ReplicaEntryUpdateParentInfo<'_>) -> Self {
+    pub fn new(update_parent: SubscribeUpdateEntryUpdateParent, created_at: Timestamp) -> Self {
+        let update_parent_body = encode_entry_update_parent_body(&update_parent, created_at);
         Self {
-            update_parent: SubscribeUpdateEntryUpdateParent {
+            update_parent,
+            created_at,
+            captured_header: CapturedMessageHeader::default(),
+            update_parent_body,
+        }
+    }
+
+    pub const fn update_parent_body(&self) -> &SharedUpdateBody {
+        &self.update_parent_body
+    }
+
+    pub fn from_geyser(info: &ReplicaEntryUpdateParentInfo<'_>) -> Self {
+        Self::new(
+            SubscribeUpdateEntryUpdateParent {
                 slot: info.slot,
                 cleared_bank_id: info.cleared_bank_id,
                 parent_slot: info.parent_slot,
                 parent_block_id: info.parent_block_id.as_ref().to_vec(),
             },
-            created_at: Timestamp::from(SystemTime::now()),
-        }
+            Timestamp::from(SystemTime::now()),
+        )
     }
 }
 
@@ -719,6 +1042,7 @@ impl MessageEntryUpdateParent {
 pub struct MessageDeshredUpdateParent {
     pub update_parent: SubscribeUpdateDeshredUpdateParent,
     pub created_at: Timestamp,
+    pub captured_header: CapturedMessageHeader,
 }
 
 impl MessageDeshredUpdateParent {
@@ -731,6 +1055,7 @@ impl MessageDeshredUpdateParent {
                 parent_block_id: info.parent_block_id.as_ref().to_vec(),
             },
             created_at: Timestamp::from(SystemTime::now()),
+            captured_header: CapturedMessageHeader::default(),
         }
     }
 }

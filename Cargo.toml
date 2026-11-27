@@ -4,6 +4,7 @@ members = [
     "examples/rust",
     "yellowstone-grpc-client",
     "yellowstone-grpc-client-nodejs/napi",
+    "yellowstone-grpc-concurrency",
     "yellowstone-grpc-e2e-macros",
     "yellowstone-grpc-geyser",
     "yellowstone-grpc-proto",
@@ -35,10 +36,12 @@ chrono = "0.4.45"
 clap = "4.5.42"
 criterion = "0.8.0"
 crossbeam-channel = "0.5.17"
+crossbeam-queue = "0.3.12"
 dotenvy = "0.15.0"
 dashmap = "6.1.0"
 env_logger = "0.11.3"
 fastrand = "2.0"
+flate2 = "1.1.11"
 futures = "0.3.24"
 futures-channel = "0.3.24"
 futures-util = "0.3.24"
@@ -56,6 +59,7 @@ hyper-util = "0.1.7"
 indicatif = "0.18.0"
 inventory = "0.3.0"
 lazy_static = "1.4.0"
+libc = "0.2.191"
 local-ip-address = "0.6.1"
 log = "0.4.17"
 maplit = "1.0.2"
@@ -102,6 +106,8 @@ uuid = "1"
 vergen = "9.0.6"
 wincode = "0.6.1"
 notify = "8.2.0"
+zlib-rs = { version = "0.6.8", default-features = false }
+zstd = "0.14.3"
 
 # Agave SDK (crates moved out of the monorepo)
 agave-geyser-plugin-interface = "5.0.0"
@@ -138,6 +144,7 @@ spl-token-2022-interface = "2.1.0"
 # Yellowstone
 yellowstone-block-machine = { version = "0.12.0", default-features = false }
 yellowstone-grpc-client = { path = "yellowstone-grpc-client", version = "17.0.0" }
+yellowstone-grpc-concurrency = { path = "yellowstone-grpc-concurrency", version = "0.1.0" }
 yellowstone-grpc-geyser = { path = "yellowstone-grpc-geyser", version = "17.0.2" }
 yellowstone-grpc-proto = { path = "yellowstone-grpc-proto", version = "14.0.1", default-features = false }
 yellowstone-grpc-e2e-macros = { path = "yellowstone-grpc-e2e-macros", version = "0.1.0" }
@@ -152,6 +159,9 @@ clone_on_ref_ptr = "deny"
 missing_const_for_fn = "deny"
 trivially_copy_pass_by_ref = "deny"
 collapsible_match = "allow"
+# Only the geyser crate configures them: its data-path modules deny them.
+disallowed_methods = "allow"
+disallowed_types = "allow"
 
 [profile.release]
 lto = true

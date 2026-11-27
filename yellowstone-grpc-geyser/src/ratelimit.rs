@@ -157,14 +157,14 @@ impl MethodRatelimiter {
             return Ok(request);
         }
         let ratelimit = window_key.ratelimit;
+        // A limit of 0 admits no call, so it keeps no window state.
+        if ratelimit == 0 {
+            return Err(deny_rate_limited_call(
+                &subscription_info.subscription_id,
+                request.uri().path(),
+            ));
+        }
 
-        assert!(
-            ratelimit > 0,
-            "ratelimit must be positive, got {} for subscriber {} and method {}",
-            ratelimit,
-            subscription_info.subscription_id,
-            request.uri().path(),
-        );
         let mut state = self
             .shared
             .active_windows_map
@@ -180,24 +180,20 @@ impl MethodRatelimiter {
         let decision = state.limiter.check_at(now);
         state.last_seen = now;
 
-        decision
-            .allowed
-            .then_some(())
-            .ok_or_else(|| tonic::Status::resource_exhausted("rate limit exceeded"))
-            .inspect_err(|_| {
-                log::warn!(
-                    "rate limit exceeded for subscriber {} and method {}",
-                    subscription_info.subscription_id,
-                    request.uri().path(),
-                );
-                crate::metrics::incr_method_ratelimited_count(
-                    &subscription_info.subscription_id,
-                    request.uri().path(),
-                );
-            })?;
+        decision.allowed.then_some(()).ok_or_else(|| {
+            deny_rate_limited_call(&subscription_info.subscription_id, request.uri().path())
+        })?;
 
         Ok(request)
     }
+}
+
+/// Logs and counts a denied call and returns its status. A limit of 0 denies as an exhausted
+/// limit does.
+fn deny_rate_limited_call(subscription_id: &str, method_path: &str) -> tonic::Status {
+    log::warn!("rate limit exceeded for subscriber {subscription_id} and method {method_path}");
+    crate::metrics::incr_method_ratelimited_count(subscription_id, method_path);
+    tonic::Status::resource_exhausted("rate limit exceeded")
 }
 
 impl Default for MethodRatelimiter {

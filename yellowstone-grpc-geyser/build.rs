@@ -31,7 +31,7 @@ fn main() -> anyhow::Result<()> {
         get_pkg_version(&lockfile, "yellowstone-grpc-proto")
     );
 
-    // build tonic server with custom FilteredUpdate output type
+    // build tonic server with custom SubscribeQueueEntry output type
     let geyser_service = Service::builder()
         .name("Geyser")
         .package("geyser")
@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
                 .name("subscribe")
                 .route_name("Subscribe")
                 .input_type("yellowstone_grpc_proto::geyser::SubscribeRequest")
-                .output_type("crate::plugin::filter::message::FilteredUpdate")
+                .output_type("crate::subscribe::entry::SubscribeQueueEntry")
                 .codec_path("tonic_prost::ProstCodec")
                 .client_streaming()
                 .server_streaming()

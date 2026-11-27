@@ -126,7 +126,12 @@ where
 pub mod grpc {
     use {
         super::ContactInfoState,
-        crate::{grpc::SubscriptionOwnedPermit, metrics, plugin::convert_to},
+        crate::{
+            grpc::SubscriptionOwnedPermit,
+            metrics,
+            plugin::convert_to,
+            telemetry::stream_counters::{StreamCounters, SUBSCRIBER_COUNTS},
+        },
         futures::{
             sink::{Sink, SinkExt},
             stream::StreamExt as _,
@@ -151,6 +156,8 @@ pub mod grpc {
         disconnect_reason: &'static str,
         cancellation_token: CancellationToken,
         _permit: Option<SubscriptionOwnedPermit>,
+        /// The stream's sent updates; a gossip stream takes no queue size samples.
+        stream_counters: Option<Arc<StreamCounters>>,
     }
 
     impl ContactInfoClientSession {
@@ -160,18 +167,31 @@ pub mod grpc {
             cancellation_token: CancellationToken,
             permit: Option<SubscriptionOwnedPermit>,
         ) -> Self {
+            let subscriber_id = subscriber_id.unwrap_or_default();
+            let stream_counters = SUBSCRIBER_COUNTS.open_stream(&subscriber_id, None);
             Self {
                 id,
-                subscriber_id: subscriber_id.unwrap_or_default(),
+                subscriber_id,
                 disconnect_reason: "unknown",
                 cancellation_token,
                 _permit: permit,
+                stream_counters: Some(stream_counters),
+            }
+        }
+
+        /// Counts one update sent to the client.
+        fn count_sent_update(&self) {
+            if let Some(stream_counters) = &self.stream_counters {
+                stream_counters.add_sent_updates(1);
             }
         }
     }
 
     impl Drop for ContactInfoClientSession {
         fn drop(&mut self) {
+            if let Some(stream_counters) = self.stream_counters.take() {
+                SUBSCRIBER_COUNTS.close_stream(&self.subscriber_id, stream_counters);
+            }
             metrics::incr_client_disconnect(&self.subscriber_id, self.disconnect_reason);
             self.cancellation_token.cancel();
         }
@@ -183,6 +203,10 @@ pub mod grpc {
     /// so retrying forever would livelock instead of surfacing the problem.
     const MAX_RESNAPSHOT_ATTEMPTS: usize = 3;
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one gossip session's parts, the delivery runtime among them"
+    )]
     pub fn spawn_subscriber(
         id: usize,
         subscriber_id: Option<String>,
@@ -191,13 +215,14 @@ pub mod grpc {
         state: Arc<ContactInfoState>,
         cancellation_token: CancellationToken,
         task_tracker: TaskTracker,
+        delivery_runtime: &tokio::runtime::Handle,
     ) -> ReceiverStream<GossipItem> {
         let (stream_tx, stream_rx) = mpsc::channel(channel_capacity);
 
         let ping_stream_tx = stream_tx.clone();
         let ping_cancellation_token = cancellation_token.clone();
         let ping_client_cancel = cancellation_token.clone();
-        task_tracker.spawn(async move {
+        let gossip_ping_task = async move {
             let mut interval = tokio::time::interval(PING_INTERVAL);
             loop {
                 tokio::select! {
@@ -215,17 +240,21 @@ pub mod grpc {
                 }
             }
             info!("contact info client #{id}: ping task exiting");
-        });
+        };
+        task_tracker.spawn_on(gossip_ping_task, delivery_runtime);
 
         let session =
             ContactInfoClientSession::new(id, subscriber_id, cancellation_token.clone(), permit);
 
-        task_tracker.spawn(contact_info_client_loop(
-            session,
-            PollSender::new(stream_tx),
-            state,
-            cancellation_token,
-        ));
+        task_tracker.spawn_on(
+            contact_info_client_loop(
+                session,
+                PollSender::new(stream_tx),
+                state,
+                cancellation_token,
+            ),
+            delivery_runtime,
+        );
 
         ReceiverStream::new(stream_rx)
     }
@@ -269,7 +298,7 @@ pub mod grpc {
                 session.disconnect_reason = "client_closed";
                 break 'handoff;
             }
-            metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+            session.count_sent_update();
 
             loop {
                 tokio::select! {
@@ -318,7 +347,7 @@ pub mod grpc {
                             break 'handoff;
                         }
                         resnapshot_attempts = 0;
-                        metrics::incr_grpc_message_sent_counter(&session.subscriber_id);
+                        session.count_sent_update();
                     }
                 }
             }
