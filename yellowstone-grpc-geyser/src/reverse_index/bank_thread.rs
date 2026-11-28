@@ -1,5 +1,5 @@
-//! The thread that frees the banks block reconstruction evicts, and indexes the route keys of
-//! the banks that seal.
+//! The thread that frees the banks block reconstruction evicts, and builds the key index of
+//! each bank that seals.
 
 #[cfg(doc)]
 use crate::{grpc::GrpcService, plugin::entry::Plugin};
@@ -14,15 +14,15 @@ pub const BANK_CHORES_CAPACITY: usize = 128;
 
 /// A chore block reconstruction hands to the [`BankThread`].
 pub enum BankChore {
-    /// Index the route keys of a bank that just sealed.
-    IndexRouteKeys(Arc<FrozenBank>),
+    /// Build the key index of a bank that just sealed.
+    BuildKeyIndex(Arc<FrozenBank>),
     /// Free the banks of one evicted slot.
     FreeEvictedBanks(Vec<Arc<FrozenBank>>),
 }
 
 /// Block reconstruction's side of the thread that frees the banks block reconstruction evicts,
-/// since freeing a whole bank takes milliseconds, and indexes the route keys of the banks that
-/// seal while replay is on.
+/// since freeing a whole bank takes milliseconds, and builds the key index of each bank that
+/// seals while replay is on.
 ///
 /// Block reconstruction hands it each chore through a bounded channel whose slots are allocated
 /// up front, so a hand-over makes no allocator call. When the channel is full, or the thread has
@@ -101,8 +101,8 @@ impl BankThread {
                                 break;
                             }
                             match bank_chore {
-                                BankChore::IndexRouteKeys(sealed_bank) => {
-                                    sealed_bank.index_route_keys(&mut scratch_postings)
+                                BankChore::BuildKeyIndex(sealed_bank) => {
+                                    sealed_bank.build_key_index(&mut scratch_postings)
                                 }
                                 BankChore::FreeEvictedBanks(evicted_slot_banks) => {
                                     drop(evicted_slot_banks)
@@ -134,21 +134,21 @@ impl BankThread {
             .try_send(BankChore::FreeEvictedBanks(evicted_slot_banks));
     }
 
-    /// Hands a bank that just sealed to the thread, which builds its route key index. When the
+    /// Hands a bank that just sealed to the thread, which builds its bank key index. When the
     /// channel is full or the thread has stopped, the bank stays unindexed.
     ///
     /// # Arguments
     ///
     /// * `sealed_bank` - The bank to index.
-    pub fn index_route_keys(&self, sealed_bank: Arc<FrozenBank>) {
+    pub fn build_key_index(&self, sealed_bank: Arc<FrozenBank>) {
         let _ = self
             .bank_chores_tx
-            .try_send(BankChore::IndexRouteKeys(sealed_bank));
+            .try_send(BankChore::BuildKeyIndex(sealed_bank));
     }
 
     /// Hands the thread the banks of each slot `block_machine` evicted, with
     /// [`BankThread::free_evicted_banks`], then each bank it sealed, with
-    /// [`BankThread::index_route_keys`], since the last hand-over.
+    /// [`BankThread::build_key_index`], since the last hand-over.
     ///
     /// # Arguments
     ///
@@ -159,7 +159,7 @@ impl BankThread {
             self.free_evicted_banks(evicted_slot_banks);
         }
         for sealed_bank in block_machine.drain_sealed_banks() {
-            self.index_route_keys(sealed_bank);
+            self.build_key_index(sealed_bank);
         }
     }
 }

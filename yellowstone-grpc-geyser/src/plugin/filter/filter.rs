@@ -417,14 +417,14 @@ impl Filter {
         self.commitment
     }
 
-    /// The route keys that find every message this filter can match, so an owner's index can
-    /// route its updates.
+    /// The index keys that find every message this filter can match, so an owner's index can
+    /// deliver its updates.
     ///
     /// Each part of the filter needs keys that every message it matches carries:
     ///
     /// - an account filter: its `account` list without a cuckoo filter, else a 32-byte memcmp at
-    ///   one of [`INDEXED_MEMCMP_OFFSETS`](crate::route::INDEXED_MEMCMP_OFFSETS), else its `owner`
-    ///   list;
+    ///   one of [`INDEXED_MEMCMP_OFFSETS`](crate::reverse_index::INDEXED_MEMCMP_OFFSETS) and a
+    ///   `MemcmpGate` per owner (one `UngatedMemcmp` for none or too many), else its `owner` list;
     /// - a transaction or transaction status filter without `token_accounts`: the smallest of
     ///   its `account_required` keys, else its `account_include` list without a cuckoo filter;
     /// - a slot, entry, block meta or block footer filter: its kind's key, and an entry filter
@@ -436,62 +436,73 @@ impl Filter {
     /// # Returns
     ///
     /// The keys, sorted and without repeats, or [`None`] when the filter has a blocks filter, a
-    /// part without such keys, or more than [`MAX_ROUTE_KEYS`](crate::route::MAX_ROUTE_KEYS)
-    /// distinct keys. A key that several parts list counts once. A filter that asks for nothing
-    /// gets an empty list.
-    pub fn route_keys(&self) -> Option<Vec<crate::route::RouteKey>> {
-        use crate::route::{RouteKey, INDEXED_MEMCMP_OFFSETS, MAX_ROUTE_KEYS};
+    /// part without such keys, or more than
+    /// [`MAX_INDEX_KEYS`](crate::reverse_index::MAX_INDEX_KEYS) distinct keys besides its gates. A
+    /// key that several parts list counts once. A filter that asks for nothing gets an empty list.
+    pub fn index_keys(&self) -> Option<Vec<crate::reverse_index::IndexKey>> {
+        use crate::reverse_index::{IndexKey, INDEXED_MEMCMP_OFFSETS, MAX_INDEX_KEYS};
 
-        /// Appends the route keys of one part of the filter to `route_keys`, unless the part
-        /// alone lists more than [`MAX_ROUTE_KEYS`] keys.
+        /// Appends the index keys of one part of the filter to `index_keys`, unless the part
+        /// alone lists more than [`MAX_INDEX_KEYS`] keys.
         ///
         /// A part lists each of its keys once, so such a part never fits. A key that several
         /// parts list is appended once per part, and counts once after the final dedup.
         ///
         /// # Arguments
         ///
-        /// * `route_keys` - The route keys so far.
-        /// * `added_route_keys` - The route keys of one part, each listed once.
+        /// * `index_keys` - The index keys so far.
+        /// * `added_index_keys` - The index keys of one part, each listed once.
         ///
         /// # Returns
         ///
-        /// `Some(())` once `added_route_keys` is appended, or [`None`] if it lists more than
-        /// [`MAX_ROUTE_KEYS`] keys.
+        /// `Some(())` once `added_index_keys` is appended, or [`None`] if it lists more than
+        /// [`MAX_INDEX_KEYS`] keys.
         fn try_extend(
-            route_keys: &mut Vec<RouteKey>,
-            added_route_keys: impl ExactSizeIterator<Item = RouteKey>,
+            index_keys: &mut Vec<IndexKey>,
+            added_index_keys: impl ExactSizeIterator<Item = IndexKey>,
         ) -> Option<()> {
-            (added_route_keys.len() <= MAX_ROUTE_KEYS).then(|| route_keys.extend(added_route_keys))
+            (added_index_keys.len() <= MAX_INDEX_KEYS).then(|| index_keys.extend(added_index_keys))
         }
 
         if !self.blocks.filters.is_empty() {
             return None;
         }
-        let mut route_keys = Vec::new();
+        let mut index_keys = Vec::new();
+        let mut memcmp_gate_owners = Vec::new();
+        let mut has_ungated_memcmp = false;
         for account_aggregate in self.accounts.aggregates() {
-            let memcmp_route_key = account_aggregate
+            let memcmp_index_key = account_aggregate
                 .account_state
                 .iter()
                 .flat_map(|account_state| &account_state.memcmp)
                 .filter(|(memcmp_offset, _)| INDEXED_MEMCMP_OFFSETS.contains(memcmp_offset))
                 .find_map(|(memcmp_offset, memcmp_bytes)| {
                     let memcmp_bytes = memcmp_bytes.as_slice().try_into().ok()?;
-                    Some(RouteKey::Memcmp(*memcmp_offset, memcmp_bytes))
+                    Some(IndexKey::Memcmp(*memcmp_offset, memcmp_bytes))
                 });
             match (
                 &account_aggregate.accounts,
                 &account_aggregate.accounts_cuckoo,
-                memcmp_route_key,
+                memcmp_index_key,
                 &account_aggregate.owners,
             ) {
                 (Some(account_pubkeys), None, _, _) => try_extend(
-                    &mut route_keys,
-                    account_pubkeys.iter().copied().map(RouteKey::Account),
+                    &mut index_keys,
+                    account_pubkeys.iter().copied().map(IndexKey::Account),
                 )?,
-                (_, _, Some(memcmp_route_key), _) => route_keys.push(memcmp_route_key),
+                (_, _, Some(memcmp_index_key), memcmp_owners) => {
+                    match memcmp_owners
+                        .as_ref()
+                        .filter(|owner_pubkeys| !owner_pubkeys.is_empty())
+                    {
+                        Some(owner_pubkeys) => memcmp_gate_owners.extend(owner_pubkeys.iter()),
+                        None => has_ungated_memcmp = true,
+                    }
+                    index_keys.push(memcmp_index_key);
+                }
                 (_, _, None, Some(owner_pubkeys)) => try_extend(
-                    &mut route_keys,
-                    owner_pubkeys.iter().copied().map(RouteKey::Owner),
+                    &mut index_keys,
+                    owner_pubkeys.iter().copied().map(IndexKey::Owner),
                 )?,
                 _ => return None,
             }
@@ -502,33 +513,45 @@ impl Filter {
                 return None;
             }
             if let Some(min_required_pubkey) = txn_filter.account_required.iter().min() {
-                route_keys.push(RouteKey::Transaction(*min_required_pubkey));
+                index_keys.push(IndexKey::Transaction(*min_required_pubkey));
             } else if !txn_filter.account_include.is_empty() && txn_filter.account_cuckoo.is_none()
             {
                 let include_pubkeys = txn_filter.account_include.vec.iter().copied();
-                try_extend(&mut route_keys, include_pubkeys.map(RouteKey::Transaction))?;
+                try_extend(&mut index_keys, include_pubkeys.map(IndexKey::Transaction))?;
             } else {
                 return None;
             }
         }
         if !self.slots.filters.is_empty() {
-            route_keys.push(RouteKey::Slots);
+            index_keys.push(IndexKey::Slots);
         }
         if !self.entries.filters.is_empty() {
-            route_keys.push(RouteKey::Entries);
+            index_keys.push(IndexKey::Entries);
         }
         if !self.entries.update_parent_filters.is_empty() {
-            route_keys.push(RouteKey::UpdateParent);
+            index_keys.push(IndexKey::UpdateParent);
         }
         if !self.blocks_meta.filters.is_empty() {
-            route_keys.push(RouteKey::BlocksMeta);
+            index_keys.push(IndexKey::BlocksMeta);
         }
         if !self.block_footer.filters.iter().all(Vec::is_empty) {
-            route_keys.push(RouteKey::BlockFooter);
+            index_keys.push(IndexKey::BlockFooter);
         }
-        route_keys.sort_unstable();
-        route_keys.dedup();
-        (route_keys.len() <= MAX_ROUTE_KEYS).then_some(route_keys)
+        index_keys.sort_unstable();
+        index_keys.dedup();
+        if index_keys.len() > MAX_INDEX_KEYS {
+            return None;
+        }
+        memcmp_gate_owners.sort_unstable();
+        memcmp_gate_owners.dedup();
+        let gates_fit = index_keys.len() + memcmp_gate_owners.len() <= MAX_INDEX_KEYS;
+        if has_ungated_memcmp || !gates_fit {
+            index_keys.push(IndexKey::UngatedMemcmp);
+        } else {
+            index_keys.extend(memcmp_gate_owners.into_iter().map(IndexKey::MemcmpGate));
+        }
+        index_keys.sort_unstable();
+        Some(index_keys)
     }
 
     pub fn get_updates(

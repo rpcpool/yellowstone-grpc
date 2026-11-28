@@ -74,7 +74,7 @@ fn plugin_threads(earlier_threads: &BTreeMap<u32, String>) -> Vec<String> {
 ///
 /// * `geyser_plugin` - The loaded plugin.
 /// * `bank_slot` - The bank's slot, which is also its bank id.
-/// * `watched_pubkey` - The account the clients route on, written first.
+/// * `watched_pubkey` - The account the clients are indexed on, written first.
 fn feed_bank(geyser_plugin: &Plugin, bank_slot: u64, watched_pubkey: &[u8; 32]) {
     let parent_slot = bank_slot - 1;
     geyser_plugin
@@ -143,7 +143,7 @@ fn feed_bank(geyser_plugin: &Plugin, bank_slot: u64, watched_pubkey: &[u8; 32]) 
 /// # Arguments
 ///
 /// * `grpc_port` - The plugin's gRPC port.
-/// * `watched_pubkey` - The account the clients route on.
+/// * `watched_pubkey` - The account the clients are indexed on.
 /// * `ready_tx` - Told once every client has subscribed.
 /// * `stream_ends_tx` - Gets when each client's stream ends.
 async fn run_clients(

@@ -23,20 +23,20 @@ Existing examples, in `yellowstone-grpc-geyser/src/grpc.rs`, module
 `ReplayPhase` alone is unit-tested in `yellowstone-grpc-geyser/src/geyser_subscriber.rs`, with
 a plain `broadcast::channel` and hand-built `ReplayCut`s, by collecting what `next` hands out.
 
-To test a client that joins a route after its replay, build its `SubscriberChannels` with
-`with_routing(STEP_EVERY_PASS_LIMITS)` (from the route/mod.rs tests), so each owner pass runs one
-index step, give the two loops the matching route change receivers, and give the client a
-filter with route keys, such as `create_filter`'s. `subscribe_while_a_slot_seals` routes its
+To test a client that joins the index after its replay, build its `SubscriberChannels` with
+`with_indexing(STEP_EVERY_PASS_LIMITS)` (from the reverse_index/mod.rs tests), so each owner pass
+runs one index step, give the two loops the matching index change receivers, and give the client a
+filter with index keys, such as `create_filter`'s. `subscribe_while_a_slot_seals` indexes its
 client; the other examples keep their client on the broadcast. The client first sends
-`RouteChange::Prepare`, and joins with its receiver only after the owner answers. Wait with
-`yield_until` until the client holds no receiver before you assert routed delivery. A receiver
+`IndexChange::Prepare`, and joins with its receiver only after the owner answers. Wait with
+`yield_until` until the client holds no receiver before you assert indexed delivery. A receiver
 count that only drops back reads its final value before the client runs too, so `settle()`
 first.
 
 Block reconstruction hands each sealed bank to a replay as
-`ReplayResponseMessageType::SealedBank`, with the bank's route key index once `solGrpcBankDrop`
+`ReplayResponseMessageType::SealedBank`, with the bank's key index once `solGrpcBankDrop`
 built it; the updates are the same either way, and a test of the indexed path waits for the
-index as `block_reconstruction_hands_a_replay_each_sealed_bank_with_its_route_key_index` does.
+index as `block_reconstruction_hands_a_replay_each_sealed_bank_with_its_bank_key_index` does.
 
 ## 1. One batch per send: the `current_thread` runtime
 

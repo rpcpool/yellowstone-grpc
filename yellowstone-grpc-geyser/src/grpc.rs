@@ -28,10 +28,10 @@ use {
             proto::geyser_server::{Geyser, GeyserServer},
         },
         ratelimit::{MethodRatelimiter, PrometheusRatelimitCallbacks},
-        route::{
-            let_woken_task_run_first, BankRouteKeyIndex, BankThread, BankThreadHandle,
-            ClientRouting, LeaveOnDrop, OwnerRoutes, ProcessedOwner, RelayedItem, RouteChange,
-            RouteIndexLimits, RouteKey, ROUTE_KEYS_PER_INDEX_STEP,
+        reverse_index::{
+            let_woken_task_run_first, BankKeyIndex, BankThread, BankThreadHandle, ClientIndexing,
+            IndexChange, IndexKey, IndexWorkLimits, LeaveOnDrop, OwnerIndexes, ProcessedOwner,
+            RelayedItem, INDEX_KEYS_PER_STEP,
         },
         stream::{tokio::BatchStreamUnboundedReceiver, BatchStream, BatchStreamExt, Buffer},
         util::stream::{
@@ -361,12 +361,12 @@ type DeshredSubscribeSender = LoadAwareSender<
     UnitWeigher<TonicResult<FilteredUpdateDeshred>>,
 >;
 
-/// The broadcast channel of each commitment level, and the route change senders of the owners
-/// that route.
+/// The broadcast channel of each commitment level, and the index change senders of the owners
+/// that deliver through an index.
 ///
 /// Each level has one owner, its only sender: `geyser_loop` at processed, and block
-/// reconstruction at confirmed and finalized. A client whose filter has route keys sends its
-/// route changes to its level's owner, which then queues the client's updates straight into the
+/// reconstruction at confirmed and finalized. A client whose filter has index keys sends its
+/// index changes to its level's owner, which then queues the client's updates straight into the
 /// client's queue. Any other client reads its level's channel.
 ///
 /// # Examples
@@ -374,30 +374,30 @@ type DeshredSubscribeSender = LoadAwareSender<
 /// ```ignore
 /// let (broadcast, [geyser_loop_changes_rx, mut reconstruction_changes_rx]) =
 ///     SubscriberChannels::new(processed, confirmed, finalized)
-///         .with_routing(RouteIndexLimits::default());
+///         .with_indexing(IndexWorkLimits::default());
 /// let broadcast_rx = broadcast.subscribe(CommitmentLevel::Confirmed);
-/// let route_change = RouteChange::Join(new_route, Some(broadcast_rx));
-/// broadcast.send_route_change(CommitmentLevel::Confirmed, route_change);
-/// // Block reconstruction, the confirmed owner, takes it in and sends through its routes.
-/// let mut owner_routes = OwnerRoutes::new(broadcast);
-/// let received_route_change = reconstruction_changes_rx.recv().await.expect("a route change");
-/// owner_routes.take_route_change(received_route_change);
-/// owner_routes.send_batch(CommitmentLevel::Confirmed, message_batch);
+/// let index_change = IndexChange::Join(new_subscriber, Some(broadcast_rx));
+/// broadcast.send_index_change(CommitmentLevel::Confirmed, index_change);
+/// // Block reconstruction, the confirmed owner, takes it in and sends through its indexes.
+/// let mut owner_indexes = OwnerIndexes::new(broadcast);
+/// let received_index_change = reconstruction_changes_rx.recv().await.expect("an index change");
+/// owner_indexes.take_index_change(received_index_change);
+/// owner_indexes.send_batch(CommitmentLevel::Confirmed, message_batch);
 /// ```
 #[derive(Debug, Clone)]
 pub struct SubscriberChannels {
     processed: broadcast::Sender<BroadcastedMessage>,
     confirmed: broadcast::Sender<BroadcastedMessage>,
     finalized: broadcast::Sender<BroadcastedMessage>,
-    /// The route change senders of [`GrpcService::geyser_loop`] and
-    /// [`GrpcService::block_reconstruction_loop`], or [`None`] when routing is off.
-    route_change_txs: Option<[mpsc::UnboundedSender<RouteChange>; 2]>,
+    /// The index change senders of [`GrpcService::geyser_loop`] and
+    /// [`GrpcService::block_reconstruction_loop`], or [`None`] when indexing is off.
+    index_change_txs: Option<[mpsc::UnboundedSender<IndexChange>; 2]>,
     /// How much index work each owner does, and how often.
-    route_index_limits: RouteIndexLimits,
+    index_work_limits: IndexWorkLimits,
 }
 
 impl SubscriberChannels {
-    /// Creates the three broadcast channels, with routing off.
+    /// Creates the three broadcast channels, with indexing off.
     ///
     /// # Arguments
     ///
@@ -407,8 +407,8 @@ impl SubscriberChannels {
     ///
     /// # Returns
     ///
-    /// Channels with no owner to route through, until `with_routing` adds them, and the default
-    /// [`RouteIndexLimits`].
+    /// Channels with no owner to deliver through, until `with_indexing` adds them, and the default
+    /// [`IndexWorkLimits`].
     ///
     /// # Panics
     ///
@@ -418,101 +418,102 @@ impl SubscriberChannels {
             processed: broadcast::channel(processed).0,
             confirmed: broadcast::channel(confirmed).0,
             finalized: broadcast::channel(finalized).0,
-            route_change_txs: None,
-            route_index_limits: RouteIndexLimits::default(),
+            index_change_txs: None,
+            index_work_limits: IndexWorkLimits::default(),
         }
     }
 
-    /// Turns routing on, with a route change channel for each owner.
+    /// Turns indexing on, with an index change channel for each owner.
     ///
     /// # Arguments
     ///
-    /// * `route_index_limits` - How much index work each owner does, and how often.
+    /// * `index_work_limits` - How much index work each owner does, and how often.
     ///
     /// # Returns
     ///
-    /// The channels with the owners' route change senders and `route_index_limits`, and the
-    /// route change receivers of [`GrpcService::geyser_loop`] and
+    /// The channels with the owners' index change senders and `index_work_limits`, and the
+    /// index change receivers of [`GrpcService::geyser_loop`] and
     /// [`GrpcService::block_reconstruction_loop`], in that order.
-    fn with_routing(
+    fn with_indexing(
         mut self,
-        route_index_limits: RouteIndexLimits,
-    ) -> (Self, [mpsc::UnboundedReceiver<RouteChange>; 2]) {
+        index_work_limits: IndexWorkLimits,
+    ) -> (Self, [mpsc::UnboundedReceiver<IndexChange>; 2]) {
         let (geyser_loop_changes_tx, geyser_loop_changes_rx) = mpsc::unbounded_channel();
         let (reconstruction_changes_tx, reconstruction_changes_rx) = mpsc::unbounded_channel();
-        self.route_change_txs = Some([geyser_loop_changes_tx, reconstruction_changes_tx]);
-        self.route_index_limits = route_index_limits;
+        self.index_change_txs = Some([geyser_loop_changes_tx, reconstruction_changes_tx]);
+        self.index_work_limits = index_work_limits;
         (self, [geyser_loop_changes_rx, reconstruction_changes_rx])
     }
 
-    /// The index limits each owner's [`OwnerRoutes`] keeps to.
+    /// The index limits each owner's [`OwnerIndexes`] keeps to.
     ///
     /// # Returns
     ///
-    /// The [`RouteIndexLimits`] from `with_routing`, or the default ones.
-    pub const fn route_index_limits(&self) -> RouteIndexLimits {
-        self.route_index_limits
+    /// The [`IndexWorkLimits`] from `with_indexing`, or the default ones.
+    pub const fn index_work_limits(&self) -> IndexWorkLimits {
+        self.index_work_limits
     }
 
-    /// Sends a route change to the owner of `commitment_level`: [`GrpcService::geyser_loop`] at
+    /// Sends an index change to the owner of `commitment_level`: [`GrpcService::geyser_loop`] at
     /// processed, [`GrpcService::block_reconstruction_loop`] at confirmed and finalized.
     ///
     /// # Arguments
     ///
-    /// * `commitment_level` - The commitment level of the client's route.
-    /// * `route_change` - The route change to send.
+    /// * `commitment_level` - The commitment level of the client's indexed subscriber.
+    /// * `index_change` - The index change to send.
     ///
     /// # Returns
     ///
-    /// [`None`] once the owner's channel holds the route change, or the route change itself
-    /// when routing is off or the owner has stopped, so the client can take back what it holds.
+    /// [`None`] once the owner's channel holds the index change, or the index change itself
+    /// when indexing is off or the owner has stopped, so the client can take back what it holds.
     #[allow(rustdoc::private_intra_doc_links)]
-    pub fn send_route_change(
+    pub fn send_index_change(
         &self,
         commitment_level: CommitmentLevel,
-        route_change: RouteChange,
-    ) -> Option<RouteChange> {
-        let Some(route_change_txs) = &self.route_change_txs else {
-            return Some(route_change);
+        index_change: IndexChange,
+    ) -> Option<IndexChange> {
+        let Some(index_change_txs) = &self.index_change_txs else {
+            return Some(index_change);
         };
-        let route_change_tx_index = usize::from(commitment_level != CommitmentLevel::Processed);
-        route_change_txs[route_change_tx_index]
-            .send(route_change)
+        let index_change_tx_index = usize::from(commitment_level != CommitmentLevel::Processed);
+        index_change_txs[index_change_tx_index]
+            .send(index_change)
             .err()
             .map(|unsent_change| unsent_change.0)
     }
 
-    /// The route keys of `client_filter`, when routing is on, in the [`Arc`] of
-    /// `held_route_keys` when the two lists are equal.
+    /// The index keys of `client_filter`, when indexing is on, in the [`Arc`] of
+    /// `held_index_keys` when the two lists are equal.
     ///
     /// An owner compares key lists by [`Arc`] only, so a client that keeps its keys keeps its
-    /// [`Arc`] too, and its owner replaces the route's filter in place.
+    /// [`Arc`] too, and its owner replaces the indexed subscriber's filter in place.
     ///
     /// # Arguments
     ///
     /// * `client_filter` - The client's filter.
-    /// * `held_route_keys` - The key list the client holds, or [`None`].
+    /// * `held_index_keys` - The key list the client holds, or [`None`].
     ///
     /// # Returns
     ///
-    /// The keys from [`Filter::route_keys`], `held_route_keys` itself when it lists the same
-    /// keys, or [`None`] when routing is off or [`Filter::route_keys`] gives [`None`].
-    pub fn route_keys(
+    /// The keys from [`Filter::index_keys`], `held_index_keys` itself when it lists the same
+    /// keys, or [`None`] when indexing is off or [`Filter::index_keys`] gives [`None`].
+    pub fn index_keys(
         &self,
         client_filter: &Filter,
-        held_route_keys: Option<&Arc<[RouteKey]>>,
-    ) -> Option<Arc<[RouteKey]>> {
-        self.route_change_txs.as_ref()?;
-        let listed_route_keys = client_filter.route_keys()?;
-        match held_route_keys {
-            Some(held_route_keys) if held_route_keys[..] == listed_route_keys[..] => {
-                Some(Arc::clone(held_route_keys))
+        held_index_keys: Option<&Arc<[IndexKey]>>,
+    ) -> Option<Arc<[IndexKey]>> {
+        self.index_change_txs.as_ref()?;
+        let listed_index_keys = client_filter.index_keys()?;
+        match held_index_keys {
+            Some(held_index_keys) if held_index_keys[..] == listed_index_keys[..] => {
+                Some(Arc::clone(held_index_keys))
             }
-            _ => Some(listed_route_keys.into()),
+            _ => Some(listed_index_keys.into()),
         }
     }
 
-    /// A guard that has the owners remove the client's route when the client's task ends.
+    /// A guard that has the owners remove the client's indexed subscriber when the client's task
+    /// ends.
     ///
     /// # Arguments
     ///
@@ -521,12 +522,12 @@ impl SubscriberChannels {
     /// # Returns
     ///
     /// The [`LeaveOnDrop`], which leaves both owners until [`LeaveOnDrop::leave_only`] names
-    /// one, or [`None`] when routing is off.
+    /// one, or [`None`] when indexing is off.
     pub fn leave_on_drop(&self, session_id: usize) -> Option<LeaveOnDrop> {
-        let route_change_txs = self.route_change_txs.clone()?;
+        let index_change_txs = self.index_change_txs.clone()?;
         Some(LeaveOnDrop {
             session_id,
-            route_change_txs: route_change_txs.map(Some),
+            index_change_txs: index_change_txs.map(Some),
         })
     }
 
@@ -551,8 +552,8 @@ impl SubscriberChannels {
     /// Broadcasts `messages` on the `commitment` channel, and drops them if no receiver is
     /// subscribed.
     ///
-    /// A routed client gets nothing sent here: each level's owner sends through its
-    /// [`OwnerRoutes`], which calls this after it routes the batch.
+    /// An indexed client gets nothing sent here: each level's owner sends through its
+    /// [`OwnerIndexes`], which calls this after it delivers the batch.
     ///
     /// # Arguments
     ///
@@ -593,13 +594,9 @@ pub enum ReplayResponseMessageType {
     /// The messages of `batch` in `range`, so part of a shared batch is replayed without a copy.
     Batch(Arc<Vec<Message>>, Range<usize>),
     /// The messages of a sealed bank in `range`, all of them that bank's accounts,
-    /// transactions and entries, with the bank's [`BankRouteKeyIndex`] once the bank thread
-    /// built it, so a client with route keys visits only the messages its keys find.
-    SealedBank(
-        Arc<Vec<Message>>,
-        Range<usize>,
-        Option<Arc<BankRouteKeyIndex>>,
-    ),
+    /// transactions and entries, with the bank's [`BankKeyIndex`] once the bank thread
+    /// built it, so a client with index keys visits only the messages its keys find.
+    SealedBank(Arc<Vec<Message>>, Range<usize>, Option<Arc<BankKeyIndex>>),
 }
 
 impl<'a> IntoIterator for &'a ReplayResponseMessageType {
@@ -723,7 +720,7 @@ struct BroadcastPosition {
     waiting_next_taken_in: Vec<oneshot::Sender<BroadcastedMessage>>,
     /// The confirmed and finalized batches of the current pass, in send order. At the end of
     /// the pass, [`GrpcService::take_in`] sends them through block reconstruction's
-    /// [`OwnerRoutes`].
+    /// [`OwnerIndexes`].
     held_batches: Vec<(CommitmentLevel, BroadcastedMessage)>,
     /// The processed batches of the current pass, in send order. [`GrpcService::take_in`]
     /// relays them to geyser_loop before the held batches when the pass seals a bank at
@@ -1044,7 +1041,7 @@ pub struct ClientSession {
     pub id: usize,
     pub subscriber_id: String,
     endpoint: String,
-    /// The client's filter, shared with its route while the client is routed.
+    /// The client's filter, shared with its indexed subscriber while the client is indexed.
     pub filter: Arc<Filter>,
     pub cancellation_token: CancellationToken,
     pub disconnect_reason: &'static str,
@@ -1411,7 +1408,7 @@ pub struct GrpcServiceResult {
 }
 
 impl GrpcService {
-    /// Binds the configured listeners, spawns the routing loops, the thread that frees evicted
+    /// Binds the configured listeners, spawns the owner loops, the thread that frees evicted
     /// banks and one server task per listener, and hands back the senders the plugin feeds.
     ///
     /// # Arguments
@@ -1627,10 +1624,10 @@ impl GrpcService {
         };
 
         let capacities = config.resolved_capacities();
-        let route_index_limits = RouteIndexLimits {
-            slice_interval: config.route_index_interval,
-            slice_budget: config.route_index_budget,
-            keys_per_step: ROUTE_KEYS_PER_INDEX_STEP,
+        let index_work_limits = IndexWorkLimits {
+            slice_interval: config.reverse_index_interval,
+            slice_budget: config.reverse_index_budget,
+            keys_per_step: INDEX_KEYS_PER_STEP,
         };
         let (broadcast, [geyser_loop_changes_rx, reconstruction_changes_rx]) =
             SubscriberChannels::new(
@@ -1638,7 +1635,7 @@ impl GrpcService {
                 capacities.confirmed_broadcast,
                 capacities.finalized_broadcast,
             )
-            .with_routing(route_index_limits);
+            .with_indexing(index_work_limits);
         // Deshred subscribers receive their own commitment-free stream.
         let (deshred_broadcast_tx, _) = broadcast::channel(config.channel_capacity);
         let (replay_first_available_slot, replay_stored_slots_tx, replay_stored_slots_rx) =
@@ -1840,7 +1837,7 @@ impl GrpcService {
     /// It is the only sender at processed, through its [`ProcessedOwner`]. Block reconstruction
     /// relays to it ([`RelayedItem`]) the batches it builds for processed, and each replay behind
     /// the batches relayed before it. Until the plugin's next batch is ready,
-    /// [`ProcessedOwner::next_plugin_batch`] sends those, takes in route changes and runs index
+    /// [`ProcessedOwner::next_plugin_batch`] sends those, takes in index changes and runs index
     /// slices. It sends each raw batch, then hands it over as a
     /// [`BlockReconstructionMessage::BroadcastBatch`], with no `await` in between. The sections
     /// below follow a message through both tasks.
@@ -1913,8 +1910,8 @@ impl GrpcService {
     /// # Arguments
     ///
     /// * `messages_rx` - The plugin's messages.
-    /// * `broadcast` - The broadcast channels its [`OwnerRoutes`] broadcast on.
-    /// * `route_changes_rx` - The route changes of processed clients, and every client's last
+    /// * `broadcast` - The broadcast channels its [`OwnerIndexes`] broadcast on.
+    /// * `index_changes_rx` - The index changes of processed clients, and every client's last
     ///   leave.
     /// * `relay_rx` - What block reconstruction relays: its processed batches and its replays.
     /// * `block_reconstruction_tx` - Hands each raw batch and each seal-gated message to block
@@ -1922,7 +1919,7 @@ impl GrpcService {
     async fn geyser_loop<St>(
         mut messages_rx: St,
         broadcast: SubscriberChannels,
-        route_changes_rx: mpsc::UnboundedReceiver<RouteChange>,
+        index_changes_rx: mpsc::UnboundedReceiver<IndexChange>,
         relay_rx: mpsc::UnboundedReceiver<RelayedItem>,
         block_reconstruction_tx: mpsc::UnboundedSender<BlockReconstructionMessage>,
     ) where
@@ -1965,7 +1962,7 @@ impl GrpcService {
             message_batch: Vec::with_capacity(MESSAGE_BATCH_SIZE),
             seal_gated: None,
         };
-        let mut processed_owner = ProcessedOwner::new(broadcast, route_changes_rx, relay_rx);
+        let mut processed_owner = ProcessedOwner::new(broadcast, index_changes_rx, relay_rx);
         loop {
             let batch_size_maybe = processed_owner
                 .next_plugin_batch(&mut messages_rx, &mut buffer)
@@ -2009,14 +2006,14 @@ impl GrpcService {
     /// Rebuilds banks from what geyser_loop hands over, sends each bank at every commitment level
     /// it reaches, and builds the replays.
     ///
-    /// It is the only sender at confirmed and finalized, through its [`OwnerRoutes`]. Its processed
-    /// batches, and each replay behind them, go on the relay to [`GrpcService::geyser_loop`],
-    /// the only sender at processed. Every batch it sends goes through
-    /// [`BroadcastPosition::send`], so [`BroadcastPosition::cut`] can tell a replay where it
-    /// ends. A route change lands between two passes. Each pass starts by taking in at most
-    /// [`MAX_ROUTE_CHANGES_PER_PASS`](crate::route::MAX_ROUTE_CHANGES_PER_PASS) queued changes,
-    /// so a change waits for one pass or one replay build, plus one pass per 64 changes queued
-    /// ahead of it, however far behind the queue is.
+    /// It is the only sender at confirmed and finalized, through its [`OwnerIndexes`]. Its
+    /// processed batches, and each replay behind them, go on the relay to
+    /// [`GrpcService::geyser_loop`], the only sender at processed. Every batch it sends goes
+    /// through [`BroadcastPosition::send`], so [`BroadcastPosition::cut`] can tell a replay where
+    /// it ends. An index change lands between two passes. Each pass starts by taking in at most
+    /// [`MAX_INDEX_CHANGES_PER_PASS`](crate::reverse_index::MAX_INDEX_CHANGES_PER_PASS) queued
+    /// changes, so a change waits for one pass or one replay build, plus one pass per 64 changes
+    /// queued ahead of it, however far behind the queue is.
     ///
     /// Index work runs in slices: at the top of a pass once it is overdue, or in the last arm of
     /// the `select!`, the index slice timer, once the other arms read `Pending`.
@@ -2037,21 +2034,21 @@ impl GrpcService {
     /// # Arguments
     ///
     /// * `messages_rx` - What geyser_loop hands over, in order.
-    /// * `broadcast` - The broadcast channels its [`OwnerRoutes`] broadcast on.
-    /// * `route_changes_rx` - The route changes of confirmed and finalized clients, and every
+    /// * `broadcast` - The broadcast channels its [`OwnerIndexes`] broadcast on.
+    /// * `index_changes_rx` - The index changes of confirmed and finalized clients, and every
     ///   client's last leave.
     /// * `relay_tx` - The relay to geyser_loop, for the processed batches and the replays.
     /// * `replay_stored_slots_rx` - The replay requests, or [`None`] when replay is off.
     /// * `replay_first_available_slot` - Set to the oldest replayable slot after each pass, or
     ///   [`None`] when replay is off.
     /// * `replay_stored_slots` - How many slots of sealed banks to keep for replay.
-    /// * `bank_thread` - Frees the banks of the evicted slots and indexes the route keys of the
+    /// * `bank_thread` - Frees the banks of the evicted slots and builds the key indexes of the
     ///   sealed banks on its own thread. The plugin joins that thread, never this loop.
     #[allow(clippy::too_many_arguments)]
     async fn block_reconstruction_loop<St>(
         mut messages_rx: St,
         broadcast: SubscriberChannels,
-        mut route_changes_rx: mpsc::UnboundedReceiver<RouteChange>,
+        mut index_changes_rx: mpsc::UnboundedReceiver<IndexChange>,
         relay_tx: mpsc::UnboundedSender<RelayedItem>,
         replay_stored_slots_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
         replay_first_available_slot: Option<Arc<AtomicU64>>,
@@ -2068,14 +2065,14 @@ impl GrpcService {
 
         const BUFFERED_MESSAGES_CAPACITY: usize = 1024;
         let mut buffered_messages = Vec::with_capacity(BUFFERED_MESSAGES_CAPACITY);
-        let mut owner_routes = OwnerRoutes::new(broadcast);
-        let index_slice_timer = sleep_until(owner_routes.next_index_slice_at());
+        let mut owner_indexes = OwnerIndexes::new(broadcast);
+        let index_slice_timer = sleep_until(owner_indexes.next_index_slice_at());
         tokio::pin!(index_slice_timer);
         // A replay request taken from its channel, built once the queue reads empty again.
         let mut pending_replay: Option<ReplayStoredSlotsRequest> = None;
 
         loop {
-            owner_routes.take_queued_work(&mut route_changes_rx, index_slice_timer.as_mut());
+            owner_indexes.take_queued_work(&mut index_changes_rx, index_slice_timer.as_mut());
             // Biased, queue first: a replay is built only once the queue reads empty, so it holds
             // every batch geyser_loop handed over before the request. Those went out live, maybe
             // before the client subscribed; one left queued would be in neither stream.
@@ -2100,7 +2097,7 @@ impl GrpcService {
                     };
 
                     metrics::block_reconstruction_queue_size_dec_by(buffered_size as i64);
-                    let relayed_at_pass_end = Self::take_in(&mut block_machine, &mut owner_routes, &relay_tx, &bank_thread, &mut position, buffered_messages.drain(..)).await;
+                    let relayed_at_pass_end = Self::take_in(&mut block_machine, &mut owner_indexes, &relay_tx, &bank_thread, &mut position, buffered_messages.drain(..)).await;
 
                     let min_replayable_slot = block_machine.min_replayable_slot();
                     if let (Some(min_slot), Some(replay_first_available_slot)) = (min_replayable_slot, replay_first_available_slot.as_ref()) {
@@ -2144,10 +2141,10 @@ impl GrpcService {
                         // after the account writes made while the bank was constructed.
                         let bank_messages = replayed_slot.frozen_block.messages();
                         let created_bank_index = replayed_slot.frozen_block.created_bank_index();
-                        let route_key_index = replayed_slot.frozen_block.route_key_index();
-                        replayed_messages.push(ReplayResponseMessageType::SealedBank(Arc::clone(&bank_messages), 0..created_bank_index, route_key_index.clone()));
+                        let bank_key_index = replayed_slot.frozen_block.bank_key_index();
+                        replayed_messages.push(ReplayResponseMessageType::SealedBank(Arc::clone(&bank_messages), 0..created_bank_index, bank_key_index.clone()));
                         replayed_messages.push(ReplayResponseMessageType::Single(Message::Slot(replayed_slot.frozen_block.created_bank())));
-                        replayed_messages.push(ReplayResponseMessageType::SealedBank(Arc::clone(&bank_messages), created_bank_index..bank_messages.len(), route_key_index));
+                        replayed_messages.push(ReplayResponseMessageType::SealedBank(Arc::clone(&bank_messages), created_bank_index..bank_messages.len(), bank_key_index));
 
                         // A bank sealed but not yet out at processed: its block, block meta and
                         // statuses go out live, when its Processed status arrives.
@@ -2205,15 +2202,15 @@ impl GrpcService {
                     })));
                     let_woken_task_run_first().await;
                 }
-                Some(route_change) = route_changes_rx.recv() => {
-                    owner_routes.take_route_change(route_change);
+                Some(index_change) = index_changes_rx.recv() => {
+                    owner_indexes.take_index_change(index_change);
                 }
                 Some(request) = replay_stored_slots_rx.recv(), if pending_replay.is_none() => {
                     pending_replay = Some(request);
                 }
                 // A Sleep reads Pending when the budget is spent, so the queue rule above holds.
-                () = &mut index_slice_timer, if owner_routes.has_index_work() => {
-                    owner_routes.run_index_slice_and_reset_timer(index_slice_timer.as_mut());
+                () = &mut index_slice_timer, if owner_indexes.has_index_work() => {
+                    owner_indexes.run_index_slice_and_reset_timer(index_slice_timer.as_mut());
                 }
                 else => {
                     // No new messages and replay request channel closed, can only happen on shutdown
@@ -2230,19 +2227,19 @@ impl GrpcService {
     /// The lifecycle statuses of a raw batch, except [`CreatedBank`](SlotStatus::CreatedBank), go
     /// to confirmed and finalized as they land. Every batch waits for the end of the pass. Then
     /// the confirmed and finalized ones, in [`BroadcastPosition::held_batches`], go out through
-    /// `owner_routes` in order. The processed ones, in [`BroadcastPosition::held_relays`], go on
+    /// `owner_indexes` in order. The processed ones, in [`BroadcastPosition::held_relays`], go on
     /// the relay to [`GrpcService::geyser_loop`] last: the relay wakes geyser_loop into this
     /// worker's LIFO slot, where it waits for whatever the pass does after it. A pass that seals
     /// a bank at processed relays them first instead, and lets geyser_loop run with
     /// [`let_woken_task_run_first`] before its confirmed and finalized sends, so a block meta at
-    /// processed never waits for their routing. The [`BankThread`] frees the banks of the slots
-    /// evicted in the pass, since freeing a whole bank takes milliseconds, and indexes the route
-    /// keys of the banks sealed in it.
+    /// processed never waits for their delivery. The [`BankThread`] frees the banks of the slots
+    /// evicted in the pass, since freeing a whole bank takes milliseconds, and builds the key
+    /// indexes of the banks sealed in it.
     ///
     /// # Arguments
     ///
     /// * `block_machine` - The banks being reconstructed.
-    /// * `owner_routes` - Sends the confirmed and finalized batches.
+    /// * `owner_indexes` - Sends the confirmed and finalized batches.
     /// * `relay_tx` - The relay to geyser_loop.
     /// * `bank_thread` - Takes the banks of the slots evicted in the pass, and the banks sealed
     ///   in it.
@@ -2255,7 +2252,7 @@ impl GrpcService {
     /// until the caller lets it run with [`let_woken_task_run_first`].
     async fn take_in(
         block_machine: &mut BlockMachineStorage,
-        owner_routes: &mut OwnerRoutes,
+        owner_indexes: &mut OwnerIndexes,
         relay_tx: &mpsc::UnboundedSender<RelayedItem>,
         bank_thread: &BankThread,
         position: &mut BroadcastPosition,
@@ -2383,7 +2380,7 @@ impl GrpcService {
             let_woken_task_run_first().await;
         }
         for (commitment_level, held_batch) in position.held_batches.drain(..) {
-            owner_routes.send_batch(commitment_level, held_batch);
+            owner_indexes.send_batch(commitment_level, held_batch);
         }
         bank_thread.hand_over_banks(block_machine);
 
@@ -2545,27 +2542,27 @@ impl GrpcService {
     }
 
     /// Serves one Subscribe client: takes its requests, sends its snapshot or replay, then its
-    /// live updates, routed or from the broadcast, until the client or the server ends.
+    /// live updates, indexed or from the broadcast, until the client or the server ends.
     ///
     /// It reads no request during its snapshot or replay: those, and the backlog after a replay,
     /// use the first request's filter. Where the live stream starts, it drops the session's live
     /// signal sender, so [`GrpcService::read_requests`] posts the newest filter change sent
-    /// meanwhile, and the later ones. That change can reach the client after its first route
-    /// change, and then moves the route as any later change does.
+    /// meanwhile, and the later ones. That change can reach the client after its first index
+    /// change, and then moves the indexed subscriber as any later change does.
     ///
-    /// A client whose filter has route keys joins its route in two steps. It sends each step to
+    /// A client whose filter has index keys joins the index in two steps. It sends each step to
     /// its level's owner at a read that finds its broadcast receiver and its requests empty, so a
     /// queued filter change applies first:
     ///
-    /// 1. A [`RouteChange::Prepare`]. The client keeps reading and filtering its receiver while
-    ///    the owner claims the route's keys.
-    /// 2. Once the owner answers, a [`RouteChange::Join`] with the receiver. The owner delivers
+    /// 1. An [`IndexChange::Prepare`]. The client keeps reading and filtering its receiver while
+    ///    the owner claims the indexed subscriber's keys.
+    /// 2. Once the owner answers, an [`IndexChange::Join`] with the receiver. The owner delivers
     ///    what the receiver got since, then queues the client's updates straight into
     ///    `stream_tx`. The client holds no receiver then, so it wakes only for a request or its
     ///    cancellation token.
     ///
-    /// [`ClientRouting`] sends these steps, moves the route when a filter change applies, and
-    /// sends the last leave when the loop ends.
+    /// [`ClientIndexing`] sends these steps, moves the indexed subscriber when a filter change
+    /// applies, and sends the last leave when the loop ends.
     ///
     /// # Arguments
     ///
@@ -2574,7 +2571,7 @@ impl GrpcService {
     /// * `client_rx` - The client's requests: each one's `from_slot` and filter, or the
     ///   [`Disconnect`] once the client has gone.
     /// * `snapshot_rx` - The startup snapshot to send first, or [`None`].
-    /// * `broadcast` - The broadcast channels, and the owners' route change senders.
+    /// * `broadcast` - The broadcast channels, and the owners' index change senders.
     /// * `replay_stored_slots_tx` - The replay requests to block reconstruction, or [`None`]
     ///   when replay is off.
     /// * `task_tracker` - Runs the tasks that send the client an error.
@@ -2654,7 +2651,7 @@ impl GrpcService {
         }
 
         let mut commitment = session.filter.get_commitment_level();
-        let route_keys = broadcast.route_keys(&session.filter, None);
+        let index_keys = broadcast.index_keys(&session.filter, None);
         let mut messages_rx = match from_slot {
             // A snapshot subscription does not replay.
             Some(from_slot) if !snapshot_requested => {
@@ -2664,7 +2661,7 @@ impl GrpcService {
                     &broadcast,
                     replay_stored_slots_tx.as_ref(),
                     commitment,
-                    route_keys.as_deref(),
+                    index_keys.as_deref(),
                     from_slot,
                     &task_tracker,
                     client_unresponsive_timeout,
@@ -2691,7 +2688,7 @@ impl GrpcService {
             _ => Some(broadcast.subscribe(commitment)),
         };
         session.client_live_tx = None;
-        let mut client_routing = ClientRouting::new(&session, &stream_tx, route_keys, &broadcast);
+        let mut client_indexing = ClientIndexing::new(&session, &stream_tx, index_keys, &broadcast);
 
         'outer: loop {
             observe_subscriber_queue_size(
@@ -2699,7 +2696,7 @@ impl GrpcService {
                 stream_tx.current_weight() as u64,
                 "normal",
             );
-            client_routing.send_join_step(&session, &mut messages_rx, &client_rx, commitment);
+            client_indexing.send_join_step(&session, &mut messages_rx, &client_rx, commitment);
 
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
@@ -2735,7 +2732,7 @@ impl GrpcService {
                             }
 
                             let commitment_new = session.filter.get_commitment_level();
-                            client_routing
+                            client_indexing
                                 .change_filter(&session, &mut messages_rx, commitment, commitment_new)
                                 .await;
                             if commitment_new != commitment {
@@ -2749,8 +2746,8 @@ impl GrpcService {
                         }
                     }
                 }
-                Some(ready_answer) = OptionFuture::from(client_routing.ready_rx()) => {
-                    client_routing.take_ready_answer(ready_answer);
+                Some(ready_answer) = OptionFuture::from(client_indexing.ready_rx()) => {
+                    client_indexing.take_ready_answer(ready_answer);
                 }
                 Some(message) = OptionFuture::from(
                     messages_rx.as_mut().map(broadcast::Receiver::recv),
@@ -2796,7 +2793,7 @@ impl GrpcService {
                 }
             }
         }
-        client_routing.end_session(session, messages_rx.is_none(), commitment);
+        client_indexing.end_session(session, messages_rx.is_none(), commitment);
     }
 
     /// Waits for the subscription's first request and applies its filter.
@@ -2840,7 +2837,7 @@ impl GrpcService {
         }
     }
 
-    /// How many replayed messages that give a client with route keys no update spend one unit of
+    /// How many replayed messages that give a client with index keys no update spend one unit of
     /// tokio's cooperative budget in [`GrpcService::client_loop_replay`]. A poll of 128 units
     /// then scans at most 16,384 such messages.
     #[allow(rustdoc::private_intra_doc_links)]
@@ -2854,12 +2851,12 @@ impl GrpcService {
     /// tokio's cooperative budget with [`consume_budget`](tokio::task::coop::consume_budget) for
     /// each message it takes from the [`ReplayPhase`] that gives the client an update, and one for
     /// every [`GrpcService::REPLAYED_MESSAGES_WITHOUT_UPDATE_PER_BUDGET_UNIT`] messages that give
-    /// it none. A client without route keys spends one for every message it takes, since its
+    /// it none. A client without index keys spends one for every message it takes, since its
     /// replay visits every stored message. With tokio's budget of 128 units per poll, a replay to
     /// a client that keeps up yields after at most 128 updates or 16,384 messages without one,
     /// always between two messages, and the runtime runs other tasks meanwhile, such as
     /// [`GrpcService::geyser_loop`] and [`GrpcService::block_reconstruction_loop`]. So a scan of
-    /// banks with no route key index yields too, while a replay that sends few updates over the
+    /// banks with no bank key index yields too, while a replay that sends few updates over the
     /// open banks and a short backlog still ends in one poll.
     ///
     /// # Arguments
@@ -2870,8 +2867,8 @@ impl GrpcService {
     /// * `replay_stored_slots_tx` - Requests to block reconstruction, or [`None`] when replay
     ///   is off.
     /// * `commitment` - The commitment of the replay and of the live stream.
-    /// * `route_keys` - The client's route keys, or [`None`]. With them, each sealed bank with a
-    ///   [`BankRouteKeyIndex`] hands out only the messages they find.
+    /// * `index_keys` - The client's index keys, or [`None`]. With them, each sealed bank with a
+    ///   [`BankKeyIndex`] hands out only the messages they find.
     /// * `from_slot` - The first slot to replay.
     /// * `task_tracker` - Runs the tasks that send the client an error.
     /// * `client_unresponsive_timeout` - How long the client can leave a replayed update
@@ -2887,7 +2884,7 @@ impl GrpcService {
         broadcast: &SubscriberChannels,
         replay_stored_slots_tx: Option<&mpsc::Sender<ReplayStoredSlotsRequest>>,
         commitment: CommitmentLevel,
-        route_keys: Option<&[RouteKey]>,
+        index_keys: Option<&[IndexKey]>,
         from_slot: Slot,
         task_tracker: &TaskTracker,
         client_unresponsive_timeout: Option<Duration>,
@@ -2962,7 +2959,7 @@ impl GrpcService {
                 session.disconnect_reason = "client_broadcast_lag";
             }
         };
-        let mut phase = match ReplayPhase::new(messages_rx, commitment, replay, route_keys) {
+        let mut phase = match ReplayPhase::new(messages_rx, commitment, replay, index_keys) {
             Ok(phase) => phase,
             Err(error) => {
                 broadcast_failed(session, error);
@@ -2982,7 +2979,7 @@ impl GrpcService {
                 }
             };
             let filtered_updates = session.filter.get_updates(&message, Some(commitment));
-            let spends_budget_unit = if route_keys.is_none() || !filtered_updates.is_empty() {
+            let spends_budget_unit = if index_keys.is_none() || !filtered_updates.is_empty() {
                 true
             } else {
                 replayed_messages_without_update += 1;
@@ -3348,7 +3345,7 @@ impl Geyser for GrpcService {
     /// spawns the client's ping task, its request task and its `client_loop`.
     ///
     /// The ping task sends a ping every 10 s, which also finds a client that has gone. It also
-    /// samples the client's queue size, since a routed client's loop does not wake for each
+    /// samples the client's queue size, since an indexed client's loop does not wake for each
     /// update.
     ///
     /// The request task, `GrpcService::read_requests`, posts at most one filter change per
@@ -4496,7 +4493,7 @@ mod tests {
             .collect()
     }
 
-    /// A replay of one sealed bank with no route key index, and a filter whose route key finds
+    /// A replay of one sealed bank with no bank key index, and a filter whose index key finds
     /// one account. Each block of the bank holds `messages_without_update_per_block` updates of
     /// another account, then one update of the filter's account, with no data, so it weighs 1.
     ///
@@ -4554,7 +4551,7 @@ mod tests {
     ///
     /// # Arguments
     ///
-    /// * `subscriber_channels` - The client's channels. With routing on, the client has route
+    /// * `subscriber_channels` - The client's channels. With indexing on, the client has index
     ///   keys.
     /// * `client_filter` - The client's filter.
     /// * `replayed_items` - The replay block reconstruction answers with.
@@ -4629,7 +4626,7 @@ mod tests {
             .collect()
     }
 
-    /// A replay to a client without route keys spends one unit of tokio's budget per message it
+    /// A replay to a client without index keys spends one unit of tokio's budget per message it
     /// takes from its [`ReplayPhase`], so it yields about every 128 messages, and other tasks run
     /// between. The filter keeps every other message, so the messages it drops count too: the
     /// replay queues 64 updates between two runs of the counter task, give or take one.
@@ -4654,14 +4651,14 @@ mod tests {
         );
     }
 
-    /// A replay to a client with route keys spends one unit of tokio's budget per message that
+    /// A replay to a client with index keys spends one unit of tokio's budget per message that
     /// gives the client an update, and one per 128 messages that give it none. The filter keeps
     /// every other message, so the replay queues about 127 updates between two runs of the
     /// counter task, give or take two.
     #[tokio::test]
-    async fn a_replay_with_route_keys_yields_about_every_128_updates() {
-        let (subscriber_channels, _route_changes_rxs) =
-            SubscriberChannels::new(16, 16, 16).with_routing(RouteIndexLimits::default());
+    async fn a_replay_with_index_keys_yields_about_every_128_updates() {
+        let (subscriber_channels, _index_changes_rxs) =
+            SubscriberChannels::new(16, 16, 16).with_indexing(IndexWorkLimits::default());
         let updates_between_runs = updates_queued_between_counter_runs(
             subscriber_channels,
             create_filter_with_slots(),
@@ -4681,15 +4678,15 @@ mod tests {
         );
     }
 
-    /// A replay to a client with route keys spends one unit of tokio's budget per 128 messages
-    /// that give the client no update, so a scan of a bank with no route key index yields too.
+    /// A replay to a client with index keys spends one unit of tokio's budget per 128 messages
+    /// that give the client no update, so a scan of a bank with no bank key index yields too.
     /// Each of the bank's 100 blocks holds 1,023 such messages and one update, about 9 units, so
     /// the replay queues 14 or 15 updates between two runs of the counter task, or 13 after a
     /// first poll that started with a few units spent.
     #[tokio::test]
-    async fn a_replay_with_route_keys_spends_a_budget_unit_per_128_messages_without_an_update() {
-        let (subscriber_channels, _route_changes_rxs) =
-            SubscriberChannels::new(16, 16, 16).with_routing(RouteIndexLimits::default());
+    async fn a_replay_with_index_keys_spends_a_budget_unit_per_128_messages_without_an_update() {
+        let (subscriber_channels, _index_changes_rxs) =
+            SubscriberChannels::new(16, 16, 16).with_indexing(IndexWorkLimits::default());
         let (replayed_items, client_filter) = unindexed_bank_replay(100, 1_023);
         let updates_between_runs = updates_queued_between_counter_runs(
             subscriber_channels,
@@ -4710,14 +4707,14 @@ mod tests {
         );
     }
 
-    /// A replay to a client with route keys that sends few updates over a short scan ends in one
+    /// A replay to a client with index keys that sends few updates over a short scan ends in one
     /// poll. Its 30 updates spend 30 units, and the 7,680 messages without one spend 60, fewer
     /// than the units of the first replay poll. The updates are spread over the bank, so a yield
     /// in the middle of the scan would show as a queue length between none and all of them.
     #[tokio::test]
-    async fn a_light_replay_with_route_keys_ends_in_one_poll() {
-        let (subscriber_channels, _route_changes_rxs) =
-            SubscriberChannels::new(16, 16, 16).with_routing(RouteIndexLimits::default());
+    async fn a_light_replay_with_index_keys_ends_in_one_poll() {
+        let (subscriber_channels, _index_changes_rxs) =
+            SubscriberChannels::new(16, 16, 16).with_indexing(IndexWorkLimits::default());
         let (replayed_items, client_filter) = unindexed_bank_replay(30, 256);
         let updates_between_runs = updates_queued_between_counter_runs(
             subscriber_channels,
@@ -4923,7 +4920,7 @@ mod tests {
     }
 
     /// Index limits under which each index slice claims one key, at most once per millisecond.
-    const ONE_KEY_PER_MILLISECOND_LIMITS: RouteIndexLimits = RouteIndexLimits {
+    const ONE_KEY_PER_MILLISECOND_LIMITS: IndexWorkLimits = IndexWorkLimits {
         slice_interval: Duration::from_millis(1),
         slice_budget: Duration::ZERO,
         keys_per_step: NonZeroUsize::MIN,
@@ -4949,13 +4946,13 @@ mod tests {
     ///
     /// # Returns
     ///
-    /// The keys, sorted, as [`Filter::route_keys`] gives them.
-    fn unmatched_account_keys(key_count: usize) -> Arc<[RouteKey]> {
-        let mut route_keys = (0..key_count)
-            .map(|_| RouteKey::Account(Pubkey::new_unique()))
+    /// The keys, sorted, as [`Filter::index_keys`] gives them.
+    fn unmatched_account_keys(key_count: usize) -> Arc<[IndexKey]> {
+        let mut index_keys = (0..key_count)
+            .map(|_| IndexKey::Account(Pubkey::new_unique()))
             .collect::<Vec<_>>();
-        route_keys.sort_unstable();
-        route_keys.into()
+        index_keys.sort_unstable();
+        index_keys.into()
     }
 
     /// An owner's queue that counts its reads. Each `select!` of the owner's loop reads its
@@ -5286,9 +5283,9 @@ mod tests {
             crate::{
                 block_reconstruction_v2::MUST_HAVE_SYSVAR_ACCOUNTS,
                 plugin::message::MessageBlockMeta,
-                route::{
+                reverse_index::{
                     tests::{allocator_calls_during, STEP_EVERY_PASS_LIMITS},
-                    Route, RouteLeave, MAX_ROUTE_CHANGES_PER_PASS,
+                    IndexLeave, IndexedSubscriber, MAX_INDEX_CHANGES_PER_PASS,
                 },
                 stream::tokio::BatchStreamUnboundedReceiver,
             },
@@ -5792,7 +5789,7 @@ mod tests {
             let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
             let (replay_tx, replay_rx) = mpsc::channel(1);
             let (broadcast, [geyser_loop_changes_rx, reconstruction_changes_rx]) =
-                SubscriberChannels::new(1024, 1024, 1024).with_routing(RouteIndexLimits::default());
+                SubscriberChannels::new(1024, 1024, 1024).with_indexing(IndexWorkLimits::default());
             let mut confirmed_rx = broadcast.subscribe(CommitmentLevel::Confirmed);
             let (relay_tx, relay_rx) = mpsc::unbounded_channel();
             tokio::spawn(GrpcService::geyser_loop(
@@ -6450,7 +6447,7 @@ mod tests {
         ///
         /// * `queue_rx` - What geyser_loop handed over.
         /// * `broadcast_channels` - The channels block reconstruction sends on.
-        /// * `route_changes_rx` - Block reconstruction's route changes.
+        /// * `index_changes_rx` - Block reconstruction's index changes.
         ///
         /// # Returns
         ///
@@ -6458,7 +6455,7 @@ mod tests {
         fn spawn_reconstruction_behind(
             queue_rx: mpsc::UnboundedReceiver<BlockReconstructionMessage>,
             broadcast_channels: SubscriberChannels,
-            route_changes_rx: mpsc::UnboundedReceiver<RouteChange>,
+            index_changes_rx: mpsc::UnboundedReceiver<IndexChange>,
         ) -> Arc<AtomicUsize> {
             let taken_in_count = Arc::new(AtomicUsize::new(0));
             let backlog_queue = BacklogQueue {
@@ -6471,7 +6468,7 @@ mod tests {
             tokio::spawn(GrpcService::block_reconstruction_loop(
                 backlog_queue,
                 broadcast_channels,
-                route_changes_rx,
+                index_changes_rx,
                 relay_tx,
                 None,
                 None,
@@ -6481,25 +6478,25 @@ mod tests {
             taken_in_count
         }
 
-        /// The broadcast channels, with routing on when `routed`.
+        /// The broadcast channels, with indexing on when `is_indexed`.
         ///
         /// # Arguments
         ///
-        /// * `routed` - Whether clients with route keys join a route, with an index slice at the
-        ///   top of each pass while index work waits. Otherwise each client reads the broadcast
+        /// * `is_indexed` - Whether clients with index keys join the index, with an index slice at
+        ///   the top of each pass while index work waits. Otherwise each client reads the broadcast
         ///   and filters every batch itself.
         ///
         /// # Returns
         ///
-        /// The channels, and the route change receiver of block reconstruction, which gets
-        /// nothing when routing is off.
+        /// The channels, and the index change receiver of block reconstruction, which gets
+        /// nothing when indexing is off.
         fn backlog_channels(
-            routed: bool,
-        ) -> (SubscriberChannels, mpsc::UnboundedReceiver<RouteChange>) {
+            is_indexed: bool,
+        ) -> (SubscriberChannels, mpsc::UnboundedReceiver<IndexChange>) {
             let broadcast_channels = SubscriberChannels::new(1024, 1024, 1024);
-            if routed {
+            if is_indexed {
                 let (broadcast_channels, [_, reconstruction_changes_rx]) =
-                    broadcast_channels.with_routing(STEP_EVERY_PASS_LIMITS);
+                    broadcast_channels.with_indexing(STEP_EVERY_PASS_LIMITS);
                 (broadcast_channels, reconstruction_changes_rx)
             } else {
                 (broadcast_channels, mpsc::unbounded_channel().1)
@@ -6511,7 +6508,7 @@ mod tests {
         ///
         /// # Arguments
         ///
-        /// * `broadcast_channels` - The channels, with the owners' route change senders.
+        /// * `broadcast_channels` - The channels, with the owners' index change senders.
         /// * `subscriber_id` - The client's subscriber id.
         /// * `queue_capacity` - The capacity of the client's Subscribe queue.
         /// * `client_filter` - The client's first filter.
@@ -6653,7 +6650,7 @@ mod tests {
         ///
         /// # Arguments
         ///
-        /// * `routed` - Whether the client joins a route or reads the broadcast.
+        /// * `is_indexed` - Whether the client joins the index or reads the broadcast.
         /// * `subscriber_id` - The client's subscriber id.
         ///
         /// # Returns
@@ -6662,10 +6659,10 @@ mod tests {
         ///
         /// # Panics
         ///
-        /// Panics if a routed client still holds its receiver once the last bank is confirmed,
+        /// Panics if an indexed client still holds its receiver once the last bank is confirmed,
         /// or as [`read_stepped_updates`] does.
-        async fn subscribe_behind_backlog(routed: bool, subscriber_id: &str) -> SteppedUpdates {
-            let (broadcast_channels, route_changes_rx) = backlog_channels(routed);
+        async fn subscribe_behind_backlog(is_indexed: bool, subscriber_id: &str) -> SteppedUpdates {
+            let (broadcast_channels, index_changes_rx) = backlog_channels(is_indexed);
             let (queue_tx, queue_rx) = mpsc::unbounded_channel();
             for handed_over_item in BACKLOG_SLOTS.flat_map(handed_over_items) {
                 queue_tx.send(handed_over_item).unwrap();
@@ -6677,11 +6674,11 @@ mod tests {
             settle().await;
             let reconstruction_channels = broadcast_channels.clone();
             let taken_in_count =
-                spawn_reconstruction_behind(queue_rx, reconstruction_channels, route_changes_rx);
+                spawn_reconstruction_behind(queue_rx, reconstruction_channels, index_changes_rx);
             let last_slot = BACKLOG_SLOTS.end - 1;
             let stepped_updates =
                 read_stepped_updates(&mut stream_rx, &taken_in_count, last_slot).await;
-            if routed {
+            if is_indexed {
                 let confirmed_sender = broadcast_channels.sender(CommitmentLevel::Confirmed);
                 assert_eq!(
                     confirmed_sender.receiver_count(),
@@ -6694,24 +6691,24 @@ mod tests {
             stepped_updates
         }
 
-        /// A confirmed client with a queue of 8 joins its route while block reconstruction has
+        /// A confirmed client with a queue of 8 joins the index while block reconstruction has
         /// 16 updates for it queued. Block reconstruction answers its preparation in the first
         /// pass, and takes its hand-over in before it sends anything at confirmed. So the client
-        /// gets each bank through its route as block reconstruction takes it in, as its twin on
-        /// the broadcast does, and its queue never fills.
+        /// gets each bank through its indexed subscriber as block reconstruction takes it in, as
+        /// its twin on the broadcast does, and its queue never fills.
         ///
         /// ```text
         /// items taken:  0         1      4     8     12    16
         /// twin:                          b20   b21   b22   b23
-        /// routed:       Prepare   Join   b20   b21   b22   b23
+        /// indexed:      Prepare   Join   b20   b21   b22   b23
         ///
         /// bN = bank N's CreatedBank, transaction, Processed and Confirmed, which block
         ///      reconstruction sends at confirmed when it takes in the bank's fourth item
         /// ```
         #[tokio::test]
-        async fn a_routed_client_behind_a_backlog_keeps_up_as_its_twin_does() {
+        async fn an_indexed_client_behind_a_backlog_keeps_up_as_its_twin_does() {
             const SUBSCRIBER_ID: &str = "keeps-up";
-            let routed_updates = subscribe_behind_backlog(true, SUBSCRIBER_ID).await;
+            let indexed_updates = subscribe_behind_backlog(true, SUBSCRIBER_ID).await;
             let twin_updates = subscribe_behind_backlog(false, "keeps-up-twin").await;
             assert_eq!(
                 update_names(&twin_updates),
@@ -6721,20 +6718,20 @@ mod tests {
                 update_steps(&twin_updates),
                 [4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12, 16, 16, 16, 16]
             );
-            assert_eq!(routed_updates, twin_updates);
+            assert_eq!(indexed_updates, twin_updates);
             assert_eq!(
                 metrics::client_disconnect_count(SUBSCRIBER_ID, "client_channel_full"),
                 0
             );
         }
 
-        /// Block reconstruction takes in at most 64 queued route changes per pass, and waits
+        /// Block reconstruction takes in at most 64 queued index changes per pass, and waits
         /// neither for the queue to read empty nor for tokio's budget: of 1,000 leaves queued
         /// behind a backlog, 64 are answered before it takes in its first item, and 64 more
         /// before each next item.
         #[tokio::test]
-        async fn block_reconstruction_takes_in_at_most_64_route_changes_per_pass() {
-            let (broadcast_channels, route_changes_rx) = backlog_channels(true);
+        async fn block_reconstruction_takes_in_at_most_64_index_changes_per_pass() {
+            let (broadcast_channels, index_changes_rx) = backlog_channels(true);
             let (queue_tx, queue_rx) = mpsc::unbounded_channel();
             for handed_over_item in BACKLOG_SLOTS.flat_map(handed_over_items) {
                 queue_tx.send(handed_over_item).unwrap();
@@ -6743,17 +6740,17 @@ mod tests {
             let mut answer_rxs: Vec<_> = (0..1000)
                 .map(|session_id| {
                     let (answer_tx, answer_rx) = oneshot::channel();
-                    let client_leave = RouteLeave {
+                    let client_leave = IndexLeave {
                         session_id,
                         receiver_request: Some((commitment_level, answer_tx)),
                     };
-                    let route_change = RouteChange::Leave(client_leave);
-                    broadcast_channels.send_route_change(commitment_level, route_change);
+                    let index_change = IndexChange::Leave(client_leave);
+                    broadcast_channels.send_index_change(commitment_level, index_change);
                     answer_rx
                 })
                 .collect();
             let taken_in_count =
-                spawn_reconstruction_behind(queue_rx, broadcast_channels, route_changes_rx);
+                spawn_reconstruction_behind(queue_rx, broadcast_channels, index_changes_rx);
             let mut answered_count = 0;
             let mut answered_by_taken_in = Vec::new();
             while answered_count < answer_rxs.len() {
@@ -6779,20 +6776,25 @@ mod tests {
         ///
         /// # Arguments
         ///
-        /// * `route_keys` - The route's key list.
+        /// * `index_keys` - The indexed subscriber's key list.
         ///
         /// # Returns
         ///
-        /// The route change, and the receiver the owner answers on.
+        /// The index change, and the receiver the owner answers on.
         fn confirmed_preparation(
-            route_keys: &Arc<[RouteKey]>,
-        ) -> (RouteChange, oneshot::Receiver<()>) {
+            index_keys: &Arc<[IndexKey]>,
+        ) -> (IndexChange, oneshot::Receiver<()>) {
             let (stream_tx, _stream_rx) = load_aware_channel(16, WeightScales::default());
-            let route_template = Route::new(1, "test", &stream_tx, &CancellationToken::new());
+            let subscriber_template =
+                IndexedSubscriber::new(1, "test", &stream_tx, &CancellationToken::new());
             let confirmed_filter = Arc::new(create_filter(CommitmentLevelProto::Confirmed));
-            let prepared_route = route_template.with_filter(&confirmed_filter, route_keys);
+            let prepared_subscriber =
+                subscriber_template.with_filter(&confirmed_filter, index_keys);
             let (ready_tx, ready_rx) = oneshot::channel();
-            (RouteChange::Prepare(prepared_route, ready_tx), ready_rx)
+            (
+                IndexChange::Prepare(prepared_subscriber, ready_tx),
+                ready_rx,
+            )
         }
 
         /// Starts block reconstruction alone on `queue_rx`, with no replay channel.
@@ -6801,7 +6803,7 @@ mod tests {
         ///
         /// * `queue_rx` - What geyser_loop hands over.
         /// * `broadcast_channels` - The channels block reconstruction sends on.
-        /// * `route_changes_rx` - Block reconstruction's route changes.
+        /// * `index_changes_rx` - Block reconstruction's index changes.
         /// * `relay_tx` - The relay the test reads in geyser_loop's place.
         ///
         /// # Returns
@@ -6810,13 +6812,13 @@ mod tests {
         fn spawn_reconstruction_alone(
             queue_rx: mpsc::UnboundedReceiver<BlockReconstructionMessage>,
             broadcast_channels: SubscriberChannels,
-            route_changes_rx: mpsc::UnboundedReceiver<RouteChange>,
+            index_changes_rx: mpsc::UnboundedReceiver<IndexChange>,
             relay_tx: mpsc::UnboundedSender<RelayedItem>,
         ) -> tokio::task::JoinHandle<()> {
             tokio::spawn(GrpcService::block_reconstruction_loop(
                 BatchStreamUnboundedReceiver::new(queue_rx),
                 broadcast_channels,
-                route_changes_rx,
+                index_changes_rx,
                 relay_tx,
                 None,
                 None,
@@ -6867,7 +6869,7 @@ mod tests {
         #[tokio::test]
         async fn a_pass_that_seals_a_bank_at_processed_relays_before_its_confirmed_sends() {
             let (broadcast_channels, [_, reconstruction_changes_rx]) =
-                SubscriberChannels::new(1024, 1024, 1024).with_routing(RouteIndexLimits::default());
+                SubscriberChannels::new(1024, 1024, 1024).with_indexing(IndexWorkLimits::default());
             let confirmed_rx = broadcast_channels.subscribe(CommitmentLevel::Confirmed);
             let (relay_tx, mut relay_rx) = mpsc::unbounded_channel();
             // Spawned first, so it waits on the relay before block reconstruction runs.
@@ -6907,7 +6909,7 @@ mod tests {
         #[tokio::test]
         async fn a_pass_that_only_confirms_a_bank_relays_after_its_confirmed_sends() {
             let (broadcast_channels, [_, reconstruction_changes_rx]) =
-                SubscriberChannels::new(1024, 1024, 1024).with_routing(RouteIndexLimits::default());
+                SubscriberChannels::new(1024, 1024, 1024).with_indexing(IndexWorkLimits::default());
             let confirmed_rx = broadcast_channels.subscribe(CommitmentLevel::Confirmed);
             let (relay_tx, mut relay_rx) = mpsc::unbounded_channel();
             let (queue_tx, queue_rx) = mpsc::unbounded_channel();
@@ -6949,7 +6951,7 @@ mod tests {
         }
 
         /// Block reconstruction lets geyser_loop run right after a pass that relayed to it, before
-        /// it takes in another route change. Of 65 queued leaves, 64 go in at the top of the pass
+        /// it takes in another index change. Of 65 queued leaves, 64 go in at the top of the pass
         /// that seals bank 20 and relays. The last, with a receiver request, is still unanswered
         /// when a task in geyser_loop's place reads the relay. The test body is the runtime's
         /// `block_on` future, which runs only once no task is ready, so a spawned task reads it.
@@ -6961,22 +6963,22 @@ mod tests {
         #[tokio::test]
         async fn block_reconstruction_lets_geyser_loop_run_right_after_it_relays() {
             let (broadcast_channels, [_, reconstruction_changes_rx]) =
-                SubscriberChannels::new(1024, 1024, 1024).with_routing(RouteIndexLimits::default());
+                SubscriberChannels::new(1024, 1024, 1024).with_indexing(IndexWorkLimits::default());
             let commitment_level = CommitmentLevel::Confirmed;
-            for session_id in 0..MAX_ROUTE_CHANGES_PER_PASS {
-                let client_leave = RouteLeave {
+            for session_id in 0..MAX_INDEX_CHANGES_PER_PASS {
+                let client_leave = IndexLeave {
                     session_id,
                     receiver_request: None,
                 };
-                let route_change = RouteChange::Leave(client_leave);
-                broadcast_channels.send_route_change(commitment_level, route_change);
+                let index_change = IndexChange::Leave(client_leave);
+                broadcast_channels.send_index_change(commitment_level, index_change);
             }
             let (answer_tx, mut answer_rx) = oneshot::channel();
-            let last_leave = RouteLeave {
-                session_id: MAX_ROUTE_CHANGES_PER_PASS,
+            let last_leave = IndexLeave {
+                session_id: MAX_INDEX_CHANGES_PER_PASS,
                 receiver_request: Some((commitment_level, answer_tx)),
             };
-            broadcast_channels.send_route_change(commitment_level, RouteChange::Leave(last_leave));
+            broadcast_channels.send_index_change(commitment_level, IndexChange::Leave(last_leave));
             let (queue_tx, queue_rx) = mpsc::unbounded_channel();
             for handed_over_item in handed_over_items(20) {
                 queue_tx.send(handed_over_item).unwrap();
@@ -7026,7 +7028,7 @@ mod tests {
         #[tokio::test]
         async fn a_pass_that_relays_at_its_end_lets_geyser_loop_run_before_the_next_pass() {
             let (broadcast_channels, [_, reconstruction_changes_rx]) =
-                SubscriberChannels::new(1024, 1024, 1024).with_routing(RouteIndexLimits::default());
+                SubscriberChannels::new(1024, 1024, 1024).with_indexing(IndexWorkLimits::default());
             let (relay_tx, mut relay_rx) = mpsc::unbounded_channel();
             let (queue_tx, queue_rx) = mpsc::unbounded_channel();
             let mut handed_over_items = handed_over_items(20);
@@ -7046,12 +7048,12 @@ mod tests {
             }
             settle().await;
             let (answer_tx, mut answer_rx) = oneshot::channel();
-            let client_leave = RouteLeave {
+            let client_leave = IndexLeave {
                 session_id: 1,
                 receiver_request: Some((CommitmentLevel::Confirmed, answer_tx)),
             };
-            let route_change = RouteChange::Leave(client_leave);
-            broadcast_channels.send_route_change(CommitmentLevel::Confirmed, route_change);
+            let index_change = IndexChange::Leave(client_leave);
+            broadcast_channels.send_index_change(CommitmentLevel::Confirmed, index_change);
             let relay_reader_handle = tokio::spawn(async move {
                 let relayed_item = relay_rx.recv().await;
                 let answer_at_relay_read = answer_rx.try_recv();
@@ -7086,7 +7088,7 @@ mod tests {
         async fn a_replay_takes_in_the_whole_queue_while_index_work_waits() {
             const QUEUED_TRANSACTION_COUNT: u32 = 20_000;
             let (broadcast_channels, [_, reconstruction_changes_rx]) =
-                SubscriberChannels::new(1, 1, 1).with_routing(RouteIndexLimits::default());
+                SubscriberChannels::new(1, 1, 1).with_indexing(IndexWorkLimits::default());
             let (queue_tx, queue_rx) = mpsc::unbounded_channel();
             let (replay_tx, replay_rx) = mpsc::channel(1);
             let (relay_tx, mut relay_rx) = mpsc::unbounded_channel();
@@ -7113,12 +7115,12 @@ mod tests {
                     ))
                     .unwrap();
             }
-            let mut route_keys = (0..8192)
-                .map(|_| RouteKey::Account(Pubkey::new_unique()))
+            let mut index_keys = (0..8192)
+                .map(|_| IndexKey::Account(Pubkey::new_unique()))
                 .collect::<Vec<_>>();
-            route_keys.sort_unstable();
-            let (route_change, mut ready_rx) = confirmed_preparation(&route_keys.into());
-            broadcast_channels.send_route_change(CommitmentLevel::Confirmed, route_change);
+            index_keys.sort_unstable();
+            let (index_change, mut ready_rx) = confirmed_preparation(&index_keys.into());
+            broadcast_channels.send_index_change(CommitmentLevel::Confirmed, index_change);
             let (response_tx, _response_rx) = oneshot::channel();
             replay_tx
                 .send((CommitmentLevel::Processed, PARTIAL_SLOT, response_tx))
@@ -7187,9 +7189,9 @@ mod tests {
         #[tokio::test(start_paused = true)]
         async fn block_reconstruction_runs_one_idle_index_slice_per_slice_interval() {
             let (broadcast_channels, [_, reconstruction_changes_rx]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(ONE_KEY_PER_MILLISECOND_LIMITS);
-            let (route_change, ready_rx) = confirmed_preparation(&unmatched_account_keys(4));
-            broadcast_channels.send_route_change(CommitmentLevel::Confirmed, route_change);
+                SubscriberChannels::new(16, 16, 16).with_indexing(ONE_KEY_PER_MILLISECOND_LIMITS);
+            let (index_change, ready_rx) = confirmed_preparation(&unmatched_account_keys(4));
+            broadcast_channels.send_index_change(CommitmentLevel::Confirmed, index_change);
             let (queue_tx, queue_rx) = mpsc::unbounded_channel();
             let started_at = tokio::time::Instant::now();
             spawn_reconstruction_behind(queue_rx, broadcast_channels, reconstruction_changes_rx);
@@ -7202,12 +7204,12 @@ mod tests {
         }
 
         /// Block reconstruction wakes for its index slice timer only while index work waits:
-        /// with no route change, a second passes with one read of its queue, and once a
+        /// with no index change, a second passes with one read of its queue, and once a
         /// preparation is answered, the timer wakes it at most once more.
         #[tokio::test(start_paused = true)]
         async fn block_reconstruction_wakes_for_its_timer_only_while_index_work_waits() {
             let (broadcast_channels, [_, reconstruction_changes_rx]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(RouteIndexLimits::default());
+                SubscriberChannels::new(16, 16, 16).with_indexing(IndexWorkLimits::default());
             let (queue_tx, queue_rx) = mpsc::unbounded_channel();
             let read_count = Arc::new(AtomicUsize::new(0));
             let read_counting_queue = ReadCountingQueue {
@@ -7226,8 +7228,8 @@ mod tests {
             ));
             tokio::time::sleep(Duration::from_secs(1)).await;
             assert_eq!(read_count.load(Ordering::Relaxed), 1);
-            let (route_change, ready_rx) = confirmed_preparation(&unmatched_account_keys(1));
-            broadcast_channels.send_route_change(CommitmentLevel::Confirmed, route_change);
+            let (index_change, ready_rx) = confirmed_preparation(&unmatched_account_keys(1));
+            broadcast_channels.send_index_change(CommitmentLevel::Confirmed, index_change);
             tokio::time::timeout(Duration::from_secs(5), ready_rx)
                 .await
                 .expect("an idle slice answers the preparation")
@@ -7245,9 +7247,9 @@ mod tests {
         async fn block_reconstruction_runs_an_overdue_index_slice_behind_a_backlog() {
             const BACKLOG_TRANSACTION_COUNT: u8 = 40;
             let (broadcast_channels, [_, reconstruction_changes_rx]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(RouteIndexLimits::default());
-            let (route_change, mut ready_rx) = confirmed_preparation(&unmatched_account_keys(1));
-            broadcast_channels.send_route_change(CommitmentLevel::Confirmed, route_change);
+                SubscriberChannels::new(16, 16, 16).with_indexing(IndexWorkLimits::default());
+            let (index_change, mut ready_rx) = confirmed_preparation(&unmatched_account_keys(1));
+            broadcast_channels.send_index_change(CommitmentLevel::Confirmed, index_change);
             let (queue_tx, queue_rx) = mpsc::unbounded_channel();
             let open_slot_batch = Arc::new(open_slot(PARTIAL_SLOT));
             queue_tx
@@ -7283,20 +7285,20 @@ mod tests {
             drop(queue_tx);
         }
 
-        /// A routed confirmed client ends while block reconstruction is behind. Its last Leave
-        /// lands at the top of the next pass and drops the route's queue sender, so the stream
-        /// ends there, and nothing is routed to the client after it ended.
+        /// An indexed confirmed client ends while block reconstruction is behind. Its last Leave
+        /// lands at the top of the next pass and drops the indexed subscriber's queue sender, so
+        /// the stream ends there, and nothing is indexed to the client after it ended.
         ///
         /// ```text
         /// items taken:  0             1
         /// client:       ends          stream ends
         /// ```
         #[tokio::test]
-        async fn a_routed_client_that_ends_behind_a_backlog_ends_its_stream_at_the_next_pass() {
-            let (broadcast_channels, route_changes_rx) = backlog_channels(true);
+        async fn an_indexed_client_that_ends_behind_a_backlog_ends_its_stream_at_the_next_pass() {
+            let (broadcast_channels, index_changes_rx) = backlog_channels(true);
             let (queue_tx, queue_rx) = mpsc::unbounded_channel();
             let taken_in_count =
-                spawn_reconstruction_behind(queue_rx, broadcast_channels.clone(), route_changes_rx);
+                spawn_reconstruction_behind(queue_rx, broadcast_channels.clone(), index_changes_rx);
             let client_filter = create_filter(CommitmentLevelProto::Confirmed);
             let (client_tx, mut stream_rx) =
                 spawn_backlog_client(broadcast_channels.clone(), "ends", 1024, client_filter);
@@ -7344,7 +7346,7 @@ mod tests {
                         handed_over_slots += 1;
                     }
                     for sealed_bank in block_machine.drain_sealed_banks() {
-                        bank_thread.index_route_keys(sealed_bank);
+                        bank_thread.build_key_index(sealed_bank);
                     }
                 });
                 assert_eq!(allocator_calls, 0, "slot {bank_slot}");
@@ -7359,7 +7361,7 @@ mod tests {
                     .all(
                         |(bank_number, finalized_bank)| match finalized_bank.upgrade() {
                             Some(kept_bank) => {
-                                bank_number >= 6 && kept_bank.route_key_index().is_some()
+                                bank_number >= 6 && kept_bank.bank_key_index().is_some()
                             }
                             None => bank_number < 6,
                         },
@@ -7376,7 +7378,7 @@ mod tests {
             assert!(kept_banks.eq([false; 6].into_iter().chain([true; 10])));
             let kept_banks_indexed = finalized_banks[6..].iter().all(|finalized_bank| {
                 let kept_bank = finalized_bank.upgrade().expect("a kept bank");
-                kept_bank.route_key_index().is_some()
+                kept_bank.bank_key_index().is_some()
             });
             assert!(kept_banks_indexed);
         }
@@ -7431,7 +7433,7 @@ mod tests {
                 let (bank_thread, mut bank_thread_handle) = BankThread::spawn().unwrap();
                 bank_thread_handle.signal_stop();
                 for sealed_bank in &sealed_banks {
-                    bank_thread.index_route_keys(Arc::clone(sealed_bank));
+                    bank_thread.build_key_index(Arc::clone(sealed_bank));
                 }
                 // Joined on a thread of its own, so a thread that ignores its stop fails the test.
                 let (joined_tx, joined_rx) = std::sync::mpsc::channel();
@@ -7444,25 +7446,25 @@ mod tests {
                 // until the sender drops.
                 drop(bank_thread);
                 for sealed_bank in &sealed_banks {
-                    assert!(sealed_bank.route_key_index().is_none());
+                    assert!(sealed_bank.bank_key_index().is_none());
                     assert_eq!(Arc::strong_count(sealed_bank), 1);
                 }
             }
         }
 
-        /// A routed replay makes no allocator call per message it scans: a replay that scans
+        /// An indexed replay makes no allocator call per message it scans: a replay that scans
         /// 65,536 messages without an update makes as many allocator calls as one that scans
         /// 32,768, over twice the polls. Each replay has one update and runs from the client's
         /// request to its end, after a first replay that warms the runtime up.
         #[test]
-        fn a_routed_replay_scans_messages_without_an_update_without_allocating() {
+        fn an_indexed_replay_scans_messages_without_an_update_without_allocating() {
             let replay_runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
             let replay_allocator_calls = |messages_without_update: usize| {
-                let (subscriber_channels, _route_changes_rxs) =
-                    SubscriberChannels::new(16, 16, 16).with_routing(RouteIndexLimits::default());
+                let (subscriber_channels, _index_changes_rxs) =
+                    SubscriberChannels::new(16, 16, 16).with_indexing(IndexWorkLimits::default());
                 let (replayed_items, client_filter) =
                     unindexed_bank_replay(1, messages_without_update);
                 allocator_calls_during(|| {
@@ -7481,7 +7483,7 @@ mod tests {
         }
     }
 
-    mod geyser_loop_routing {
+    mod geyser_loop_indexing {
         use {
             super::{
                 super::*, answer_replay, settle, spawn_test_bank_thread, unmatched_account_keys,
@@ -7498,7 +7500,7 @@ mod tests {
                         MessageDeshredTransactionInfo, MessageSlot, SlotStatus,
                     },
                 },
-                route::{tests::STEP_EVERY_PASS_LIMITS, Route},
+                reverse_index::{tests::STEP_EVERY_PASS_LIMITS, IndexedSubscriber},
                 stream::tokio::BatchStreamUnboundedReceiver,
             },
             foldhash::{HashSet as FoldHashSet, HashSetExt as _},
@@ -7516,7 +7518,7 @@ mod tests {
             },
         };
 
-        /// The geyser_loop and block reconstruction tasks, spawned with routing on, and the
+        /// The geyser_loop and block reconstruction tasks, spawned with indexing on, and the
         /// channels a test drives them through.
         ///
         /// # Examples
@@ -7537,7 +7539,7 @@ mod tests {
             deshred_rx: broadcast::Receiver<DeshredBroadcastedMessage>,
             handle: tokio::task::JoinHandle<()>,
             handle_reconstruction: tokio::task::JoinHandle<()>,
-            /// The broadcast channels the loops send on, with routing on.
+            /// The broadcast channels the loops send on, with indexing on.
             broadcast_channels: SubscriberChannels,
             /// The session id that [`Harness::spawn_client`] gave last.
             last_session_id: usize,
@@ -7567,15 +7569,15 @@ mod tests {
             ///
             /// # Returns
             ///
-            /// The channel's receiver count. A routed client holds no receiver.
+            /// The channel's receiver count. An indexed client holds no receiver.
             fn receiver_count(&self, commitment_level: CommitmentLevel) -> usize {
                 self.broadcast_channels
                     .sender(commitment_level)
                     .receiver_count()
             }
 
-            /// How many receivers each broadcast channel has. Once every client with route keys
-            /// is routed, only the clients on the broadcast hold one.
+            /// How many receivers each broadcast channel has. Once every client with index keys
+            /// is indexed, only the clients on the broadcast hold one.
             ///
             /// # Returns
             ///
@@ -7611,7 +7613,7 @@ mod tests {
         ///
         /// # Arguments
         ///
-        /// * `broadcast_channels` - The channels the client subscribes to and sends its route
+        /// * `broadcast_channels` - The channels the client subscribes to and sends its index
         ///   changes on.
         /// * `session_id` - The client's session id.
         /// * `client_filter` - The client's first filter.
@@ -7651,7 +7653,7 @@ mod tests {
             spawn_loop_with_replay(None)
         }
 
-        /// Spawns geyser_loop and block reconstruction with routing on, and an index slice at
+        /// Spawns geyser_loop and block reconstruction with indexing on, and an index slice at
         /// the top of each pass while index work waits.
         ///
         /// # Arguments
@@ -7667,25 +7669,25 @@ mod tests {
             spawn_loop_with(replay_rx, STEP_EVERY_PASS_LIMITS)
         }
 
-        /// Spawns geyser_loop and block reconstruction with routing on.
+        /// Spawns geyser_loop and block reconstruction with indexing on.
         ///
         /// # Arguments
         ///
         /// * `replay_rx` - Block reconstruction's replay requests, or [`None`] when replay is off.
-        /// * `route_index_limits` - How much index work each owner does, and how often.
+        /// * `index_work_limits` - How much index work each owner does, and how often.
         ///
         /// # Returns
         ///
         /// The [`Harness`] that drives the two loops.
         fn spawn_loop_with(
             replay_rx: Option<mpsc::Receiver<ReplayStoredSlotsRequest>>,
-            route_index_limits: RouteIndexLimits,
+            index_work_limits: IndexWorkLimits,
         ) -> Harness {
             let (messages_tx, messages_rx) = mpsc::unbounded_channel();
             let (block_reconstruction_tx, block_reconstruction_rx) = mpsc::unbounded_channel();
             let (relay_tx, relay_rx) = mpsc::unbounded_channel();
             let (broadcast, [geyser_loop_changes_rx, reconstruction_changes_rx]) =
-                SubscriberChannels::new(1024, 1024, 1024).with_routing(route_index_limits);
+                SubscriberChannels::new(1024, 1024, 1024).with_indexing(index_work_limits);
             let broadcast_rx = broadcast.subscribe(CommitmentLevel::Processed);
             let (deshred_tx, deshred_rx) = broadcast::channel(1024);
             let messages_rx = BatchStreamUnboundedReceiver::new(messages_rx);
@@ -8013,7 +8015,7 @@ mod tests {
         async fn indexed_sealed_bank_parts(
             replay_tx: &mpsc::Sender<ReplayStoredSlotsRequest>,
             from_slot: u64,
-        ) -> Vec<(Arc<Vec<Message>>, Range<usize>, Arc<BankRouteKeyIndex>)> {
+        ) -> Vec<(Arc<Vec<Message>>, Range<usize>, Arc<BankKeyIndex>)> {
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
                     let (response_tx, response_rx) = oneshot::channel();
@@ -8031,8 +8033,8 @@ mod tests {
                             ReplayResponseMessageType::SealedBank(
                                 bank_messages,
                                 bank_range,
-                                Some(route_key_index),
-                            ) => Some((bank_messages, bank_range, route_key_index)),
+                                Some(bank_key_index),
+                            ) => Some((bank_messages, bank_range, bank_key_index)),
                             _ => None,
                         })
                         .collect();
@@ -8043,14 +8045,14 @@ mod tests {
                 }
             })
             .await
-            .expect("no replay held the bank with its route key index")
+            .expect("no replay held the bank with its bank key index")
         }
 
         /// A replay holds a sealed bank as two [`ReplayResponseMessageType::SealedBank`] parts
         /// around its CreatedBank, and once the bank thread has indexed the bank, both parts
-        /// carry the one index, which finds the bank's entry under [`RouteKey::Entries`].
+        /// carry the one index, which finds the bank's entry under [`IndexKey::Entries`].
         #[tokio::test]
-        async fn block_reconstruction_hands_a_replay_each_sealed_bank_with_its_route_key_index() {
+        async fn block_reconstruction_hands_a_replay_each_sealed_bank_with_its_bank_key_index() {
             let (replay_tx, replay_rx) = mpsc::channel(1);
             let mut replay_harness = spawn_loop_with_replay(Some(replay_rx));
             let mut bank_messages = sealed_bank(10, 2);
@@ -8072,10 +8074,10 @@ mod tests {
                 .iter()
                 .position(|bank_message| matches!(bank_message, Message::Entry(_)))
                 .expect("the bank's entry");
-            let entries_route_key_hash = BankRouteKeyIndex::route_key_hash(&RouteKey::Entries);
+            let entries_index_key_hash = BankKeyIndex::index_key_hash(&IndexKey::Entries);
             let mut candidate_positions = Vec::new();
             first_index
-                .collect_candidate_positions(&[entries_route_key_hash], &mut candidate_positions);
+                .collect_candidate_positions(&[entries_index_key_hash], &mut candidate_positions);
             assert_eq!(candidate_positions, [entry_position as u32]);
 
             drop(replay_harness.messages_tx);
@@ -8084,11 +8086,11 @@ mod tests {
             let _ = tokio::time::timeout(Duration::from_secs(1), reconstruction_handle).await;
         }
 
-        /// A routed client replays a bank that the bank thread has indexed. It gets what its twin
+        /// An indexed client replays a bank that the bank thread has indexed. It gets what its twin
         /// gets: one of the bank's four accounts and its entry, between the bank's statuses. The
-        /// twin has no route keys, so its replay scans the whole bank.
+        /// twin has no index keys, so its replay scans the whole bank.
         #[tokio::test]
-        async fn a_routed_replay_of_an_indexed_bank_gets_what_its_full_scan_twin_gets() {
+        async fn an_indexed_replay_of_an_indexed_bank_gets_what_its_full_scan_twin_gets() {
             let (replay_tx, replay_rx) = mpsc::channel(1);
             let mut replay_harness = spawn_loop_with_replay(Some(replay_rx));
             let mut bank_messages = sealed_bank(10, 2);
@@ -8105,14 +8107,14 @@ mod tests {
             let mut subscribe_request = accounts_request(&[found_pubkey], &[]);
             subscribe_request.slots = HashMap::from([("s".into(), slots_filter)]);
             subscribe_request.entry = HashMap::from([("e".into(), Default::default())]);
-            let routed_filter = fixtures::filter_from_request(&subscribe_request);
+            let indexed_filter = fixtures::filter_from_request(&subscribe_request);
             subscribe_request.transactions = HashMap::from([("t".into(), Default::default())]);
             let full_scan_filter = fixtures::filter_from_request(&subscribe_request);
-            assert!(routed_filter.route_keys().is_some());
-            assert!(full_scan_filter.route_keys().is_none());
+            assert!(indexed_filter.index_keys().is_some());
+            assert!(full_scan_filter.index_keys().is_none());
 
             let mut replayed_streams = Vec::new();
-            for (session_id, client_filter) in [(1, routed_filter), (2, full_scan_filter)] {
+            for (session_id, client_filter) in [(1, indexed_filter), (2, full_scan_filter)] {
                 let client_session = ClientSession::new(
                     session_id,
                     Some("test".into()),
@@ -8152,9 +8154,9 @@ mod tests {
                     })
                     .collect()
             };
-            let [routed_names, full_scan_names] = [&replayed_streams[0], &replayed_streams[1]]
+            let [indexed_names, full_scan_names] = [&replayed_streams[0], &replayed_streams[1]]
                 .map(|replayed_updates| update_names(replayed_updates));
-            assert_eq!(routed_names, full_scan_names);
+            assert_eq!(indexed_names, full_scan_names);
             let found_account_name = format!("account {found_pubkey}");
             let expected_names = [
                 "CreatedBank 10",
@@ -8162,7 +8164,7 @@ mod tests {
                 "entry",
                 "Processed 10",
             ];
-            assert_eq!(routed_names, expected_names);
+            assert_eq!(indexed_names, expected_names);
 
             drop(replay_harness.messages_tx);
             let _ = tokio::time::timeout(Duration::from_secs(1), replay_harness.handle).await;
@@ -8364,7 +8366,7 @@ mod tests {
             })
         }
 
-        /// A routed filter at `proto_commitment`, and its twin, which also has a transactions
+        /// An indexed filter at `proto_commitment`, and its twin, which also has a transactions
         /// filter and so stays on the broadcast.
         ///
         /// # Arguments
@@ -8373,7 +8375,7 @@ mod tests {
         ///
         /// # Returns
         ///
-        /// The routed filter, then its twin. Both make the same updates from a stream without
+        /// The indexed filter, then its twin. Both make the same updates from a stream without
         /// transactions.
         fn twin_filters(proto_commitment: CommitmentLevelProto) -> [Filter; 2] {
             let slots_filter = SubscribeRequestFilterSlots {
@@ -8387,10 +8389,10 @@ mod tests {
                 commitment: Some(proto_commitment as i32),
                 ..Default::default()
             };
-            let routed_filter = fixtures::filter_from_request(&subscribe_request);
+            let indexed_filter = fixtures::filter_from_request(&subscribe_request);
             subscribe_request.transactions = HashMap::from([("t".into(), Default::default())]);
             let twin_filter = fixtures::filter_from_request(&subscribe_request);
-            [routed_filter, twin_filter]
+            [indexed_filter, twin_filter]
         }
 
         /// Reads `stream_rx` up to and including the slot update for `last_slot` at
@@ -8466,7 +8468,7 @@ mod tests {
             received_updates.into_iter().map(slot_and_status).collect()
         }
 
-        /// Routed clients at every level, and one that moves from processed to finalized, each
+        /// Indexed clients at every level, and one that moves from processed to finalized, each
         /// get a bank's lifecycle statuses, then its commitment statuses, in order.
         #[tokio::test]
         async fn each_level_gets_the_commitment_statuses_after_the_lifecycle_statuses() {
@@ -8508,22 +8510,22 @@ mod tests {
             }
         }
 
-        /// A client that switches at random between a routed filter and its twin on the
+        /// A client that switches at random between an indexed filter and its twin on the
         /// broadcast gets what a client with the twin filter gets, and so does a client that
-        /// stays routed, at every level.
+        /// stays indexed, at every level.
         #[tokio::test]
-        async fn a_client_switching_between_routed_and_broadcast_gets_what_its_twin_gets() {
+        async fn a_client_switching_between_indexed_and_broadcast_gets_what_its_twin_gets() {
             for rng_seed in 0..30 {
                 let mut seeded_rng = fastrand::Rng::with_seed(rng_seed);
                 let (proto_commitment, _) = LEVEL_STATUSES[rng_seed as usize % 3];
                 let commitment_level = CommitmentLevel::from(proto_commitment);
-                let [routed_filter, twin_filter] = twin_filters(proto_commitment);
+                let [indexed_filter, twin_filter] = twin_filters(proto_commitment);
                 let mut harness = spawn_loop();
                 let initial_receiver_count = harness.receiver_count(commitment_level);
-                let mut compared_clients = [&twin_filter, &routed_filter, &routed_filter]
+                let mut compared_clients = [&twin_filter, &indexed_filter, &indexed_filter]
                     .map(|client_filter| harness.spawn_client(client_filter.clone()));
-                let routed_receiver_count = initial_receiver_count + 1;
-                yield_until(|| harness.receiver_count(commitment_level) == routed_receiver_count)
+                let indexed_receiver_count = initial_receiver_count + 1;
+                yield_until(|| harness.receiver_count(commitment_level) == indexed_receiver_count)
                     .await;
                 assert_eq!(
                     harness.receiver_count(commitment_level),
@@ -8533,7 +8535,7 @@ mod tests {
                 for plugin_message in (10..20).flat_map(finalized_bank) {
                     if seeded_rng.u8(..3) == 0 {
                         let next_filter =
-                            [&routed_filter, &twin_filter][seeded_rng.usize(..2)].clone();
+                            [&indexed_filter, &twin_filter][seeded_rng.usize(..2)].clone();
                         switching_client_tx.send(Ok((None, next_filter))).unwrap();
                     }
                     harness.send_messages([plugin_message]);
@@ -8559,38 +8561,39 @@ mod tests {
             }
         }
 
-        /// A routed client whose later request repeats its filter with a `from_slot` replaces
-        /// its route's filter in place, keeps the key list, and leaves nothing.
+        /// An indexed client whose later request repeats its filter with a `from_slot` replaces
+        /// its indexed subscriber's filter in place, keeps the key list, and leaves nothing.
         #[tokio::test]
-        async fn a_routed_client_ignores_a_later_from_slot_and_keeps_its_route() {
+        async fn an_indexed_client_ignores_a_later_from_slot_and_stays_indexed() {
             let (broadcast_channels, [mut spied_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(STEP_EVERY_PASS_LIMITS);
-            let mut spy_owner = OwnerRoutes::new(broadcast_channels.clone());
+                SubscriberChannels::new(16, 16, 16).with_indexing(STEP_EVERY_PASS_LIMITS);
+            let mut spy_owner = OwnerIndexes::new(broadcast_channels.clone());
             let (client_tx, _stream_rx) =
                 super::spawn_client_loop(broadcast_channels, CancellationToken::new());
-            let routed_request = accounts_request(&[Pubkey::new_unique()], &[]);
-            let routed_filter = || fixtures::filter_from_request(&routed_request);
-            client_tx.send(Ok((None, routed_filter()))).unwrap();
+            let indexed_request = accounts_request(&[Pubkey::new_unique()], &[]);
+            let indexed_filter = || fixtures::filter_from_request(&indexed_request);
+            client_tx.send(Ok((None, indexed_filter()))).unwrap();
             settle().await;
-            let spied_changes = take_in_spied_route_changes(&mut spied_changes_rx, &mut spy_owner);
+            let spied_changes = take_in_spied_index_changes(&mut spied_changes_rx, &mut spy_owner);
             assert_eq!(spied_changes, ["prepare"]);
             run_index_work(&mut spy_owner);
             settle().await;
-            let spied_changes = take_in_spied_route_changes(&mut spied_changes_rx, &mut spy_owner);
+            let spied_changes = take_in_spied_index_changes(&mut spied_changes_rx, &mut spy_owner);
             assert_eq!(spied_changes, ["hand-over"]);
-            client_tx.send(Ok((Some(10), routed_filter()))).unwrap();
+            client_tx.send(Ok((Some(10), indexed_filter()))).unwrap();
             settle().await;
-            let spied_changes = take_in_spied_route_changes(&mut spied_changes_rx, &mut spy_owner);
+            let spied_changes = take_in_spied_index_changes(&mut spied_changes_rx, &mut spy_owner);
             assert_eq!(spied_changes, ["refilter"]);
-            // The refilter keeps the route's key list Arc, so the owner swaps the filter in place.
+            // The refilter keeps the indexed subscriber's key list Arc, so the owner swaps the
+            // filter in place.
             assert!(!spy_owner.has_index_work());
         }
 
-        /// A routed client whose queue fills ends with the status and the disconnect reason of
+        /// An indexed client whose queue fills ends with the status and the disconnect reason of
         /// a full queue.
         #[tokio::test]
-        async fn a_full_routed_client_ends_with_client_channel_full() {
-            const SUBSCRIBER_ID: &str = "full-routed-client";
+        async fn a_full_indexed_client_ends_with_client_channel_full() {
+            const SUBSCRIBER_ID: &str = "full-indexed-client";
             let harness = spawn_loop();
             let base_receiver_counts = harness.receiver_counts();
             let cancellation_token = CancellationToken::new();
@@ -8613,8 +8616,8 @@ mod tests {
                 TaskTracker::new(),
                 None,
             ));
-            let [routed_filter, _] = twin_filters(CommitmentLevelProto::Processed);
-            client_tx.send(Ok((None, routed_filter))).unwrap();
+            let [indexed_filter, _] = twin_filters(CommitmentLevelProto::Processed);
+            client_tx.send(Ok((None, indexed_filter))).unwrap();
             settle().await;
             yield_until(|| harness.receiver_counts() == base_receiver_counts).await;
             harness.send_messages(
@@ -8662,8 +8665,8 @@ mod tests {
         ///
         /// # Arguments
         ///
-        /// * `account_pubkeys` - The accounts the filter lists, which are its route keys.
-        /// * `data_slices` - The request's account data slices, which leave the route keys alone.
+        /// * `account_pubkeys` - The accounts the filter lists, which are its index keys.
+        /// * `data_slices` - The request's account data slices, which leave the index keys alone.
         ///
         /// # Returns
         ///
@@ -8683,7 +8686,7 @@ mod tests {
             }
         }
 
-        /// A routed filter for `account_pubkeys`, and its twin, which also has a transactions
+        /// An indexed filter for `account_pubkeys`, and its twin, which also has a transactions
         /// filter and so stays on the broadcast.
         ///
         /// # Arguments
@@ -8692,14 +8695,14 @@ mod tests {
         ///
         /// # Returns
         ///
-        /// The routed filter, then its twin. Both make the same updates from a stream without
+        /// The indexed filter, then its twin. Both make the same updates from a stream without
         /// transactions.
         fn account_twin_filters(account_pubkeys: &[Pubkey]) -> [Filter; 2] {
             let mut subscribe_request = accounts_request(account_pubkeys, &[]);
-            let routed_filter = fixtures::filter_from_request(&subscribe_request);
+            let indexed_filter = fixtures::filter_from_request(&subscribe_request);
             subscribe_request.transactions = HashMap::from([("t".into(), Default::default())]);
             [
-                routed_filter,
+                indexed_filter,
                 fixtures::filter_from_request(&subscribe_request),
             ]
         }
@@ -8761,38 +8764,38 @@ mod tests {
                 .collect()
         }
 
-        /// Takes in, at `spy_owner`, every route change queued in `spied_changes_rx`, as the
+        /// Takes in, at `spy_owner`, every index change queued in `spied_changes_rx`, as the
         /// owner it stands in for would.
         ///
         /// # Arguments
         ///
-        /// * `spied_changes_rx` - The route change receiver a test holds in place of an owner.
-        /// * `spy_owner` - The routes that stand in for the owner.
+        /// * `spied_changes_rx` - The index change receiver a test holds in place of an owner.
+        /// * `spy_owner` - The indexes that stand in for the owner.
         ///
         /// # Returns
         ///
-        /// The kind of each route change, in order: `prepare`, `hand-over` (a join with a
+        /// The kind of each index change, in order: `prepare`, `hand-over` (a join with a
         /// receiver that reads empty), `hand-over with a backlog`, `refilter` (a join without a
         /// receiver), `leave for a receiver` or `leave`.
-        fn take_in_spied_route_changes(
-            spied_changes_rx: &mut mpsc::UnboundedReceiver<RouteChange>,
-            spy_owner: &mut OwnerRoutes,
+        fn take_in_spied_index_changes(
+            spied_changes_rx: &mut mpsc::UnboundedReceiver<IndexChange>,
+            spy_owner: &mut OwnerIndexes,
         ) -> Vec<&'static str> {
             let mut change_kinds = Vec::new();
-            while let Ok(route_change) = spied_changes_rx.try_recv() {
-                change_kinds.push(match &route_change {
-                    RouteChange::Prepare(..) => "prepare",
-                    RouteChange::Join(_, Some(handed_over_rx)) if handed_over_rx.is_empty() => {
+            while let Ok(index_change) = spied_changes_rx.try_recv() {
+                change_kinds.push(match &index_change {
+                    IndexChange::Prepare(..) => "prepare",
+                    IndexChange::Join(_, Some(handed_over_rx)) if handed_over_rx.is_empty() => {
                         "hand-over"
                     }
-                    RouteChange::Join(_, Some(_)) => "hand-over with a backlog",
-                    RouteChange::Join(_, None) => "refilter",
-                    RouteChange::Leave(client_leave) if client_leave.receiver_request.is_some() => {
+                    IndexChange::Join(_, Some(_)) => "hand-over with a backlog",
+                    IndexChange::Join(_, None) => "refilter",
+                    IndexChange::Leave(client_leave) if client_leave.receiver_request.is_some() => {
                         "leave for a receiver"
                     }
-                    RouteChange::Leave(_) => "leave",
+                    IndexChange::Leave(_) => "leave",
                 });
-                spy_owner.take_route_change(route_change);
+                spy_owner.take_index_change(index_change);
             }
             change_kinds
         }
@@ -8801,42 +8804,42 @@ mod tests {
         ///
         /// # Arguments
         ///
-        /// * `spy_owner` - The routes that stand in for an owner.
-        fn run_index_work(spy_owner: &mut OwnerRoutes) {
+        /// * `spy_owner` - The indexes that stand in for an owner.
+        fn run_index_work(spy_owner: &mut OwnerIndexes) {
             while spy_owner.has_index_work() {
                 spy_owner.run_index_slice();
             }
         }
 
-        /// Forwards the route changes of `route_changes_rx` to geyser_loop in order, and holds
+        /// Forwards the index changes of `index_changes_rx` to geyser_loop in order, and holds
         /// the first hand-over until geyser_loop has broadcast `window_message` into the
         /// handed-over receiver. The owner must then deliver it through the drain.
         ///
         /// # Arguments
         ///
-        /// * `route_changes_rx` - The route changes the clients send to geyser_loop.
+        /// * `index_changes_rx` - The index changes the clients send to geyser_loop.
         /// * `messages_tx` - geyser_loop's plugin messages.
         /// * `window_message` - The message geyser_loop broadcasts while the hand-over waits.
         ///
         /// # Returns
         ///
-        /// The receiver geyser_loop takes the route changes from.
+        /// The receiver geyser_loop takes the index changes from.
         fn hold_the_first_hand_over(
-            mut route_changes_rx: mpsc::UnboundedReceiver<RouteChange>,
+            mut index_changes_rx: mpsc::UnboundedReceiver<IndexChange>,
             messages_tx: mpsc::UnboundedSender<Message>,
             window_message: Message,
-        ) -> mpsc::UnboundedReceiver<RouteChange> {
+        ) -> mpsc::UnboundedReceiver<IndexChange> {
             let (forwarded_changes_tx, forwarded_changes_rx) = mpsc::unbounded_channel();
             tokio::spawn(async move {
                 let mut window_message = Some(window_message);
-                while let Some(route_change) = route_changes_rx.recv().await {
-                    if let RouteChange::Join(_, Some(handed_over_rx)) = &route_change {
+                while let Some(index_change) = index_changes_rx.recv().await {
+                    if let IndexChange::Join(_, Some(handed_over_rx)) = &index_change {
                         if let Some(window_message) = window_message.take() {
                             messages_tx.send(window_message).unwrap();
                             yield_until(|| !handed_over_rx.is_empty()).await;
                         }
                     }
-                    if forwarded_changes_tx.send(route_change).is_err() {
+                    if forwarded_changes_tx.send(index_change).is_err() {
                         return;
                     }
                 }
@@ -8844,7 +8847,7 @@ mod tests {
             forwarded_changes_rx
         }
 
-        /// A client whose filter has 1,000 route keys reads its broadcast while geyser_loop
+        /// A client whose filter has 1,000 index keys reads its broadcast while geyser_loop
         /// claims one key per millisecond. It gets what its twin on the broadcast gets, batch by
         /// batch from the first batch on, and holds its receiver until the owner answers, 999 ms
         /// after the first slice. A batch broadcast between its hand-over and the take-in comes
@@ -8853,13 +8856,13 @@ mod tests {
         /// ```text
         /// time (ms):  0    100  ...  900  999                        1000  ...  1400
         /// receiver:   b0   b1   ...  b9   w, after the Join is sent
-        /// route:                          w, drained at the take-in  b10   ...  b14
+        /// index:                          w, drained at the take-in  b10   ...  b14
         ///
         /// bN = batch N, read by the client itself until the answer
         /// w  = the window batch the test's forwarder holds the hand-over for
         /// ```
         #[tokio::test(start_paused = true)]
-        async fn a_joining_client_reads_its_broadcast_until_its_route_is_prepared() {
+        async fn a_joining_client_reads_its_broadcast_until_it_is_prepared() {
             const ACCOUNT_COUNT: usize = 1000;
             const BATCH_INTERVAL: Duration = Duration::from_millis(100);
             // One key per slice, one slice per millisecond, the first slice at 0 ms.
@@ -8872,7 +8875,7 @@ mod tests {
             let (block_reconstruction_tx, _block_reconstruction_rx) = mpsc::unbounded_channel();
             let (broadcast_channels, [geyser_loop_changes_rx, _]) =
                 SubscriberChannels::new(1024, 1024, 1024)
-                    .with_routing(ONE_KEY_PER_MILLISECOND_LIMITS);
+                    .with_indexing(ONE_KEY_PER_MILLISECOND_LIMITS);
             let window_message = account_message(account_pubkeys[ACCOUNT_COUNT - 1], Vec::new());
             let forwarded_changes_rx = hold_the_first_hand_over(
                 geyser_loop_changes_rx,
@@ -8891,11 +8894,11 @@ mod tests {
                     .sender(CommitmentLevel::Processed)
                     .receiver_count()
             };
-            let [routed_filter, twin_filter] = account_twin_filters(&account_pubkeys);
+            let [indexed_filter, twin_filter] = account_twin_filters(&account_pubkeys);
             let (_twin_tx, mut twin_rx) =
                 spawn_client_with_session_id(&broadcast_channels, 1, twin_filter);
             let (_client_tx, mut client_rx) =
-                spawn_client_with_session_id(&broadcast_channels, 2, routed_filter);
+                spawn_client_with_session_id(&broadcast_channels, 2, indexed_filter);
             settle().await;
             for batch_number in 0..15 {
                 let batch_at = BATCH_INTERVAL * batch_number;
@@ -8924,14 +8927,14 @@ mod tests {
 
         /// A client changes its filter while it prepares, with an owner that only answers when
         /// the test says. New keys leave the preparation and prepare again. Equal keys send
-        /// nothing, and the hand-over then routes with the newest filter and claims nothing more.
-        /// Once routed, new keys leave for a receiver and prepare again, and a filter without
-        /// route keys leaves that preparation and prepares nothing.
+        /// nothing, and the hand-over then delivers with the newest filter and claims nothing more.
+        /// Once indexed, new keys leave for a receiver and prepare again, and a filter without
+        /// index keys leaves that preparation and prepares nothing.
         #[tokio::test]
         async fn a_client_that_changes_filter_while_preparing_restarts_its_preparation() {
             let (broadcast_channels, [mut spied_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(STEP_EVERY_PASS_LIMITS);
-            let mut spy_owner = OwnerRoutes::new(broadcast_channels.clone());
+                SubscriberChannels::new(16, 16, 16).with_indexing(STEP_EVERY_PASS_LIMITS);
+            let mut spy_owner = OwnerIndexes::new(broadcast_channels.clone());
             let (client_tx, mut stream_rx) =
                 super::spawn_client_loop(broadcast_channels, CancellationToken::new());
             let [first_pubkey, second_pubkey, third_pubkey] =
@@ -8940,15 +8943,15 @@ mod tests {
                 let client_filter = fixtures::filter_from_request(&subscribe_request);
                 client_tx.send(Ok((None, client_filter))).unwrap();
             };
-            let mut take_in_route_changes = |spy_owner: &mut OwnerRoutes| {
-                take_in_spied_route_changes(&mut spied_changes_rx, spy_owner)
+            let mut take_in_index_changes = |spy_owner: &mut OwnerIndexes| {
+                take_in_spied_index_changes(&mut spied_changes_rx, spy_owner)
             };
             send_request(accounts_request(&[first_pubkey], &[]));
             settle().await;
-            assert_eq!(take_in_route_changes(&mut spy_owner), ["prepare"]);
+            assert_eq!(take_in_index_changes(&mut spy_owner), ["prepare"]);
             send_request(accounts_request(&[second_pubkey], &[]));
             settle().await;
-            assert_eq!(take_in_route_changes(&mut spy_owner), ["leave", "prepare"]);
+            assert_eq!(take_in_index_changes(&mut spy_owner), ["leave", "prepare"]);
             let data_slice = SubscribeRequestAccountsDataSlice {
                 offset: 1,
                 length: 2,
@@ -8956,11 +8959,12 @@ mod tests {
             let sliced_request = accounts_request(&[second_pubkey], &[data_slice]);
             send_request(sliced_request.clone());
             settle().await;
-            assert!(take_in_route_changes(&mut spy_owner).is_empty());
+            assert!(take_in_index_changes(&mut spy_owner).is_empty());
             run_index_work(&mut spy_owner);
             settle().await;
-            assert_eq!(take_in_route_changes(&mut spy_owner), ["hand-over"]);
-            // The staged route kept the key list Arc, so the hand-over claims and releases nothing.
+            assert_eq!(take_in_index_changes(&mut spy_owner), ["hand-over"]);
+            // The staged subscriber kept the key list Arc, so the hand-over claims and releases
+            // nothing.
             assert!(!spy_owner.has_index_work());
             let account_update = account_message(second_pubkey, vec![1, 2, 3, 4]);
             spy_owner.send_batch(Processed, Arc::new(vec![account_update.clone()]));
@@ -8973,39 +8977,39 @@ mod tests {
             send_request(accounts_request(&[third_pubkey], &[]));
             settle().await;
             assert_eq!(
-                take_in_route_changes(&mut spy_owner),
+                take_in_index_changes(&mut spy_owner),
                 ["leave for a receiver"]
             );
             settle().await;
-            assert_eq!(take_in_route_changes(&mut spy_owner), ["prepare"]);
+            assert_eq!(take_in_index_changes(&mut spy_owner), ["prepare"]);
             let keyless_request = SubscribeRequest {
                 transactions: HashMap::from([("t".into(), Default::default())]),
                 ..Default::default()
             };
             send_request(keyless_request);
             settle().await;
-            assert_eq!(take_in_route_changes(&mut spy_owner), ["leave"]);
+            assert_eq!(take_in_index_changes(&mut spy_owner), ["leave"]);
             spy_owner.send_batch(Processed, Arc::new(vec![account_update]));
             settle().await;
-            assert!(take_in_route_changes(&mut spy_owner).is_empty());
+            assert!(take_in_index_changes(&mut spy_owner).is_empty());
         }
 
         /// An owner that drops a preparation unanswered has stopped. The client sends no other
-        /// route change, gets every later batch from its broadcast, and prepares again only after
+        /// index change, gets every later batch from its broadcast, and prepares again only after
         /// its next filter change.
         #[tokio::test]
         async fn a_client_whose_owner_drops_its_preparation_stays_on_the_broadcast() {
             let (broadcast_channels, [mut spied_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(STEP_EVERY_PASS_LIMITS);
+                SubscriberChannels::new(16, 16, 16).with_indexing(STEP_EVERY_PASS_LIMITS);
             let (client_tx, mut stream_rx) =
                 super::spawn_client_loop(broadcast_channels.clone(), CancellationToken::new());
             let account_pubkey = Pubkey::new_unique();
-            let routed_request = accounts_request(&[account_pubkey], &[]);
-            let routed_filter = || fixtures::filter_from_request(&routed_request);
-            client_tx.send(Ok((None, routed_filter()))).unwrap();
+            let indexed_request = accounts_request(&[account_pubkey], &[]);
+            let indexed_filter = || fixtures::filter_from_request(&indexed_request);
+            client_tx.send(Ok((None, indexed_filter()))).unwrap();
             settle().await;
             let dropped_preparation = spied_changes_rx.try_recv();
-            assert!(matches!(dropped_preparation, Ok(RouteChange::Prepare(..))));
+            assert!(matches!(dropped_preparation, Ok(IndexChange::Prepare(..))));
             drop(dropped_preparation);
             settle().await;
             for update_number in 0..3 {
@@ -9019,45 +9023,45 @@ mod tests {
                     "update {update_number}"
                 );
             }
-            client_tx.send(Ok((None, routed_filter()))).unwrap();
+            client_tx.send(Ok((None, indexed_filter()))).unwrap();
             settle().await;
             let next_preparation = spied_changes_rx.try_recv();
-            assert!(matches!(next_preparation, Ok(RouteChange::Prepare(..))));
+            assert!(matches!(next_preparation, Ok(IndexChange::Prepare(..))));
         }
 
-        /// A routed client changes to other keys while 500 staged preparations of 1,600 keys
-        /// wait at geyser_loop, which claims one key per millisecond. It leaves its route for a
+        /// An indexed client changes to other keys while 500 staged preparations of 1,600 keys
+        /// wait at geyser_loop, which claims one key per millisecond. It leaves the index for a
         /// receiver, gets what its new filter makes of every batch from the next one on, as its
         /// twin on the broadcast does, and goes live again only once the 800,000 keys ahead of
         /// it are claimed.
         #[tokio::test(start_paused = true)]
-        async fn a_routed_client_that_changes_keys_reads_the_broadcast_from_the_next_batch() {
-            const STAGED_ROUTE_COUNT: usize = 500;
+        async fn an_indexed_client_that_changes_keys_reads_the_broadcast_from_the_next_batch() {
+            const STAGED_SUBSCRIBER_COUNT: usize = 500;
             const STAGED_KEY_COUNT: usize = 1600;
             let started_at = Instant::now();
             let mut loop_harness = spawn_loop_with(None, ONE_KEY_PER_MILLISECOND_LIMITS);
             let first_pubkeys = [(); 2].map(|()| Pubkey::new_unique());
             let second_pubkeys = [(); 2].map(|()| Pubkey::new_unique());
-            let [first_routed_filter, first_twin_filter] = account_twin_filters(&first_pubkeys);
-            let [second_routed_filter, second_twin_filter] = account_twin_filters(&second_pubkeys);
+            let [first_indexed_filter, first_twin_filter] = account_twin_filters(&first_pubkeys);
+            let [second_indexed_filter, second_twin_filter] = account_twin_filters(&second_pubkeys);
             let (twin_tx, mut twin_rx) = loop_harness.spawn_client(first_twin_filter);
             settle().await;
             let twin_receiver_count = loop_harness.receiver_count(Processed);
-            let (client_tx, mut client_rx) = loop_harness.spawn_client(first_routed_filter);
+            let (client_tx, mut client_rx) = loop_harness.spawn_client(first_indexed_filter);
             // Its two keys are claimed by 1 ms, and it joins at once.
             tokio::time::sleep(Duration::from_millis(10)).await;
             assert_eq!(loop_harness.receiver_count(Processed), twin_receiver_count);
             let mut ready_rxs = Vec::new();
             let mut staged_queue_rxs = Vec::new();
-            for session_id in 100..100 + STAGED_ROUTE_COUNT {
-                let route_keys = unmatched_account_keys(STAGED_KEY_COUNT);
-                let (staged_route, staged_queue_rx) =
-                    route_on_own_queue(session_id, &Arc::default(), &route_keys);
+            for session_id in 100..100 + STAGED_SUBSCRIBER_COUNT {
+                let index_keys = unmatched_account_keys(STAGED_KEY_COUNT);
+                let (staged_subscriber, staged_queue_rx) =
+                    subscriber_on_own_queue(session_id, &Arc::default(), &index_keys);
                 let (ready_tx, ready_rx) = oneshot::channel();
-                let route_change = RouteChange::Prepare(staged_route, ready_tx);
+                let index_change = IndexChange::Prepare(staged_subscriber, ready_tx);
                 loop_harness
                     .broadcast_channels
-                    .send_route_change(Processed, route_change);
+                    .send_index_change(Processed, index_change);
                 ready_rxs.push(ready_rx);
                 staged_queue_rxs.push(staged_queue_rx);
             }
@@ -9072,7 +9076,7 @@ mod tests {
             assert_eq!(updated_account_pubkeys(&twin_updates), first_pubkeys);
             assert_eq!(read_updates(&mut client_rx, 2).await, twin_updates);
             twin_tx.send(Ok((None, second_twin_filter))).unwrap();
-            client_tx.send(Ok((None, second_routed_filter))).unwrap();
+            client_tx.send(Ok((None, second_indexed_filter))).unwrap();
             for batch_number in 1..=5 {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 let receiver_count = loop_harness.receiver_count(Processed);
@@ -9097,10 +9101,10 @@ mod tests {
                 loop_harness.receiver_count(Processed),
                 twin_receiver_count + 1
             );
-            assert!(answered_count(&ready_rxs) < STAGED_ROUTE_COUNT);
+            assert!(answered_count(&ready_rxs) < STAGED_SUBSCRIBER_COUNT);
             sleep_until(started_at + Duration::from_secs(801)).await;
             assert_eq!(loop_harness.receiver_count(Processed), twin_receiver_count);
-            assert_eq!(answered_count(&ready_rxs), STAGED_ROUTE_COUNT);
+            assert_eq!(answered_count(&ready_rxs), STAGED_SUBSCRIBER_COUNT);
             loop_harness.send_messages(every_account_update());
             let twin_updates = read_updates(&mut twin_rx, 2).await;
             assert_eq!(read_updates(&mut client_rx, 2).await, twin_updates);
@@ -9111,16 +9115,16 @@ mod tests {
         #[tokio::test]
         async fn a_client_whose_owner_stopped_before_the_hand_over_keeps_its_receiver() {
             let (broadcast_channels, [mut spied_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(STEP_EVERY_PASS_LIMITS);
-            let mut spy_owner = OwnerRoutes::new(broadcast_channels.clone());
+                SubscriberChannels::new(16, 16, 16).with_indexing(STEP_EVERY_PASS_LIMITS);
+            let mut spy_owner = OwnerIndexes::new(broadcast_channels.clone());
             let (client_tx, mut stream_rx) =
                 super::spawn_client_loop(broadcast_channels.clone(), CancellationToken::new());
             let account_pubkey = Pubkey::new_unique();
-            let routed_filter =
+            let indexed_filter =
                 fixtures::filter_from_request(&accounts_request(&[account_pubkey], &[]));
-            client_tx.send(Ok((None, routed_filter))).unwrap();
+            client_tx.send(Ok((None, indexed_filter))).unwrap();
             settle().await;
-            let spied_changes = take_in_spied_route_changes(&mut spied_changes_rx, &mut spy_owner);
+            let spied_changes = take_in_spied_index_changes(&mut spied_changes_rx, &mut spy_owner);
             assert_eq!(spied_changes, ["prepare"]);
             run_index_work(&mut spy_owner);
             drop(spied_changes_rx);
@@ -9132,29 +9136,29 @@ mod tests {
             assert_eq!(updated_account_pubkeys(&received_updates), [account_pubkey]);
         }
 
-        /// A routed client whose owner has stopped goes back to the broadcast at a filter change
+        /// An indexed client whose owner has stopped goes back to the broadcast at a filter change
         /// that keeps its keys, and gets the next batch sent there.
         #[tokio::test]
-        async fn a_routed_client_whose_owner_stopped_reads_the_broadcast_after_a_filter_change() {
+        async fn an_indexed_client_whose_owner_stopped_reads_the_broadcast_after_a_filter_change() {
             let (broadcast_channels, [mut spied_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(STEP_EVERY_PASS_LIMITS);
-            let mut spy_owner = OwnerRoutes::new(broadcast_channels.clone());
+                SubscriberChannels::new(16, 16, 16).with_indexing(STEP_EVERY_PASS_LIMITS);
+            let mut spy_owner = OwnerIndexes::new(broadcast_channels.clone());
             let (client_tx, mut stream_rx) =
                 super::spawn_client_loop(broadcast_channels.clone(), CancellationToken::new());
             let account_pubkey = Pubkey::new_unique();
-            let routed_filter =
+            let indexed_filter =
                 || fixtures::filter_from_request(&accounts_request(&[account_pubkey], &[]));
-            client_tx.send(Ok((None, routed_filter()))).unwrap();
+            client_tx.send(Ok((None, indexed_filter()))).unwrap();
             settle().await;
-            let spied_changes = take_in_spied_route_changes(&mut spied_changes_rx, &mut spy_owner);
+            let spied_changes = take_in_spied_index_changes(&mut spied_changes_rx, &mut spy_owner);
             assert_eq!(spied_changes, ["prepare"]);
             run_index_work(&mut spy_owner);
             settle().await;
-            let spied_changes = take_in_spied_route_changes(&mut spied_changes_rx, &mut spy_owner);
+            let spied_changes = take_in_spied_index_changes(&mut spied_changes_rx, &mut spy_owner);
             assert_eq!(spied_changes, ["hand-over"]);
             drop(spied_changes_rx);
             drop(spy_owner);
-            client_tx.send(Ok((None, routed_filter()))).unwrap();
+            client_tx.send(Ok((None, indexed_filter()))).unwrap();
             settle().await;
             let account_update = account_message(account_pubkey, Vec::new());
             broadcast_channels.send(Processed, Arc::new(vec![account_update]));
@@ -9169,8 +9173,8 @@ mod tests {
         #[tokio::test]
         async fn a_client_hands_its_receiver_over_only_after_reading_it_to_the_end() {
             let (broadcast_channels, [mut spied_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(STEP_EVERY_PASS_LIMITS);
-            let mut spy_owner = OwnerRoutes::new(broadcast_channels.clone());
+                SubscriberChannels::new(16, 16, 16).with_indexing(STEP_EVERY_PASS_LIMITS);
+            let mut spy_owner = OwnerIndexes::new(broadcast_channels.clone());
             let (client_tx, mut stream_rx) =
                 super::spawn_client_loop(broadcast_channels, CancellationToken::new());
             let mut account_pubkey = Pubkey::new_unique();
@@ -9183,14 +9187,14 @@ mod tests {
             settle().await;
             for round_number in 0..32 {
                 let spied_changes =
-                    take_in_spied_route_changes(&mut spied_changes_rx, &mut spy_owner);
+                    take_in_spied_index_changes(&mut spied_changes_rx, &mut spy_owner);
                 assert_eq!(spied_changes, ["prepare"], "round {round_number}");
                 let account_update = account_message(account_pubkey, Vec::new());
                 spy_owner.send_batch(Processed, Arc::new(vec![account_update]));
                 run_index_work(&mut spy_owner);
                 settle().await;
                 let spied_changes =
-                    take_in_spied_route_changes(&mut spied_changes_rx, &mut spy_owner);
+                    take_in_spied_index_changes(&mut spied_changes_rx, &mut spy_owner);
                 assert_eq!(spied_changes, ["hand-over"], "round {round_number}");
                 let received_updates = read_updates(&mut stream_rx, 1).await;
                 assert_eq!(updated_account_pubkeys(&received_updates), [account_pubkey]);
@@ -9201,7 +9205,7 @@ mod tests {
                     .unwrap();
                 settle().await;
                 let spied_changes =
-                    take_in_spied_route_changes(&mut spied_changes_rx, &mut spy_owner);
+                    take_in_spied_index_changes(&mut spied_changes_rx, &mut spy_owner);
                 assert_eq!(
                     spied_changes,
                     ["leave for a receiver"],
@@ -9219,8 +9223,8 @@ mod tests {
         async fn a_client_prepares_only_once_it_has_read_its_receiver_to_the_end() {
             const QUEUED_BATCH_COUNT: usize = 512;
             let (broadcast_channels, [mut spied_changes_rx, _]) =
-                SubscriberChannels::new(1024, 16, 16).with_routing(STEP_EVERY_PASS_LIMITS);
-            let mut spy_owner = OwnerRoutes::new(broadcast_channels.clone());
+                SubscriberChannels::new(1024, 16, 16).with_indexing(STEP_EVERY_PASS_LIMITS);
+            let mut spy_owner = OwnerIndexes::new(broadcast_channels.clone());
             let (client_tx, mut stream_rx) =
                 super::spawn_client_loop(broadcast_channels, CancellationToken::new());
             let request_filter = |account_pubkey| {
@@ -9231,7 +9235,7 @@ mod tests {
                 .send(Ok((None, request_filter(first_pubkey))))
                 .unwrap();
             settle().await;
-            let spied_changes = take_in_spied_route_changes(&mut spied_changes_rx, &mut spy_owner);
+            let spied_changes = take_in_spied_index_changes(&mut spied_changes_rx, &mut spy_owner);
             assert_eq!(spied_changes, ["prepare"]);
             for _ in 0..QUEUED_BATCH_COUNT {
                 let unmatched_update = account_message(Pubkey::new_unique(), Vec::new());
@@ -9242,19 +9246,19 @@ mod tests {
                 .unwrap();
             // One poll of the client reads at most tokio's budget of 128 items.
             tokio::task::yield_now().await;
-            let spied_changes = take_in_spied_route_changes(&mut spied_changes_rx, &mut spy_owner);
+            let spied_changes = take_in_spied_index_changes(&mut spied_changes_rx, &mut spy_owner);
             assert_eq!(spied_changes, ["leave"]);
             yield_until(|| !spied_changes_rx.is_empty()).await;
-            let spied_changes = take_in_spied_route_changes(&mut spied_changes_rx, &mut spy_owner);
+            let spied_changes = take_in_spied_index_changes(&mut spied_changes_rx, &mut spy_owner);
             assert_eq!(spied_changes, ["prepare"]);
             run_index_work(&mut spy_owner);
             settle().await;
-            let spied_changes = take_in_spied_route_changes(&mut spied_changes_rx, &mut spy_owner);
+            let spied_changes = take_in_spied_index_changes(&mut spied_changes_rx, &mut spy_owner);
             assert_eq!(spied_changes, ["hand-over"]);
             let account_update = account_message(newest_pubkey, Vec::new());
             spy_owner.send_batch(Processed, Arc::new(vec![account_update]));
-            let routed_updates = read_updates(&mut stream_rx, 1).await;
-            assert_eq!(updated_account_pubkeys(&routed_updates), [newest_pubkey]);
+            let indexed_updates = read_updates(&mut stream_rx, 1).await;
+            assert_eq!(updated_account_pubkeys(&indexed_updates), [newest_pubkey]);
         }
 
         /// A filter change that comes with the owner's answer applies before the hand-over. In
@@ -9264,28 +9268,28 @@ mod tests {
         #[tokio::test]
         async fn a_change_that_comes_with_the_answer_applies_before_the_hand_over() {
             let (broadcast_channels, [mut spied_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(STEP_EVERY_PASS_LIMITS);
-            let mut spy_owner = OwnerRoutes::new(broadcast_channels.clone());
+                SubscriberChannels::new(16, 16, 16).with_indexing(STEP_EVERY_PASS_LIMITS);
+            let mut spy_owner = OwnerIndexes::new(broadcast_channels.clone());
             let (client_tx, mut stream_rx) =
                 super::spawn_client_loop(broadcast_channels, CancellationToken::new());
             let send_request = |subscribe_request: &SubscribeRequest| {
                 let client_filter = fixtures::filter_from_request(subscribe_request);
                 client_tx.send(Ok((None, client_filter))).unwrap();
             };
-            let mut take_in_route_changes = |spy_owner: &mut OwnerRoutes| {
-                take_in_spied_route_changes(&mut spied_changes_rx, spy_owner)
+            let mut take_in_index_changes = |spy_owner: &mut OwnerIndexes| {
+                take_in_spied_index_changes(&mut spied_changes_rx, spy_owner)
             };
             let mut account_pubkey = Pubkey::new_unique();
             send_request(&accounts_request(&[account_pubkey], &[]));
             settle().await;
-            assert_eq!(take_in_route_changes(&mut spy_owner), ["prepare"]);
+            assert_eq!(take_in_index_changes(&mut spy_owner), ["prepare"]);
             for round_number in 0..128 {
                 run_index_work(&mut spy_owner);
                 if round_number % 2 == 0 {
                     account_pubkey = Pubkey::new_unique();
                     send_request(&accounts_request(&[account_pubkey], &[]));
                     settle().await;
-                    let spied_changes = take_in_route_changes(&mut spy_owner);
+                    let spied_changes = take_in_index_changes(&mut spy_owner);
                     assert_eq!(spied_changes, ["leave", "prepare"], "round {round_number}");
                     continue;
                 }
@@ -9296,7 +9300,7 @@ mod tests {
                 let sliced_request = accounts_request(&[account_pubkey], &[data_slice]);
                 send_request(&sliced_request);
                 settle().await;
-                let spied_changes = take_in_route_changes(&mut spy_owner);
+                let spied_changes = take_in_index_changes(&mut spy_owner);
                 assert_eq!(spied_changes, ["hand-over"], "round {round_number}");
                 let account_update = account_message(account_pubkey, vec![1, 2, 3, 4]);
                 spy_owner.send_batch(Processed, Arc::new(vec![account_update.clone()]));
@@ -9309,14 +9313,14 @@ mod tests {
                 account_pubkey = Pubkey::new_unique();
                 send_request(&accounts_request(&[account_pubkey], &[]));
                 settle().await;
-                let spied_changes = take_in_route_changes(&mut spy_owner);
+                let spied_changes = take_in_index_changes(&mut spy_owner);
                 assert_eq!(
                     spied_changes,
                     ["leave for a receiver"],
                     "round {round_number}"
                 );
                 settle().await;
-                let spied_changes = take_in_route_changes(&mut spy_owner);
+                let spied_changes = take_in_index_changes(&mut spy_owner);
                 assert_eq!(spied_changes, ["prepare"], "round {round_number}");
             }
         }
@@ -9326,9 +9330,9 @@ mod tests {
         #[tokio::test]
         async fn a_client_that_changes_level_while_preparing_leaves_at_the_old_owner() {
             let (broadcast_channels, [mut processed_changes_rx, mut confirmed_changes_rx]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(STEP_EVERY_PASS_LIMITS);
-            let mut processed_owner = OwnerRoutes::new(broadcast_channels.clone());
-            let mut confirmed_owner = OwnerRoutes::new(broadcast_channels.clone());
+                SubscriberChannels::new(16, 16, 16).with_indexing(STEP_EVERY_PASS_LIMITS);
+            let mut processed_owner = OwnerIndexes::new(broadcast_channels.clone());
+            let mut confirmed_owner = OwnerIndexes::new(broadcast_channels.clone());
             let (client_tx, mut stream_rx) =
                 super::spawn_client_loop(broadcast_channels, CancellationToken::new());
             let account_pubkey = Pubkey::new_unique();
@@ -9343,45 +9347,45 @@ mod tests {
             client_tx.send(Ok((None, processed_filter))).unwrap();
             settle().await;
             let processed_changes =
-                take_in_spied_route_changes(&mut processed_changes_rx, &mut processed_owner);
+                take_in_spied_index_changes(&mut processed_changes_rx, &mut processed_owner);
             assert_eq!(processed_changes, ["prepare"]);
             let confirmed_filter = level_filter(CommitmentLevelProto::Confirmed);
             client_tx.send(Ok((None, confirmed_filter))).unwrap();
             settle().await;
             let processed_changes =
-                take_in_spied_route_changes(&mut processed_changes_rx, &mut processed_owner);
+                take_in_spied_index_changes(&mut processed_changes_rx, &mut processed_owner);
             assert_eq!(processed_changes, ["leave"]);
             let confirmed_changes =
-                take_in_spied_route_changes(&mut confirmed_changes_rx, &mut confirmed_owner);
+                take_in_spied_index_changes(&mut confirmed_changes_rx, &mut confirmed_owner);
             assert_eq!(confirmed_changes, ["prepare"]);
             run_index_work(&mut confirmed_owner);
             settle().await;
             let confirmed_changes =
-                take_in_spied_route_changes(&mut confirmed_changes_rx, &mut confirmed_owner);
+                take_in_spied_index_changes(&mut confirmed_changes_rx, &mut confirmed_owner);
             assert_eq!(confirmed_changes, ["hand-over"]);
             let account_update = account_message(account_pubkey, Vec::new());
             confirmed_owner.send_batch(CommitmentLevel::Confirmed, Arc::new(vec![account_update]));
-            let routed_updates = read_updates(&mut stream_rx, 1).await;
-            assert_eq!(updated_account_pubkeys(&routed_updates), [account_pubkey]);
+            let indexed_updates = read_updates(&mut stream_rx, 1).await;
+            assert_eq!(updated_account_pubkeys(&indexed_updates), [account_pubkey]);
         }
 
-        /// A client that ends sends its last leave only to the owner that holds its route,
-        /// staged or live. It sends none when no owner holds one: after it left its preparation
-        /// for a filter without route keys, or when its filter never had route keys.
+        /// A client that ends sends its last leave only to the owner that holds its indexed
+        /// subscriber, staged or live. It sends none when no owner holds one: after it left its
+        /// preparation for a filter without index keys, or when its filter never had index keys.
         #[tokio::test]
-        async fn a_client_that_ends_leaves_only_the_owner_that_holds_its_route() {
+        async fn a_client_that_ends_leaves_only_the_owner_that_holds_its_subscriber() {
             let (broadcast_channels, mut spied_changes_rxs) =
-                SubscriberChannels::new(16, 16, 16).with_routing(STEP_EVERY_PASS_LIMITS);
-            let mut spy_owners = [(); 2].map(|()| OwnerRoutes::new(broadcast_channels.clone()));
+                SubscriberChannels::new(16, 16, 16).with_indexing(STEP_EVERY_PASS_LIMITS);
+            let mut spy_owners = [(); 2].map(|()| OwnerIndexes::new(broadcast_channels.clone()));
             // What the spy of geyser_loop, then the spy of block reconstruction, took in.
             let take_in_changes =
-                |spied_changes_rxs: &mut [mpsc::UnboundedReceiver<RouteChange>; 2],
-                 spy_owners: &mut [OwnerRoutes; 2]| {
+                |spied_changes_rxs: &mut [mpsc::UnboundedReceiver<IndexChange>; 2],
+                 spy_owners: &mut [OwnerIndexes; 2]| {
                     let [processed_changes_rx, confirmed_changes_rx] = spied_changes_rxs;
                     let [processed_owner, confirmed_owner] = spy_owners;
                     [
-                        take_in_spied_route_changes(processed_changes_rx, processed_owner),
-                        take_in_spied_route_changes(confirmed_changes_rx, confirmed_owner),
+                        take_in_spied_index_changes(processed_changes_rx, processed_owner),
+                        take_in_spied_index_changes(confirmed_changes_rx, confirmed_owner),
                     ]
                 };
             let level_filter = |proto_commitment: CommitmentLevelProto| {
@@ -9401,7 +9405,7 @@ mod tests {
             let processed_leave = [vec!["leave"], vec![]];
             let client_standings = [
                 ("preparing at processed", processed_leave.clone()),
-                ("routed at processed", processed_leave),
+                ("indexed at processed", processed_leave),
                 ("preparing at confirmed", [vec![], vec!["leave"]]),
                 ("left for a keyless filter", [vec![], vec![]]),
                 ("never keyed", [vec![], vec![]]),
@@ -9428,7 +9432,7 @@ mod tests {
                 settle().await;
                 let taken_in_changes = take_in_changes(&mut spied_changes_rxs, &mut spy_owners);
                 assert_eq!(taken_in_changes, first_changes, "{client_standing}");
-                if client_standing == "routed at processed" {
+                if client_standing == "indexed at processed" {
                     run_index_work(&mut spy_owners[0]);
                     settle().await;
                     let taken_in_changes = take_in_changes(&mut spied_changes_rxs, &mut spy_owners);
@@ -9447,13 +9451,14 @@ mod tests {
             }
         }
 
-        /// The owner that holds a client's route takes in the client's last leave right after the
-        /// client's task ends, before the task that waits on the client's cancellation: the leave
-        /// is the last wake of the client's end, so the owner holds the worker's LIFO slot.
+        /// The owner that holds a client's indexed subscriber takes in the client's last leave
+        /// right after the client's task ends, before the task that waits on the client's
+        /// cancellation: the leave is the last wake of the client's end, so the owner holds the
+        /// worker's LIFO slot.
         #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-        async fn the_owner_that_holds_the_route_runs_right_after_its_client_ends() {
+        async fn the_owner_that_holds_the_subscriber_runs_right_after_its_client_ends() {
             let (broadcast_channels, [mut processed_changes_rx, _confirmed_changes_rx]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(STEP_EVERY_PASS_LIMITS);
+                SubscriberChannels::new(16, 16, 16).with_indexing(STEP_EVERY_PASS_LIMITS);
             let run_order = Arc::new(std::sync::Mutex::new(Vec::new()));
             let (prepared_tx, prepared_rx) = oneshot::channel();
             let owner_run_order = Arc::clone(&run_order);
@@ -9461,12 +9466,12 @@ mod tests {
                 let mut prepared_tx = Some(prepared_tx);
                 // Holds the preparation unanswered, so the client stays preparing.
                 let mut held_changes = Vec::new();
-                while let Some(route_change) = processed_changes_rx.recv().await {
-                    if matches!(route_change, RouteChange::Leave(_)) {
+                while let Some(index_change) = processed_changes_rx.recv().await {
+                    if matches!(index_change, IndexChange::Leave(_)) {
                         owner_run_order.lock().unwrap().push("owner");
                         return held_changes.len();
                     }
-                    held_changes.push(route_change);
+                    held_changes.push(index_change);
                     if let Some(prepared_tx) = prepared_tx.take() {
                         prepared_tx.send(()).unwrap();
                     }
@@ -9482,9 +9487,9 @@ mod tests {
             });
             let (client_tx, _stream_rx) =
                 super::spawn_client_loop(broadcast_channels.clone(), client_cancellation_token);
-            let routed_filter =
+            let indexed_filter =
                 fixtures::filter_from_request(&accounts_request(&[Pubkey::new_unique()], &[]));
-            client_tx.send(Ok((None, routed_filter))).unwrap();
+            client_tx.send(Ok((None, indexed_filter))).unwrap();
             prepared_rx.await.unwrap();
             drop(client_tx);
             assert_eq!(owner_task.await.unwrap(), 1);
@@ -9492,13 +9497,13 @@ mod tests {
             assert_eq!(*run_order.lock().unwrap(), ["owner", "cancellation waiter"]);
         }
 
-        /// A change queued behind the first request applies before the client's first route
+        /// A change queued behind the first request applies before the client's first index
         /// change: the client prepares once, with the newest filter's keys, and leaves nothing.
         #[tokio::test]
         async fn a_change_queued_behind_the_first_request_prepares_once_with_the_newest_keys() {
             let (broadcast_channels, [mut spied_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(STEP_EVERY_PASS_LIMITS);
-            let mut spy_owner = OwnerRoutes::new(broadcast_channels.clone());
+                SubscriberChannels::new(16, 16, 16).with_indexing(STEP_EVERY_PASS_LIMITS);
+            let mut spy_owner = OwnerIndexes::new(broadcast_channels.clone());
             let (client_tx, mut stream_rx) =
                 super::spawn_client_loop(broadcast_channels, CancellationToken::new());
             let [first_pubkey, newest_pubkey] = [(); 2].map(|()| Pubkey::new_unique());
@@ -9517,13 +9522,13 @@ mod tests {
         }
 
         /// A change that waits in the client's requests when its replay ends applies before the
-        /// client's first route change: the client prepares once, with the newest filter's keys,
+        /// client's first index change: the client prepares once, with the newest filter's keys,
         /// and leaves nothing.
         #[tokio::test]
         async fn a_change_waiting_when_the_replay_ends_prepares_once_with_the_newest_keys() {
             let (broadcast_channels, [mut spied_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(STEP_EVERY_PASS_LIMITS);
-            let mut spy_owner = OwnerRoutes::new(broadcast_channels.clone());
+                SubscriberChannels::new(16, 16, 16).with_indexing(STEP_EVERY_PASS_LIMITS);
+            let mut spy_owner = OwnerIndexes::new(broadcast_channels.clone());
             let (client_tx, client_rx) = mpsc::unbounded_channel();
             let (stream_tx, mut stream_rx) = load_aware_channel(64, WeightScales::default());
             let (replay_tx, replay_rx) = mpsc::channel(1);
@@ -9569,41 +9574,41 @@ mod tests {
 
         /// Checks that a client whose first filter listed `account_pubkeys[0]`, and whose
         /// queued change lists `account_pubkeys[1]`, prepares once with the newest keys and
-        /// hands over, and that its route delivers what the newest filter makes.
+        /// hands over, and that its indexed subscriber delivers what the newest filter makes.
         ///
         /// # Arguments
         ///
-        /// * `spied_changes_rx` - The route changes the client sends to geyser_loop.
-        /// * `spy_owner` - The routes that stand in for geyser_loop.
+        /// * `spied_changes_rx` - The index changes the client sends to geyser_loop.
+        /// * `spy_owner` - The indexes that stand in for geyser_loop.
         /// * `stream_rx` - The client's Subscribe queue.
         /// * `account_pubkeys` - The first filter's account, then the newest filter's.
         ///
         /// # Panics
         ///
-        /// Panics if the client sends another route change than one preparation, then one
-        /// hand-over, if the hand-over leaves index work, or if the route delivers another
-        /// account.
+        /// Panics if the client sends another index change than one preparation, then one
+        /// hand-over, if the hand-over leaves index work, or if the indexed subscriber delivers
+        /// another account.
         async fn expect_one_preparation_with_the_newest_keys(
-            spied_changes_rx: &mut mpsc::UnboundedReceiver<RouteChange>,
-            spy_owner: &mut OwnerRoutes,
+            spied_changes_rx: &mut mpsc::UnboundedReceiver<IndexChange>,
+            spy_owner: &mut OwnerIndexes,
             stream_rx: &mut LoadAwareReceiver<TonicResult<FilteredUpdate>>,
             account_pubkeys: [Pubkey; 2],
         ) {
             settle().await;
-            let spied_changes = take_in_spied_route_changes(spied_changes_rx, spy_owner);
+            let spied_changes = take_in_spied_index_changes(spied_changes_rx, spy_owner);
             assert_eq!(spied_changes, ["prepare"]);
             run_index_work(spy_owner);
             settle().await;
-            let spied_changes = take_in_spied_route_changes(spied_changes_rx, spy_owner);
+            let spied_changes = take_in_spied_index_changes(spied_changes_rx, spy_owner);
             assert_eq!(spied_changes, ["hand-over"]);
             // The preparation claimed the newest keys, so the hand-over claims nothing more.
             assert!(!spy_owner.has_index_work());
             let account_updates =
                 account_pubkeys.map(|account_pubkey| account_message(account_pubkey, Vec::new()));
             spy_owner.send_batch(Processed, Arc::new(account_updates.to_vec()));
-            let routed_updates = read_updates(stream_rx, 1).await;
+            let indexed_updates = read_updates(stream_rx, 1).await;
             assert_eq!(
-                updated_account_pubkeys(&routed_updates),
+                updated_account_pubkeys(&indexed_updates),
                 [account_pubkeys[1]]
             );
         }
@@ -9667,72 +9672,76 @@ mod tests {
             }
         }
 
-        /// A route of `session_id` for `client_filter` with `route_keys`, on a queue of its own.
+        /// An indexed subscriber of `session_id` for `client_filter` with `index_keys`, on a queue
+        /// of its own.
         ///
         /// # Arguments
         ///
-        /// * `session_id` - The route's session id.
-        /// * `client_filter` - The route's filter.
-        /// * `route_keys` - The route's key list.
+        /// * `session_id` - The indexed subscriber's session id.
+        /// * `client_filter` - The indexed subscriber's filter.
+        /// * `index_keys` - The indexed subscriber's key list.
         ///
         /// # Returns
         ///
-        /// The route, and the receiving half of its queue.
-        fn route_on_own_queue(
+        /// The indexed subscriber, and the receiving half of its queue.
+        fn subscriber_on_own_queue(
             session_id: usize,
             client_filter: &Arc<Filter>,
-            route_keys: &Arc<[RouteKey]>,
-        ) -> (Route, LoadAwareReceiver<TonicResult<FilteredUpdate>>) {
+            index_keys: &Arc<[IndexKey]>,
+        ) -> (
+            IndexedSubscriber,
+            LoadAwareReceiver<TonicResult<FilteredUpdate>>,
+        ) {
             let (stream_tx, stream_rx) = load_aware_channel(64, WeightScales::default());
-            let route_template =
-                Route::new(session_id, "test", &stream_tx, &CancellationToken::new());
+            let subscriber_template =
+                IndexedSubscriber::new(session_id, "test", &stream_tx, &CancellationToken::new());
             (
-                route_template.with_filter(client_filter, route_keys),
+                subscriber_template.with_filter(client_filter, index_keys),
                 stream_rx,
             )
         }
 
-        /// A filter for entries, routed under [`RouteKey::Entries`], with its key list.
+        /// A filter for entries, indexed under [`IndexKey::Entries`], with its key list.
         ///
         /// # Returns
         ///
-        /// The filter and its route keys.
-        fn entries_route_filter() -> (Arc<Filter>, Arc<[RouteKey]>) {
+        /// The filter and its index keys.
+        fn entries_indexed_filter() -> (Arc<Filter>, Arc<[IndexKey]>) {
             let entries_request = SubscribeRequest {
                 entry: HashMap::from([("e".into(), Default::default())]),
                 ..Default::default()
             };
             let entries_filter = Arc::new(fixtures::filter_from_request(&entries_request));
-            let route_keys = entries_filter.route_keys().expect("an indexable filter");
-            (entries_filter, route_keys.into())
+            let index_keys = entries_filter.index_keys().expect("an indexable filter");
+            (entries_filter, index_keys.into())
         }
 
         /// With 500 preparations of 1,600 keys each queued behind a probe's join and a batch,
-        /// geyser_loop sends the batch, which reaches the routed probe, before it answers any
+        /// geyser_loop sends the batch, which reaches the indexed probe, before it answers any
         /// preparation.
         #[tokio::test(start_paused = true)]
         async fn geyser_loop_sends_the_next_batch_while_500_clients_prepare() {
             let (messages_tx, messages_rx) = mpsc::unbounded_channel();
             let (block_reconstruction_tx, _block_reconstruction_rx) = mpsc::unbounded_channel();
             let (broadcast_channels, [geyser_loop_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(RouteIndexLimits::default());
-            let (entries_filter, entries_route_keys) = entries_route_filter();
-            let (probe_route, mut probe_rx) =
-                route_on_own_queue(1, &entries_filter, &entries_route_keys);
-            let probe_join = RouteChange::Join(probe_route, None);
-            broadcast_channels.send_route_change(CommitmentLevel::Processed, probe_join);
+                SubscriberChannels::new(16, 16, 16).with_indexing(IndexWorkLimits::default());
+            let (entries_filter, entries_index_keys) = entries_indexed_filter();
+            let (probe_subscriber, mut probe_rx) =
+                subscriber_on_own_queue(1, &entries_filter, &entries_index_keys);
+            let probe_join = IndexChange::Join(probe_subscriber, None);
+            broadcast_channels.send_index_change(CommitmentLevel::Processed, probe_join);
             let mut ready_rxs = Vec::new();
             let mut preparing_rxs = Vec::new();
             for session_id in 2..502 {
-                let mut route_keys = (0..1600)
-                    .map(|_| RouteKey::Account(Pubkey::new_unique()))
+                let mut index_keys = (0..1600)
+                    .map(|_| IndexKey::Account(Pubkey::new_unique()))
                     .collect::<Vec<_>>();
-                route_keys.sort_unstable();
-                let (prepared_route, preparing_rx) =
-                    route_on_own_queue(session_id, &Arc::default(), &route_keys.into());
+                index_keys.sort_unstable();
+                let (prepared_subscriber, preparing_rx) =
+                    subscriber_on_own_queue(session_id, &Arc::default(), &index_keys.into());
                 let (ready_tx, ready_rx) = oneshot::channel();
-                let route_change = RouteChange::Prepare(prepared_route, ready_tx);
-                broadcast_channels.send_route_change(CommitmentLevel::Processed, route_change);
+                let index_change = IndexChange::Prepare(prepared_subscriber, ready_tx);
+                broadcast_channels.send_index_change(CommitmentLevel::Processed, index_change);
                 ready_rxs.push(ready_rx);
                 preparing_rxs.push(preparing_rx);
             }
@@ -9772,14 +9781,14 @@ mod tests {
             let (messages_tx, messages_rx) = mpsc::unbounded_channel();
             let (block_reconstruction_tx, _block_reconstruction_rx) = mpsc::unbounded_channel();
             let (broadcast_channels, [geyser_loop_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(RouteIndexLimits::default());
+                SubscriberChannels::new(16, 16, 16).with_indexing(IndexWorkLimits::default());
             let mut processed_rx = broadcast_channels.subscribe(CommitmentLevel::Processed);
-            let (entries_filter, entries_route_keys) = entries_route_filter();
-            let (prepared_route, _prepared_rx) =
-                route_on_own_queue(1, &entries_filter, &entries_route_keys);
+            let (entries_filter, entries_index_keys) = entries_indexed_filter();
+            let (prepared_subscriber, _prepared_rx) =
+                subscriber_on_own_queue(1, &entries_filter, &entries_index_keys);
             let (ready_tx, ready_rx) = oneshot::channel();
-            let route_change = RouteChange::Prepare(prepared_route, ready_tx);
-            broadcast_channels.send_route_change(CommitmentLevel::Processed, route_change);
+            let index_change = IndexChange::Prepare(prepared_subscriber, ready_tx);
+            broadcast_channels.send_index_change(CommitmentLevel::Processed, index_change);
             let entry_message = |entry_slot| Message::Entry(fixtures::message_entry(entry_slot, 0));
             messages_tx.send(entry_message(10)).unwrap();
             let answered_counts = Arc::new(StdMutex::new(Vec::new()));
@@ -9859,12 +9868,12 @@ mod tests {
             let (messages_tx, messages_rx) = mpsc::unbounded_channel();
             let (block_reconstruction_tx, _block_reconstruction_rx) = mpsc::unbounded_channel();
             let (broadcast_channels, [geyser_loop_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(ONE_KEY_PER_MILLISECOND_LIMITS);
-            let (prepared_route, _prepared_rx) =
-                route_on_own_queue(1, &Arc::default(), &unmatched_account_keys(4));
+                SubscriberChannels::new(16, 16, 16).with_indexing(ONE_KEY_PER_MILLISECOND_LIMITS);
+            let (prepared_subscriber, _prepared_rx) =
+                subscriber_on_own_queue(1, &Arc::default(), &unmatched_account_keys(4));
             let (ready_tx, ready_rx) = oneshot::channel();
-            let route_change = RouteChange::Prepare(prepared_route, ready_tx);
-            broadcast_channels.send_route_change(CommitmentLevel::Processed, route_change);
+            let index_change = IndexChange::Prepare(prepared_subscriber, ready_tx);
+            broadcast_channels.send_index_change(CommitmentLevel::Processed, index_change);
             let started_at = Instant::now();
             tokio::spawn(GrpcService::geyser_loop(
                 BatchStreamUnboundedReceiver::new(messages_rx),
@@ -9882,14 +9891,14 @@ mod tests {
         }
 
         /// geyser_loop wakes for its index slice timer only while index work waits: with no
-        /// route change, a second passes with one read of its queue, and once a preparation is
+        /// index change, a second passes with one read of its queue, and once a preparation is
         /// answered, the timer wakes it at most once more.
         #[tokio::test(start_paused = true)]
         async fn geyser_loop_wakes_for_its_timer_only_while_index_work_waits() {
             let (messages_tx, messages_rx) = mpsc::unbounded_channel();
             let (block_reconstruction_tx, _block_reconstruction_rx) = mpsc::unbounded_channel();
             let (broadcast_channels, [geyser_loop_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(RouteIndexLimits::default());
+                SubscriberChannels::new(16, 16, 16).with_indexing(IndexWorkLimits::default());
             let read_count = Arc::new(AtomicUsize::new(0));
             let read_counting_queue = ReadCountingQueue {
                 counted_queue: BatchStreamUnboundedReceiver::new(messages_rx),
@@ -9904,11 +9913,11 @@ mod tests {
             ));
             tokio::time::sleep(Duration::from_secs(1)).await;
             assert_eq!(read_count.load(Ordering::Relaxed), 1);
-            let (prepared_route, _prepared_rx) =
-                route_on_own_queue(1, &Arc::default(), &unmatched_account_keys(1));
+            let (prepared_subscriber, _prepared_rx) =
+                subscriber_on_own_queue(1, &Arc::default(), &unmatched_account_keys(1));
             let (ready_tx, ready_rx) = oneshot::channel();
-            let route_change = RouteChange::Prepare(prepared_route, ready_tx);
-            broadcast_channels.send_route_change(CommitmentLevel::Processed, route_change);
+            let index_change = IndexChange::Prepare(prepared_subscriber, ready_tx);
+            broadcast_channels.send_index_change(CommitmentLevel::Processed, index_change);
             tokio::time::timeout(Duration::from_secs(5), ready_rx)
                 .await
                 .expect("an idle slice answers the preparation")
@@ -9926,12 +9935,12 @@ mod tests {
         async fn geyser_loop_runs_an_overdue_index_slice_while_its_queue_never_reads_empty() {
             let (block_reconstruction_tx, _block_reconstruction_rx) = mpsc::unbounded_channel();
             let (broadcast_channels, [geyser_loop_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(RouteIndexLimits::default());
-            let (prepared_route, _prepared_rx) =
-                route_on_own_queue(1, &Arc::default(), &unmatched_account_keys(1));
+                SubscriberChannels::new(16, 16, 16).with_indexing(IndexWorkLimits::default());
+            let (prepared_subscriber, _prepared_rx) =
+                subscriber_on_own_queue(1, &Arc::default(), &unmatched_account_keys(1));
             let (ready_tx, mut ready_rx) = oneshot::channel();
-            let route_change = RouteChange::Prepare(prepared_route, ready_tx);
-            broadcast_channels.send_route_change(CommitmentLevel::Processed, route_change);
+            let index_change = IndexChange::Prepare(prepared_subscriber, ready_tx);
+            broadcast_channels.send_index_change(CommitmentLevel::Processed, index_change);
             let started_at = Instant::now();
             tokio::spawn(GrpcService::geyser_loop(
                 EndlessEntryQueue,
@@ -9960,7 +9969,7 @@ mod tests {
             let (block_reconstruction_tx, _block_reconstruction_rx) = mpsc::unbounded_channel();
             let (relay_tx, relay_rx) = mpsc::unbounded_channel();
             let (broadcast_channels, [geyser_loop_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(RouteIndexLimits::default());
+                SubscriberChannels::new(16, 16, 16).with_indexing(IndexWorkLimits::default());
             let mut processed_rx = broadcast_channels.subscribe(CommitmentLevel::Processed);
             tokio::spawn(GrpcService::geyser_loop(
                 BatchStreamUnboundedReceiver::new(messages_rx),
@@ -9999,7 +10008,7 @@ mod tests {
             let (block_reconstruction_tx, _block_reconstruction_rx) = mpsc::unbounded_channel();
             let (relay_tx, relay_rx) = mpsc::unbounded_channel();
             let (broadcast_channels, [geyser_loop_changes_rx, _]) =
-                SubscriberChannels::new(16, 16, 16).with_routing(RouteIndexLimits::default());
+                SubscriberChannels::new(16, 16, 16).with_indexing(IndexWorkLimits::default());
             let mut processed_rx = broadcast_channels.subscribe(CommitmentLevel::Processed);
             let mut answer_rxs = Vec::with_capacity(ANSWER_COUNT);
             for _ in 0..ANSWER_COUNT {
@@ -10328,7 +10337,7 @@ mod tests {
         /// A replaying client wired as `subscribe` wires it: [`GrpcService::read_requests`] posts
         /// to [`GrpcService::client_loop`], whose session holds the live signal's sender. Each
         /// replay is [`REPLAYED_BLOCKS`] blocks into a Subscribe queue that holds five, so the
-        /// replay waits while the test does not read. Routing is off.
+        /// replay waits while the test does not read. Indexing is off.
         ///
         /// # Examples
         ///

@@ -394,19 +394,19 @@ pub struct ConfigGrpc {
     )]
     pub filter_apply_interval: Duration,
     /// The shortest time between two slices of an owner's index work, which claims and releases
-    /// route keys for route changes. `0s` lets a slice run in every pass.
+    /// index keys for index changes. `0s` lets a slice run in every pass.
     #[serde(
-        default = "ConfigGrpc::default_route_index_interval",
+        default = "ConfigGrpc::default_reverse_index_interval",
         with = "humantime_serde"
     )]
-    pub route_index_interval: Duration,
-    /// The longest one slice of index work runs, plus one step of 64 route keys. `0s` runs one
+    pub reverse_index_interval: Duration,
+    /// The longest one slice of index work runs, plus one step of 64 index keys. `0s` runs one
     /// step per slice.
     #[serde(
-        default = "ConfigGrpc::default_route_index_budget",
+        default = "ConfigGrpc::default_reverse_index_budget",
         with = "humantime_serde"
     )]
-    pub route_index_budget: Duration,
+    pub reverse_index_budget: Duration,
     /// Number of slots stored for re-broadcast (replay)
     #[serde(
         default = "ConfigGrpc::default_replay_stored_slots",
@@ -693,21 +693,21 @@ impl ConfigGrpc {
         Duration::from_secs(5)
     }
 
-    /// The default [`ConfigGrpc::route_index_interval`].
+    /// The default [`ConfigGrpc::reverse_index_interval`].
     ///
     /// # Returns
     ///
     /// 1 ms.
-    const fn default_route_index_interval() -> Duration {
+    const fn default_reverse_index_interval() -> Duration {
         Duration::from_millis(1)
     }
 
-    /// The default [`ConfigGrpc::route_index_budget`].
+    /// The default [`ConfigGrpc::reverse_index_budget`].
     ///
     /// # Returns
     ///
     /// 100 µs.
-    const fn default_route_index_budget() -> Duration {
+    const fn default_reverse_index_budget() -> Duration {
         Duration::from_micros(100)
     }
 
@@ -1084,29 +1084,31 @@ mod tests {
         );
     }
 
-    /// Missing `route_index_interval` and `route_index_budget` keys are 1 ms and 100 µs, and
+    /// Missing `reverse_index_interval` and `reverse_index_budget` keys are 1 ms and 100 µs, and
     /// humantime values such as `0s`, `2ms` and `250us` parse.
     #[test]
-    fn route_index_settings_default_to_1ms_and_100us_and_parse() {
-        let route_index_settings = |config_json: &str| {
+    fn reverse_index_settings_default_to_1ms_and_100us_and_parse() {
+        let reverse_index_settings = |config_json: &str| {
             let config_grpc =
                 serde_json::from_str::<ConfigGrpc>(config_json).expect("valid grpc config");
             (
-                config_grpc.route_index_interval,
-                config_grpc.route_index_budget,
+                config_grpc.reverse_index_interval,
+                config_grpc.reverse_index_budget,
             )
         };
         assert_eq!(
-            route_index_settings(r#"{}"#),
+            reverse_index_settings(r#"{}"#),
             (Duration::from_millis(1), Duration::from_micros(100))
         );
         assert_eq!(
-            route_index_settings(r#"{"route_index_interval": "0s", "route_index_budget": "0s"}"#),
+            reverse_index_settings(
+                r#"{"reverse_index_interval": "0s", "reverse_index_budget": "0s"}"#
+            ),
             (Duration::ZERO, Duration::ZERO)
         );
         assert_eq!(
-            route_index_settings(
-                r#"{"route_index_interval": "2ms", "route_index_budget": "250us"}"#
+            reverse_index_settings(
+                r#"{"reverse_index_interval": "2ms", "reverse_index_budget": "250us"}"#
             ),
             (Duration::from_millis(2), Duration::from_micros(250))
         );

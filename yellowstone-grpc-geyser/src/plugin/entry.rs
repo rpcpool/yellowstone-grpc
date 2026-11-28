@@ -14,7 +14,7 @@ use {
                 MessageTransaction,
             },
         },
-        route::BankThreadHandle,
+        reverse_index::BankThreadHandle,
         stream::tokio::BatchStreamUnboundedReceiver,
         version::VERSION,
     },

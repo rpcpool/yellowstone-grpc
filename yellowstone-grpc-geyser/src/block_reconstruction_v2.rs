@@ -8,7 +8,7 @@ use {
                 MessageEntry, MessageSlot, MessageTransaction, SlotStatus,
             },
         },
-        route::BankRouteKeyIndex,
+        reverse_index::BankKeyIndex,
     },
     foldhash::{HashMap as FoldHashMap, HashMapExt},
     solana_clock::{BankId, Slot},
@@ -286,7 +286,7 @@ impl BankBuffer {
             block_meta,
             block_footer: self.footer,
             pre_computed_message_block,
-            route_key_index: OnceLock::new(),
+            bank_key_index: OnceLock::new(),
         }
     }
 }
@@ -303,8 +303,8 @@ pub struct FrozenBank {
     block_meta: Arc<MessageBlockMeta>,
     block_footer: Option<Arc<MessageBlockFooter>>,
     pre_computed_message_block: Arc<MessageBlock>,
-    // Set once, by the bank thread: the route keys of `original_messages`.
-    route_key_index: OnceLock<Arc<BankRouteKeyIndex>>,
+    // Set once, by the bank thread: the key index of `original_messages`.
+    bank_key_index: OnceLock<Arc<BankKeyIndex>>,
 }
 
 impl FrozenBank {
@@ -354,29 +354,25 @@ impl FrozenBank {
         self.block_footer.clone()
     }
 
-    /// The route key index of [`Self::messages`].
+    /// The bank key index of [`Self::messages`].
     ///
     /// # Returns
     ///
-    /// The index, or [`None`] until [`Self::index_route_keys`] has built it.
-    pub fn route_key_index(&self) -> Option<Arc<BankRouteKeyIndex>> {
-        self.route_key_index.get().cloned()
+    /// The index, or [`None`] until [`Self::build_key_index`] has built it.
+    pub fn bank_key_index(&self) -> Option<Arc<BankKeyIndex>> {
+        self.bank_key_index.get().cloned()
     }
 
-    /// Builds the route key index of [`Self::messages`], unless it is built. The bank thread
+    /// Builds the bank key index of [`Self::messages`], unless it is built. The bank thread
     /// runs it, since it passes over every message.
     ///
     /// # Arguments
     ///
-    /// * `scratch_postings` - The buffer [`BankRouteKeyIndex::new`] builds the index in, which
+    /// * `scratch_postings` - The buffer [`BankKeyIndex::new`] builds the index in, which
     ///   the caller keeps for the next bank.
-    pub fn index_route_keys(&self, scratch_postings: &mut Vec<(u64, u32)>) {
-        self.route_key_index.get_or_init(|| {
-            Arc::new(BankRouteKeyIndex::new(
-                &self.original_messages,
-                scratch_postings,
-            ))
-        });
+    pub fn build_key_index(&self, scratch_postings: &mut Vec<(u64, u32)>) {
+        self.bank_key_index
+            .get_or_init(|| Arc::new(BankKeyIndex::new(&self.original_messages, scratch_postings)));
     }
 }
 
@@ -465,7 +461,7 @@ impl<'storage> Iterator for ReplayIter<'storage> {
 ///     bank_thread.free_evicted_banks(evicted_slot_banks);
 /// }
 /// for sealed_bank in storage.drain_sealed_banks() {
-///     bank_thread.index_route_keys(sealed_bank);
+///     bank_thread.build_key_index(sealed_bank);
 /// }
 /// let replayed_slots = storage.replay_from_slot(from_slot, min_commitment);
 /// ```
@@ -519,7 +515,7 @@ pub struct BlockMachineStorage {
     /// [`BlockMachineStorage::drain_evicted_banks`] takes them.
     evicted_banks: Vec<Vec<Arc<FrozenBank>>>,
     /// The banks sealed since the last [`BlockMachineStorage::drain_sealed_banks`], so the bank
-    /// thread can index their route keys. Kept only while replay is on.
+    /// thread can build their key indexes. Kept only while replay is on.
     sealed_banks: Vec<Arc<FrozenBank>>,
     min_slot: Option<Slot>,
     // Highest slot number observed across any message so far, and the value it had at the
@@ -956,7 +952,7 @@ impl BlockMachineStorage {
     /// resolved winner and the slot already has a known commitment floor -- e.g. inherited
     /// from a descendant before this bank even sealed -- its delivery is emitted now too.
     /// While replay is on, the bank also waits in `sealed_banks` for
-    /// [`Self::drain_sealed_banks`], so its route keys get indexed.
+    /// [`Self::drain_sealed_banks`], so its key index gets built.
     ///
     /// # Arguments
     ///
@@ -1179,8 +1175,8 @@ impl BlockMachineStorage {
         self.evicted_banks.drain(..)
     }
 
-    /// Takes the banks sealed since the last call, so the caller can have their route keys
-    /// indexed off its own thread. The storage keeps the capacity of its list of sealed banks.
+    /// Takes the banks sealed since the last call, so the caller can have their key indexes
+    /// built off its own thread. The storage keeps the capacity of its list of sealed banks.
     ///
     /// # Returns
     ///
@@ -2331,7 +2327,7 @@ mod tests {
     }
 
     /// While replay is on, the storage keeps each bank it seals until the next drain, which
-    /// gives it once. The bank has no route key index until [`FrozenBank::index_route_keys`]
+    /// gives it once. The bank has no bank key index until [`FrozenBank::build_key_index`]
     /// builds it, and the index finds the bank's entry. With replay off, the storage keeps no
     /// sealed bank.
     #[test]
@@ -2352,14 +2348,14 @@ mod tests {
             replayed_slot.frozen_block
         ));
 
-        assert!(sealed_bank.route_key_index().is_none());
-        sealed_bank.index_route_keys(&mut Vec::new());
-        let route_key_index = sealed_bank.route_key_index().expect("an index");
-        let entries_route_key = crate::route::RouteKey::Entries;
-        let entries_route_key_hash = BankRouteKeyIndex::route_key_hash(&entries_route_key);
+        assert!(sealed_bank.bank_key_index().is_none());
+        sealed_bank.build_key_index(&mut Vec::new());
+        let bank_key_index = sealed_bank.bank_key_index().expect("an index");
+        let entries_index_key = crate::reverse_index::IndexKey::Entries;
+        let entries_index_key_hash = BankKeyIndex::index_key_hash(&entries_index_key);
         let mut candidate_positions = Vec::new();
-        route_key_index
-            .collect_candidate_positions(&[entries_route_key_hash], &mut candidate_positions);
+        bank_key_index
+            .collect_candidate_positions(&[entries_index_key_hash], &mut candidate_positions);
         let entry_position = sealed_bank
             .messages()
             .iter()
